@@ -49,7 +49,7 @@ type Model struct {
 	height       int
 	ready        bool
 	streaming    bool
-	streamBuffer strings.Builder // accumulates current agent response
+	streamBuffer *strings.Builder // accumulates current agent response (pointer to avoid copy panic)
 
 	// Input history
 	history    []string
@@ -97,8 +97,9 @@ func NewModel(cfg *config.Config) Model {
 		messages:   []ChatMessage{},
 		history:    []string{},
 		historyIdx: -1,
-		toolStats:  make(map[string]int),
-		session:    sess,
+		streamBuffer: &strings.Builder{},
+		toolStats:    make(map[string]int),
+		session:      sess,
 	}
 }
 

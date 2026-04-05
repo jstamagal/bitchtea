@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
+	"strings"
 	"time"
 )
 
@@ -16,6 +18,7 @@ type Entry struct {
 	ToolName  string    `json:"tool_name,omitempty"`
 	ToolArgs  string    `json:"tool_args,omitempty"`
 	ParentID  string    `json:"parent_id,omitempty"` // for tree structure (branching)
+	BranchTag string    `json:"branch,omitempty"`    // branch label
 	ID        string    `json:"id"`
 }
 
@@ -66,7 +69,14 @@ func Load(path string) (*Session, error) {
 // Append adds an entry and writes it to the file
 func (s *Session) Append(entry Entry) error {
 	entry.Timestamp = time.Now()
-	entry.ID = fmt.Sprintf("%d", time.Now().UnixNano())
+	if entry.ID == "" {
+		entry.ID = fmt.Sprintf("%d", time.Now().UnixNano())
+	}
+
+	// Set parent ID to previous entry if not already set
+	if entry.ParentID == "" && len(s.Entries) > 0 {
+		entry.ParentID = s.Entries[len(s.Entries)-1].ID
+	}
 
 	s.Entries = append(s.Entries, entry)
 
@@ -85,7 +95,90 @@ func (s *Session) Append(entry Entry) error {
 	return err
 }
 
-// List returns all session files in a directory
+// Fork creates a branch from the given entry ID. Returns a new session
+// that includes all entries up to (and including) the fork point.
+func (s *Session) Fork(fromID string) (*Session, error) {
+	dir := filepath.Dir(s.Path)
+	base := strings.TrimSuffix(filepath.Base(s.Path), ".jsonl")
+	branch := time.Now().Format("150405")
+	newPath := filepath.Join(dir, base+"_fork_"+branch+".jsonl")
+
+	newSession := &Session{
+		Path:    newPath,
+		Entries: []Entry{},
+	}
+
+	// Copy entries up to and including the fork point
+	for _, e := range s.Entries {
+		newSession.Entries = append(newSession.Entries, e)
+		if e.ID == fromID {
+			break
+		}
+	}
+
+	// Write all entries to the new file
+	for _, e := range newSession.Entries {
+		data, err := json.Marshal(e)
+		if err != nil {
+			continue
+		}
+		f, err := os.OpenFile(newPath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+		if err != nil {
+			return nil, fmt.Errorf("write fork: %w", err)
+		}
+		f.Write(append(data, '\n'))
+		f.Close()
+	}
+
+	return newSession, nil
+}
+
+// Tree returns a text representation of the session tree structure
+func (s *Session) Tree() string {
+	if len(s.Entries) == 0 {
+		return "(empty session)"
+	}
+
+	var sb strings.Builder
+	sb.WriteString(fmt.Sprintf("Session: %s\n", filepath.Base(s.Path)))
+	sb.WriteString(fmt.Sprintf("Entries: %d\n\n", len(s.Entries)))
+
+	for i, e := range s.Entries {
+		prefix := "├── "
+		if i == len(s.Entries)-1 {
+			prefix = "└── "
+		}
+
+		content := e.Content
+		if len(content) > 60 {
+			content = content[:60] + "..."
+		}
+		// Replace newlines for display
+		content = strings.ReplaceAll(content, "\n", " ")
+
+		ts := e.Timestamp.Format("15:04:05")
+		role := e.Role
+		if e.ToolName != "" {
+			role = "tool:" + e.ToolName
+		}
+
+		sb.WriteString(fmt.Sprintf("%s[%s] %s: %s\n", prefix, ts, role, content))
+	}
+
+	return sb.String()
+}
+
+// LastUserEntry returns the last user entry, or empty string if none
+func (s *Session) LastUserEntry() string {
+	for i := len(s.Entries) - 1; i >= 0; i-- {
+		if s.Entries[i].Role == "user" {
+			return s.Entries[i].Content
+		}
+	}
+	return ""
+}
+
+// List returns all session files in a directory, sorted newest first
 func List(dir string) ([]string, error) {
 	entries, err := os.ReadDir(dir)
 	if err != nil {
@@ -101,7 +194,46 @@ func List(dir string) ([]string, error) {
 			sessions = append(sessions, filepath.Join(dir, e.Name()))
 		}
 	}
+
+	// Sort newest first
+	sort.Sort(sort.Reverse(sort.StringSlice(sessions)))
+
 	return sessions, nil
+}
+
+// Info returns a summary string for a session file
+func Info(path string) string {
+	s, err := Load(path)
+	if err != nil {
+		return filepath.Base(path) + " (error loading)"
+	}
+
+	userMsgs := 0
+	for _, e := range s.Entries {
+		if e.Role == "user" {
+			userMsgs++
+		}
+	}
+
+	lastContent := ""
+	if last := s.LastUserEntry(); last != "" {
+		lastContent = last
+		if len(lastContent) > 50 {
+			lastContent = lastContent[:50] + "..."
+		}
+	}
+
+	name := filepath.Base(path)
+	return fmt.Sprintf("%s (%d entries, %d user msgs) %s", name, len(s.Entries), userMsgs, lastContent)
+}
+
+// Latest returns the most recent session file in a directory, or empty string
+func Latest(dir string) string {
+	sessions, err := List(dir)
+	if err != nil || len(sessions) == 0 {
+		return ""
+	}
+	return sessions[0]
 }
 
 func splitLines(data []byte) [][]byte {
