@@ -53,7 +53,7 @@ type Agent struct {
 
 // NewAgent creates a new agent
 func NewAgent(cfg *config.Config) *Agent {
-	client := llm.NewClient(cfg.APIKey, cfg.BaseURL, cfg.Model)
+	client := llm.NewClient(cfg.APIKey, cfg.BaseURL, cfg.Model, cfg.Provider)
 
 	// System prompt
 	systemPrompt := buildSystemPrompt(cfg)
@@ -261,6 +261,12 @@ func (a *Agent) SetBaseURL(url string) {
 func (a *Agent) SetAPIKey(key string) {
 	a.config.APIKey = key
 	a.client.APIKey = key
+}
+
+// SetProvider changes the LLM provider
+func (a *Agent) SetProvider(provider string) {
+	a.config.Provider = provider
+	a.client.Provider = provider
 }
 
 // Config returns the current config (for profile save)

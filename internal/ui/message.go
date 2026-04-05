@@ -37,7 +37,9 @@ func (m ChatMessage) Format() string {
 
 	case MsgAgent:
 		nick := AgentNickStyle.Render(fmt.Sprintf("<%s>", m.Nick))
-		return fmt.Sprintf(" %s %s %s", ts, nick, m.Content)
+		// Render markdown in agent responses
+		content := RenderMarkdown(m.Content, 100)
+		return fmt.Sprintf(" %s %s %s", ts, nick, content)
 
 	case MsgSystem:
 		return fmt.Sprintf(" %s %s %s", ts, SystemMsgStyle.Render("***"), SystemMsgStyle.Render(m.Content))

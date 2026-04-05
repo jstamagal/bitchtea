@@ -3,6 +3,7 @@ package session
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -73,6 +74,88 @@ func TestListSessions(t *testing.T) {
 	}
 	if len(sessions) != 2 {
 		t.Fatalf("expected 2 sessions, got %d", len(sessions))
+	}
+}
+
+func TestFork(t *testing.T) {
+	dir := t.TempDir()
+
+	s, err := New(dir)
+	if err != nil {
+		t.Fatalf("new: %v", err)
+	}
+
+	s.Append(Entry{Role: "user", Content: "first"})
+	s.Append(Entry{Role: "assistant", Content: "reply"})
+	s.Append(Entry{Role: "user", Content: "second"})
+
+	// Fork from second entry
+	forkID := s.Entries[1].ID
+	forked, err := s.Fork(forkID)
+	if err != nil {
+		t.Fatalf("fork: %v", err)
+	}
+
+	if len(forked.Entries) != 2 {
+		t.Fatalf("expected 2 entries in fork, got %d", len(forked.Entries))
+	}
+	if forked.Entries[1].Content != "reply" {
+		t.Fatalf("wrong fork content: %q", forked.Entries[1].Content)
+	}
+	if forked.Path == s.Path {
+		t.Fatal("fork should have different path")
+	}
+}
+
+func TestTree(t *testing.T) {
+	dir := t.TempDir()
+
+	s, _ := New(dir)
+	s.Append(Entry{Role: "user", Content: "hello"})
+	s.Append(Entry{Role: "assistant", Content: "world"})
+
+	tree := s.Tree()
+	if tree == "" {
+		t.Fatal("expected non-empty tree")
+	}
+	if !strings.Contains(tree, "user") {
+		t.Error("tree should contain 'user' role")
+	}
+	if !strings.Contains(tree, "hello") {
+		t.Error("tree should contain message content")
+	}
+}
+
+func TestLatest(t *testing.T) {
+	dir := t.TempDir()
+
+	// No sessions
+	if latest := Latest(dir); latest != "" {
+		t.Fatalf("expected empty latest, got %q", latest)
+	}
+
+	// Create a session
+	s, _ := New(dir)
+	s.Append(Entry{Role: "user", Content: "test"})
+
+	latest := Latest(dir)
+	if latest == "" {
+		t.Fatal("expected non-empty latest")
+	}
+}
+
+func TestInfo(t *testing.T) {
+	dir := t.TempDir()
+	s, _ := New(dir)
+	s.Append(Entry{Role: "user", Content: "hello world"})
+	s.Append(Entry{Role: "assistant", Content: "hey"})
+
+	info := Info(s.Path)
+	if !strings.Contains(info, "2 entries") {
+		t.Errorf("info should mention 2 entries: %q", info)
+	}
+	if !strings.Contains(info, "1 user msgs") {
+		t.Errorf("info should mention 1 user msg: %q", info)
 	}
 }
 

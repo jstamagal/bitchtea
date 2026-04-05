@@ -40,7 +40,7 @@ func TestStreamChatText(t *testing.T) {
 	}))
 	defer server.Close()
 
-	client := NewClient("test-key", server.URL, "test-model")
+	client := NewClient("test-key", server.URL, "test-model", "openai")
 	events := make(chan StreamEvent, 100)
 
 	go client.StreamChat(context.Background(), []Message{
@@ -90,7 +90,7 @@ func TestStreamChatToolCall(t *testing.T) {
 	}))
 	defer server.Close()
 
-	client := NewClient("test-key", server.URL, "test-model")
+	client := NewClient("test-key", server.URL, "test-model", "openai")
 	events := make(chan StreamEvent, 100)
 
 	go client.StreamChat(context.Background(), []Message{
@@ -127,7 +127,7 @@ func TestStreamChatAPIError(t *testing.T) {
 	}))
 	defer server.Close()
 
-	client := NewClient("test-key", server.URL, "test-model")
+	client := NewClient("test-key", server.URL, "test-model", "openai")
 	events := make(chan StreamEvent, 100)
 
 	go client.StreamChat(context.Background(), []Message{

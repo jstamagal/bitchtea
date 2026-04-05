@@ -11,12 +11,13 @@ import (
 	"strings"
 )
 
-// Client is an OpenAI-compatible streaming chat client
+// Client is a streaming chat client supporting OpenAI and Anthropic APIs
 type Client struct {
-	APIKey  string
-	BaseURL string
-	Model   string
-	HTTP    *http.Client
+	APIKey   string
+	BaseURL  string
+	Model    string
+	Provider string // "openai" or "anthropic"
+	HTTP     *http.Client
 }
 
 // Message represents a chat message
@@ -78,9 +79,18 @@ type ChatRequest struct {
 	Stream   bool      `json:"stream"`
 }
 
-// StreamChat sends a streaming chat completion request
-// Events are sent to the channel as they arrive
+// StreamChat sends a streaming chat completion request, dispatching to the
+// correct provider based on c.Provider.
 func (c *Client) StreamChat(ctx context.Context, messages []Message, tools []ToolDef, events chan<- StreamEvent) {
+	if c.Provider == "anthropic" {
+		c.StreamChatAnthropic(ctx, messages, tools, events)
+		return
+	}
+	c.streamChatOpenAI(ctx, messages, tools, events)
+}
+
+// streamChatOpenAI sends a streaming chat completion request via the OpenAI API
+func (c *Client) streamChatOpenAI(ctx context.Context, messages []Message, tools []ToolDef, events chan<- StreamEvent) {
 	defer close(events)
 
 	reqBody := ChatRequest{
@@ -204,11 +214,12 @@ func (c *Client) StreamChat(ctx context.Context, messages []Message, tools []Too
 }
 
 // NewClient creates a new LLM client
-func NewClient(apiKey, baseURL, model string) *Client {
+func NewClient(apiKey, baseURL, model, provider string) *Client {
 	return &Client{
-		APIKey:  apiKey,
-		BaseURL: baseURL,
-		Model:   model,
-		HTTP:    &http.Client{},
+		APIKey:   apiKey,
+		BaseURL:  baseURL,
+		Model:    model,
+		Provider: provider,
+		HTTP:     &http.Client{},
 	}
 }

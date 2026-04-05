@@ -8,7 +8,7 @@ import (
 	"time"
 
 	"github.com/charmbracelet/bubbles/spinner"
-	"github.com/charmbracelet/bubbles/textinput"
+	"github.com/charmbracelet/bubbles/textarea"
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
@@ -38,9 +38,10 @@ type Model struct {
 	eventCh    chan agent.Event // channel for receiving agent events
 
 	// UI components
-	viewport viewport.Model
-	input    textinput.Model
-	spinner  spinner.Model
+	viewport  viewport.Model
+	input     textarea.Model
+	spinner   spinner.Model
+	toolPanel *ToolPanel
 
 	// State
 	messages     []ChatMessage
@@ -71,14 +72,19 @@ type Model struct {
 
 // NewModel creates the initial model
 func NewModel(cfg *config.Config) Model {
-	ti := textinput.New()
-	ti.Placeholder = "type something, coward..."
-	ti.Focus()
-	ti.CharLimit = 4096
-	ti.Width = 80
-	ti.Prompt = ">> "
-	ti.PromptStyle = InputPromptStyle
-	ti.TextStyle = InputTextStyle
+	ta := textarea.New()
+	ta.Placeholder = "type something, coward..."
+	ta.Focus()
+	ta.CharLimit = 8192
+	ta.SetWidth(80)
+	ta.SetHeight(3)
+	ta.ShowLineNumbers = false
+	ta.Prompt = ">> "
+	ta.FocusedStyle.Prompt = InputPromptStyle
+	ta.FocusedStyle.Text = InputTextStyle
+	ta.FocusedStyle.CursorLine = lipgloss.NewStyle()
+	ta.BlurredStyle.Prompt = InputPromptStyle
+	ta.BlurredStyle.Text = InputTextStyle
 
 	sp := spinner.New()
 	sp.Spinner = spinner.Dot
@@ -90,14 +96,15 @@ func NewModel(cfg *config.Config) Model {
 	sess, _ := session.New(cfg.SessionDir)
 
 	return Model{
-		config:     cfg,
-		agent:      ag,
-		agentState: agent.StateIdle,
-		input:      ti,
-		spinner:    sp,
-		messages:   []ChatMessage{},
-		history:    []string{},
-		historyIdx: -1,
+		config:       cfg,
+		agent:        ag,
+		agentState:   agent.StateIdle,
+		input:        ta,
+		spinner:      sp,
+		toolPanel:    NewToolPanel(),
+		messages:     []ChatMessage{},
+		history:      []string{},
+		historyIdx:   -1,
 		streamBuffer: &strings.Builder{},
 		toolStats:    make(map[string]int),
 		session:      sess,
@@ -142,9 +149,10 @@ func (m *Model) ResumeSession(sess *session.Session) {
 
 func (m Model) Init() tea.Cmd {
 	return tea.Batch(
-		textinput.Blink,
+		textarea.Blink,
 		m.spinner.Tick,
 		tea.EnterAltScreen,
+		tea.EnableMouseCellMotion,
 		m.showSplash(),
 	)
 }
@@ -164,20 +172,35 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.WindowSizeMsg:
 		m.width = msg.Width
 		m.height = msg.Height
-		m.input.Width = msg.Width - 6 // account for prompt
 
-		// Layout: topbar(1) + sep(1) + viewport + sep(1) + statusbar(1) + sep(1) + input(1)
-		vpHeight := msg.Height - 6
+		// Input area height: 3 lines for textarea
+		inputHeight := 3
+		m.input.SetWidth(msg.Width - 4)
+		m.input.SetHeight(inputHeight)
+
+		// Layout: topbar(1) + sep(1) + viewport + sep(1) + statusbar(1) + sep(1) + input(3)
+		vpHeight := msg.Height - 4 - inputHeight
 		if vpHeight < 1 {
 			vpHeight = 1
 		}
 
+		// Account for tool panel width
+		vpWidth := msg.Width
+		if m.toolPanel != nil && m.toolPanel.Visible && m.streaming {
+			vpWidth = msg.Width - ToolPanelWidth
+			if vpWidth < 40 {
+				vpWidth = msg.Width // too narrow, hide panel
+			}
+		}
+
 		if !m.ready {
-			m.viewport = viewport.New(msg.Width, vpHeight)
+			m.viewport = viewport.New(vpWidth, vpHeight)
 			m.viewport.SetContent(m.viewContent)
+			m.viewport.MouseWheelEnabled = true
+			m.viewport.MouseWheelDelta = 3
 			m.ready = true
 		} else {
-			m.viewport.Width = msg.Width
+			m.viewport.Width = vpWidth
 			m.viewport.Height = vpHeight
 		}
 		m.refreshViewport()
@@ -239,12 +262,13 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, tea.Quit
 
 		case "enter":
+			// Enter sends; Shift+Enter / Alt+Enter adds newline
 			input := strings.TrimSpace(m.input.Value())
 			if input == "" {
 				return m, nil
 			}
 
-			m.input.SetValue("")
+			m.input.Reset()
 
 			// Save to history
 			m.history = append(m.history, input)
@@ -278,19 +302,19 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 			return m, m.sendToAgent(input)
 
-		case "up":
+		case "ctrl+p":
+			// History up
 			if len(m.history) > 0 && m.historyIdx > 0 {
 				m.historyIdx--
 				m.input.SetValue(m.history[m.historyIdx])
-				m.input.CursorEnd()
 			}
 			return m, nil
 
-		case "down":
+		case "ctrl+n":
+			// History down
 			if m.historyIdx < len(m.history)-1 {
 				m.historyIdx++
 				m.input.SetValue(m.history[m.historyIdx])
-				m.input.CursorEnd()
 			} else {
 				m.historyIdx = len(m.history)
 				m.input.SetValue("")
@@ -303,6 +327,14 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 		case "pgdown":
 			m.viewport.ViewDown()
+			return m, nil
+
+		case "ctrl+t":
+			// Toggle tool panel
+			if m.toolPanel != nil {
+				m.toolPanel.Visible = !m.toolPanel.Visible
+				m.refreshViewport()
+			}
 			return m, nil
 		}
 
@@ -318,6 +350,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.streaming = false
 		m.agentState = agent.StateIdle
 		m.eventCh = nil
+
+		// Update tool panel
+		if m.toolPanel != nil {
+			m.toolPanel.Tokens = m.agent.EstimateTokens()
+			m.toolPanel.Elapsed = m.agent.Elapsed()
+		}
 
 		// Save new messages to session (incremental)
 		if m.session != nil {
@@ -372,6 +410,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 
 		m.autoNextPending = false
+
+		// Auto-save memory after agent completes a task
+		if m.agent.TurnCount > 0 && m.agent.TurnCount%3 == 0 {
+			go m.autoSaveMemory()
+		}
+
 		return m, nil
 
 	case spinner.TickMsg:
@@ -404,6 +448,10 @@ func (m *Model) handleAgentEvent(ev agent.Event) (tea.Model, tea.Cmd) {
 			Content: fmt.Sprintf("calling %s...", ev.ToolName),
 		})
 		m.toolStats[ev.ToolName]++
+		if m.toolPanel != nil {
+			m.toolPanel.StartTool(ev.ToolName)
+			m.toolPanel.Stats = m.toolStats
+		}
 		m.refreshViewport()
 
 	case "tool_result":
@@ -423,6 +471,9 @@ func (m *Model) handleAgentEvent(ev agent.Event) (tea.Model, tea.Cmd) {
 			Nick:    ev.ToolName,
 			Content: result,
 		})
+		if m.toolPanel != nil {
+			m.toolPanel.FinishTool(ev.ToolName, result, ev.ToolError != nil)
+		}
 		m.refreshViewport()
 
 	case "state":
@@ -495,9 +546,19 @@ func (m *Model) refreshViewport() {
 		return
 	}
 
+	wrapWidth := m.viewport.Width - 2
+	if wrapWidth < 20 {
+		wrapWidth = 20
+	}
+
 	var sb strings.Builder
 	for _, msg := range m.messages {
-		sb.WriteString(msg.Format())
+		formatted := msg.Format()
+		// Word-wrap everything except raw messages (ANSI art)
+		if msg.Type != MsgRaw {
+			formatted = WrapText(formatted, wrapWidth)
+		}
+		sb.WriteString(formatted)
 		sb.WriteString("\n")
 	}
 
@@ -519,7 +580,11 @@ func (m Model) View() string {
 	if m.config.AutoNextIdea {
 		flags += " [idea]"
 	}
-	topLeft := TopBarStyle.Render(fmt.Sprintf(" bitchtea — %s%s ", m.config.Model, flags))
+	queuedStr := ""
+	if len(m.queued) > 0 {
+		queuedStr = fmt.Sprintf(" [queued:%d]", len(m.queued))
+	}
+	topLeft := TopBarStyle.Render(fmt.Sprintf(" bitchtea — %s/%s%s%s ", m.config.Provider, m.config.Model, flags, queuedStr))
 	topRight := TopBarStyle.Render(fmt.Sprintf(" %s ", time.Now().Format("3:04pm")))
 	topPad := m.width - lipgloss.Width(topLeft) - lipgloss.Width(topRight)
 	if topPad < 0 {
@@ -527,8 +592,14 @@ func (m Model) View() string {
 	}
 	topBar := topLeft + TopBarStyle.Render(strings.Repeat(" ", topPad)) + topRight
 
-	// Viewport
+	// Viewport + optional tool panel
 	vpView := m.viewport.View()
+
+	showPanel := m.toolPanel != nil && m.toolPanel.Visible && m.streaming && m.width > 80
+	if showPanel {
+		panel := m.toolPanel.Render(m.viewport.Height)
+		vpView = lipgloss.JoinHorizontal(lipgloss.Top, vpView, panel)
+	}
 
 	// Status bar
 	stateStr := "idle"
@@ -564,7 +635,7 @@ func (m Model) View() string {
 	statusBar := statusLeft + BottomBarStyle.Render(strings.Repeat(" ", statusPad)) + statusRight
 
 	// Input
-	inputView := " " + m.input.View()
+	inputView := m.input.View()
 
 	// Assemble
 	return topBar + "\n" +
@@ -602,6 +673,7 @@ func (m Model) handleCommand(input string) (tea.Model, tea.Cmd) {
 				"  /commit [msg]       Git commit\n" +
 				"  /status             Git status\n" +
 				"  /tokens             Token usage estimate\n" +
+				"  /memory             Show MEMORY.md contents\n" +
 				"  /sessions           List saved sessions\n" +
 				"  /tree               Show session tree\n" +
 				"  /fork               Fork session\n" +
@@ -734,6 +806,23 @@ func (m Model) handleCommand(input string) (tea.Model, tea.Cmd) {
 		m.sysMsg(fmt.Sprintf("Auto-next-idea: %s", status))
 		return m, nil
 
+	case "/memory":
+		mem := agent.LoadMemory(m.config.WorkDir)
+		if mem == "" {
+			m.sysMsg("No MEMORY.md found in working directory.")
+		} else {
+			if len(mem) > 1000 {
+				mem = mem[:1000] + "\n... (truncated)"
+			}
+			m.addMessage(ChatMessage{
+				Time:    time.Now(),
+				Type:    MsgRaw,
+				Content: "\033[1;36m--- MEMORY.md ---\033[0m\n" + mem,
+			})
+			m.refreshViewport()
+		}
+		return m, nil
+
 	case "/sessions", "/ls":
 		sessions, err := session.List(m.config.SessionDir)
 		if err != nil || len(sessions) == 0 {
@@ -819,6 +908,7 @@ func (m Model) handleCommand(input string) (tea.Model, tea.Cmd) {
 		} else {
 			prov := parts[1]
 			m.config.Provider = prov
+			m.agent.SetProvider(prov)
 			m.sysMsg(fmt.Sprintf("*** Provider set to: %s", prov))
 		}
 		return m, nil
@@ -872,6 +962,7 @@ func (m Model) handleCommand(input string) (tea.Model, tea.Cmd) {
 			m.agent.SetModel(p.Model)
 			m.agent.SetBaseURL(p.BaseURL)
 			m.agent.SetAPIKey(p.APIKey)
+			m.agent.SetProvider(p.Provider)
 			masked := p.APIKey
 			if len(masked) > 8 {
 				masked = masked[:4] + "..." + masked[len(masked)-4:]
@@ -902,6 +993,7 @@ func (m Model) handleCommand(input string) (tea.Model, tea.Cmd) {
 			m.agent.SetModel(p.Model)
 			m.agent.SetBaseURL(p.BaseURL)
 			m.agent.SetAPIKey(p.APIKey)
+			m.agent.SetProvider(p.Provider)
 			m.sysMsg(fmt.Sprintf("*** Profile loaded: %s (provider=%s model=%s)", action, p.Provider, p.Model))
 		}
 		return m, nil
@@ -922,6 +1014,37 @@ func (m *Model) sysMsg(content string) {
 func (m *Model) errMsg(content string) {
 	m.addMessage(ChatMessage{Time: time.Now(), Type: MsgError, Content: content})
 	m.refreshViewport()
+}
+
+// autoSaveMemory asks the agent to generate a memory summary and saves it
+func (m *Model) autoSaveMemory() {
+	msgs := m.agent.Messages()
+	if len(msgs) < 4 {
+		return
+	}
+
+	// Build a simple summary from the conversation
+	var summary strings.Builder
+	summary.WriteString("# MEMORY.md\n")
+	summary.WriteString(fmt.Sprintf("Last updated: %s\n\n", time.Now().Format(time.RFC3339)))
+	summary.WriteString("## Session Summary\n")
+
+	for _, msg := range msgs {
+		if msg.Role == "user" && len(msg.Content) > 0 {
+			content := msg.Content
+			if len(content) > 200 {
+				content = content[:200] + "..."
+			}
+			summary.WriteString(fmt.Sprintf("- User asked: %s\n", content))
+		}
+	}
+
+	summary.WriteString("\n## Tool Usage\n")
+	for name, count := range m.toolStats {
+		summary.WriteString(fmt.Sprintf("- %s: %d calls\n", name, count))
+	}
+
+	_ = agent.SaveMemory(m.config.WorkDir, summary.String())
 }
 
 // runGit runs a git command and returns its output
