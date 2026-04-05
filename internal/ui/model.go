@@ -3,6 +3,7 @@ package ui
 import (
 	"context"
 	"fmt"
+	"os/exec"
 	"strings"
 	"time"
 
@@ -14,6 +15,7 @@ import (
 
 	"github.com/jstamagal/bitchtea/internal/agent"
 	"github.com/jstamagal/bitchtea/internal/config"
+	"github.com/jstamagal/bitchtea/internal/session"
 )
 
 // agentEventMsg wraps agent events for the bubbletea message loop
@@ -58,6 +60,12 @@ type Model struct {
 
 	// Stats
 	toolStats map[string]int
+
+	// Session
+	session *session.Session
+
+	// Auto-next tracking
+	autoNextPending bool
 }
 
 // NewModel creates the initial model
@@ -77,6 +85,9 @@ func NewModel(cfg *config.Config) Model {
 
 	ag := agent.NewAgent(cfg)
 
+	// Create session
+	sess, _ := session.New(cfg.SessionDir)
+
 	return Model{
 		config:     cfg,
 		agent:      ag,
@@ -87,6 +98,7 @@ func NewModel(cfg *config.Config) Model {
 		history:    []string{},
 		historyIdx: -1,
 		toolStats:  make(map[string]int),
+		session:    sess,
 	}
 }
 
@@ -134,9 +146,40 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case splashMsg:
 		// Show the splash screen
-		m.addMessage(ChatMessage{Time: time.Now(), Type: MsgRaw, Content: SplashArt})
+		m.addMessage(ChatMessage{Time: time.Now(), Type: MsgRaw, Content: SplashArt()})
 		m.addMessage(ChatMessage{Time: time.Now(), Type: MsgRaw, Content: SplashTagline})
 		m.addMessage(ChatMessage{Time: time.Now(), Type: MsgRaw, Content: fmt.Sprintf(ConnectMsg, m.config.Provider, m.config.Model, m.config.WorkDir)})
+
+		// Show loaded context files
+		ctxFiles := agent.DiscoverContextFiles(m.config.WorkDir)
+		if ctxFiles != "" {
+			// Count how many files were found
+			count := strings.Count(ctxFiles, "# Context from")
+			m.addMessage(ChatMessage{
+				Time:    time.Now(),
+				Type:    MsgSystem,
+				Content: fmt.Sprintf("Loaded %d context file(s) from project tree", count),
+			})
+		}
+
+		// Show memory status
+		mem := agent.LoadMemory(m.config.WorkDir)
+		if mem != "" {
+			m.addMessage(ChatMessage{
+				Time:    time.Now(),
+				Type:    MsgSystem,
+				Content: "Loaded MEMORY.md from working directory",
+			})
+		}
+
+		if m.session != nil {
+			m.addMessage(ChatMessage{
+				Time:    time.Now(),
+				Type:    MsgSystem,
+				Content: fmt.Sprintf("Session: %s", m.session.Path),
+			})
+		}
+
 		m.addMessage(ChatMessage{Time: time.Now(), Type: MsgRaw, Content: MOTD})
 		m.refreshViewport()
 
@@ -237,7 +280,18 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.streaming = false
 		m.agentState = agent.StateIdle
 		m.eventCh = nil
-		// Process queued messages
+
+		// Save to session
+		if m.session != nil {
+			for _, msg := range m.agent.Messages() {
+				_ = m.session.Append(session.Entry{
+					Role:    msg.Role,
+					Content: msg.Content,
+				})
+			}
+		}
+
+		// Process queued messages first
 		if len(m.queued) > 0 {
 			next := m.queued[0]
 			m.queued = m.queued[1:]
@@ -250,6 +304,34 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.refreshViewport()
 			return m, m.sendToAgent(next)
 		}
+
+		// Auto-next-steps
+		if m.config.AutoNextSteps && !m.autoNextPending {
+			m.autoNextPending = true
+			prompt := agent.AutoNextPrompt()
+			m.addMessage(ChatMessage{
+				Time:    time.Now(),
+				Type:    MsgSystem,
+				Content: "*** auto-next-steps: continuing...",
+			})
+			m.refreshViewport()
+			return m, m.sendToAgent(prompt)
+		}
+
+		// Auto-next-idea (only fires once after auto-next-steps completes)
+		if m.config.AutoNextIdea && m.autoNextPending {
+			m.autoNextPending = false
+			prompt := agent.AutoIdeaPrompt()
+			m.addMessage(ChatMessage{
+				Time:    time.Now(),
+				Type:    MsgSystem,
+				Content: "*** auto-next-idea: brainstorming...",
+			})
+			m.refreshViewport()
+			return m, m.sendToAgent(prompt)
+		}
+
+		m.autoNextPending = false
 		return m, nil
 
 	case spinner.TickMsg:
@@ -390,7 +472,14 @@ func (m Model) View() string {
 	}
 
 	// Top bar
-	topLeft := TopBarStyle.Render(fmt.Sprintf(" bitchtea — %s ", m.config.Model))
+	flags := ""
+	if m.config.AutoNextSteps {
+		flags += " [auto]"
+	}
+	if m.config.AutoNextIdea {
+		flags += " [idea]"
+	}
+	topLeft := TopBarStyle.Render(fmt.Sprintf(" bitchtea — %s%s ", m.config.Model, flags))
 	topRight := TopBarStyle.Render(fmt.Sprintf(" %s ", time.Now().Format("3:04pm")))
 	topPad := m.width - lipgloss.Width(topLeft) - lipgloss.Width(topRight)
 	if topPad < 0 {
@@ -410,17 +499,23 @@ func (m Model) View() string {
 		stateStr = m.spinner.View() + " running tools..."
 	}
 
+	elapsed := m.agent.Elapsed().Truncate(time.Second)
+	tokens := m.agent.EstimateTokens()
+	tokenStr := formatTokens(tokens)
+
 	statusLeft := BottomBarStyle.Render(fmt.Sprintf(" [%s] %s ", m.config.AgentNick, stateStr))
 
-	// Tool stats
+	// Tool stats + tokens + elapsed
 	var statsItems []string
 	for name, count := range m.toolStats {
 		statsItems = append(statsItems, fmt.Sprintf("%s(%d)", name, count))
 	}
-	statsStr := ""
-	if len(statsItems) > 0 {
-		statsStr = strings.Join(statsItems, " ")
+	statsStr := strings.Join(statsItems, " ")
+	if statsStr != "" {
+		statsStr += " | "
 	}
+	statsStr += fmt.Sprintf("~%s tok | %s", tokenStr, elapsed)
+
 	statusRight := BottomBarStyle.Render(fmt.Sprintf(" %s ", statsStr))
 	statusPad := m.width - lipgloss.Width(statusLeft) - lipgloss.Width(statusRight)
 	if statusPad < 0 {
@@ -454,8 +549,20 @@ func (m Model) handleCommand(input string) (tea.Model, tea.Cmd) {
 		m.addMessage(ChatMessage{
 			Time: time.Now(),
 			Type: MsgSystem,
-			Content: "Commands: /model <name>, /compact, /clear, /quit, /help\n" +
-				"  Just type to talk to the agent. It has read, write, edit, bash tools.\n" +
+			Content: "Commands:\n" +
+				"  /model <name>    Switch LLM model\n" +
+				"  /compact         Compact conversation context\n" +
+				"  /clear           Clear chat display\n" +
+				"  /diff            Show git diff\n" +
+				"  /undo            Undo last git change (git checkout)\n" +
+				"  /commit [msg]    Git commit with message (or auto-generate)\n" +
+				"  /status          Git status\n" +
+				"  /tokens          Show token usage estimate\n" +
+				"  /auto-next       Toggle auto-next-steps\n" +
+				"  /auto-idea       Toggle auto-next-idea\n" +
+				"  /quit            Exit\n" +
+				"\n" +
+				"  Use @filename to include file contents in your message.\n" +
 				"  Type while agent is working to queue messages (steering).\n" +
 				"  Ctrl+C to interrupt. Ctrl+C again to quit.",
 		})
@@ -475,7 +582,7 @@ func (m Model) handleCommand(input string) (tea.Model, tea.Cmd) {
 			m.addMessage(ChatMessage{
 				Time:    time.Now(),
 				Type:    MsgSystem,
-				Content: fmt.Sprintf("Model switched to: %s", newModel),
+				Content: fmt.Sprintf("*** Model switched to: %s", newModel),
 			})
 		}
 		m.refreshViewport()
@@ -487,21 +594,129 @@ func (m Model) handleCommand(input string) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case "/compact":
+		if m.streaming {
+			m.sysMsg("Can't compact while agent is working. Be patient.")
+			return m, nil
+		}
+		before := m.agent.EstimateTokens()
+		if err := m.agent.Compact(context.Background()); err != nil {
+			m.errMsg(fmt.Sprintf("Compaction failed: %v", err))
+		} else {
+			after := m.agent.EstimateTokens()
+			m.sysMsg(fmt.Sprintf("Compacted: ~%s -> ~%s tokens", formatTokens(before), formatTokens(after)))
+		}
+		return m, nil
+
+	case "/diff":
+		output := runGit(m.config.WorkDir, "diff")
+		if output == "" {
+			output = "No changes. Clean as a whistle."
+		}
 		m.addMessage(ChatMessage{
 			Time:    time.Now(),
-			Type:    MsgSystem,
-			Content: "Context compaction not yet implemented. Deal with it.",
+			Type:    MsgRaw,
+			Content: "\033[1;36m--- git diff ---\033[0m\n" + output,
 		})
 		m.refreshViewport()
 		return m, nil
 
-	default:
+	case "/status":
+		output := runGit(m.config.WorkDir, "status", "--short")
+		if output == "" {
+			output = "Nothing to report. Working tree clean."
+		}
 		m.addMessage(ChatMessage{
 			Time:    time.Now(),
-			Type:    MsgError,
-			Content: fmt.Sprintf("Unknown command: %s. Try /help, genius.", cmd),
+			Type:    MsgRaw,
+			Content: "\033[1;36m--- git status ---\033[0m\n" + output,
 		})
 		m.refreshViewport()
 		return m, nil
+
+	case "/undo":
+		// git checkout -- . (revert all unstaged changes)
+		output := runGit(m.config.WorkDir, "checkout", "--", ".")
+		m.sysMsg("Reverted all unstaged changes. " + output)
+		return m, nil
+
+	case "/commit":
+		var msg string
+		if len(parts) > 1 {
+			msg = strings.Join(parts[1:], " ")
+		} else {
+			// Auto-generate commit message
+			diff := runGit(m.config.WorkDir, "diff", "--cached", "--stat")
+			if diff == "" {
+				// Stage everything first
+				runGit(m.config.WorkDir, "add", "-A")
+				diff = runGit(m.config.WorkDir, "diff", "--cached", "--stat")
+			}
+			if diff == "" {
+				m.sysMsg("Nothing to commit.")
+				return m, nil
+			}
+			msg = "bitchtea: auto-commit"
+		}
+		runGit(m.config.WorkDir, "add", "-A")
+		output := runGit(m.config.WorkDir, "commit", "-m", msg)
+		m.sysMsg("Committed: " + output)
+		return m, nil
+
+	case "/tokens":
+		tokens := m.agent.EstimateTokens()
+		msgs := m.agent.MessageCount()
+		m.sysMsg(fmt.Sprintf("~%s tokens | %d messages | %d turns",
+			formatTokens(tokens), msgs, m.agent.TurnCount))
+		return m, nil
+
+	case "/auto-next":
+		m.config.AutoNextSteps = !m.config.AutoNextSteps
+		status := "OFF"
+		if m.config.AutoNextSteps {
+			status = "ON"
+		}
+		m.sysMsg(fmt.Sprintf("Auto-next-steps: %s", status))
+		return m, nil
+
+	case "/auto-idea":
+		m.config.AutoNextIdea = !m.config.AutoNextIdea
+		status := "OFF"
+		if m.config.AutoNextIdea {
+			status = "ON"
+		}
+		m.sysMsg(fmt.Sprintf("Auto-next-idea: %s", status))
+		return m, nil
+
+	default:
+		m.errMsg(fmt.Sprintf("Unknown command: %s. Try /help, genius.", cmd))
+		return m, nil
 	}
+}
+
+// sysMsg is a shorthand for adding a system message and refreshing
+func (m *Model) sysMsg(content string) {
+	m.addMessage(ChatMessage{Time: time.Now(), Type: MsgSystem, Content: content})
+	m.refreshViewport()
+}
+
+// errMsg is a shorthand for adding an error message and refreshing
+func (m *Model) errMsg(content string) {
+	m.addMessage(ChatMessage{Time: time.Now(), Type: MsgError, Content: content})
+	m.refreshViewport()
+}
+
+// runGit runs a git command and returns its output
+func runGit(workDir string, args ...string) string {
+	cmd := exec.Command("git", args...)
+	cmd.Dir = workDir
+	out, _ := cmd.CombinedOutput()
+	return strings.TrimSpace(string(out))
+}
+
+// formatTokens formats a token count nicely
+func formatTokens(n int) string {
+	if n < 1000 {
+		return fmt.Sprintf("%d", n)
+	}
+	return fmt.Sprintf("%.1fk", float64(n)/1000.0)
 }

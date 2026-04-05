@@ -43,9 +43,12 @@ type Agent struct {
 	messages []llm.Message
 
 	// Stats
-	TotalTokens int
-	ToolCalls   map[string]int // tool name -> call count
-	StartTime   time.Time
+	TotalTokens  int
+	TurnCount    int
+	ToolCalls    map[string]int // tool name -> call count
+	StartTime    time.Time
+	CharsSent    int // rough token proxy
+	CharsRecvd   int
 }
 
 // NewAgent creates a new agent
@@ -55,7 +58,7 @@ func NewAgent(cfg *config.Config) *Agent {
 	// System prompt
 	systemPrompt := buildSystemPrompt(cfg)
 
-	return &Agent{
+	a := &Agent{
 		client: client,
 		tools:  tools.NewRegistry(cfg.WorkDir),
 		config: cfg,
@@ -65,6 +68,34 @@ func NewAgent(cfg *config.Config) *Agent {
 		ToolCalls: make(map[string]int),
 		StartTime: time.Now(),
 	}
+
+	// Inject context files (AGENTS.md etc.)
+	contextFiles := DiscoverContextFiles(cfg.WorkDir)
+	if contextFiles != "" {
+		a.messages = append(a.messages, llm.Message{
+			Role:    "user",
+			Content: "Here are the project context files:\n\n" + contextFiles,
+		})
+		a.messages = append(a.messages, llm.Message{
+			Role:    "assistant",
+			Content: "Got it. I've read the project context and will follow those conventions.",
+		})
+	}
+
+	// Inject memory
+	memory := LoadMemory(cfg.WorkDir)
+	if memory != "" {
+		a.messages = append(a.messages, llm.Message{
+			Role:    "user",
+			Content: "Here is the session memory from previous work:\n\n" + memory,
+		})
+		a.messages = append(a.messages, llm.Message{
+			Role:    "assistant",
+			Content: "Noted. I'll use this context going forward.",
+		})
+	}
+
+	return a
 }
 
 // SendMessage processes a user message through the agent loop
@@ -72,8 +103,13 @@ func NewAgent(cfg *config.Config) *Agent {
 func (a *Agent) SendMessage(ctx context.Context, userMsg string, events chan<- Event) {
 	defer close(events)
 
+	// Expand @file references
+	expanded := ExpandFileRefs(userMsg, a.config.WorkDir)
+	a.CharsSent += len(expanded)
+
 	// Add user message
-	a.messages = append(a.messages, llm.Message{Role: "user", Content: userMsg})
+	a.messages = append(a.messages, llm.Message{Role: "user", Content: expanded})
+	a.TurnCount++
 
 	// Agent loop - keeps going while there are tool calls
 	for {
@@ -121,8 +157,18 @@ func (a *Agent) SendMessage(ctx context.Context, userMsg string, events chan<- E
 		}
 		a.messages = append(a.messages, assistantMsg)
 
-		// If no tool calls, we're done
+		a.CharsRecvd += textAccum.Len()
+
+		// If no tool calls, we're done (maybe auto-next)
 		if len(toolCalls) == 0 {
+			// Auto-next-steps: inject a follow-up prompt
+			if a.config.AutoNextSteps && textAccum.Len() > 0 {
+				events <- Event{Type: "state", State: StateIdle}
+				events <- Event{Type: "done"}
+				// The auto-next message will be sent as a separate SendMessage call
+				// from the UI layer, so we just signal done here
+				return
+			}
 			events <- Event{Type: "state", State: StateIdle}
 			events <- Event{Type: "done"}
 			return
@@ -203,4 +249,86 @@ func (a *Agent) Model() string {
 func (a *Agent) SetModel(model string) {
 	a.config.Model = model
 	a.client.Model = model
+}
+
+// EstimateTokens returns a rough token count (chars / 4)
+func (a *Agent) EstimateTokens() int {
+	total := 0
+	for _, m := range a.messages {
+		total += len(m.Content)
+	}
+	return total / 4
+}
+
+// Compact summarizes the conversation to reduce context size.
+// Keeps the system prompt and last N messages, replaces the middle with a summary.
+func (a *Agent) Compact(ctx context.Context) error {
+	if len(a.messages) < 6 {
+		return nil // nothing to compact
+	}
+
+	// Build a summary request
+	var sb strings.Builder
+	sb.WriteString("Summarize the following conversation concisely, preserving all important ")
+	sb.WriteString("technical details, decisions made, files modified, and current state:\n\n")
+
+	// Everything except system prompt and last 4 messages
+	end := len(a.messages) - 4
+	for _, m := range a.messages[1:end] {
+		sb.WriteString(fmt.Sprintf("[%s]: %s\n", m.Role, truncateStr(m.Content, 500)))
+	}
+
+	summaryMsgs := []llm.Message{
+		{Role: "user", Content: sb.String()},
+	}
+
+	events := make(chan llm.StreamEvent, 100)
+	go a.client.StreamChat(ctx, summaryMsgs, nil, events)
+
+	var summary strings.Builder
+	for ev := range events {
+		if ev.Type == "text" {
+			summary.WriteString(ev.Text)
+		}
+	}
+
+	// Rebuild messages: system + summary + last 4
+	keep := a.messages[end:]
+	a.messages = []llm.Message{
+		a.messages[0], // system prompt
+		{Role: "user", Content: "[Previous conversation summary]:\n" + summary.String()},
+		{Role: "assistant", Content: "Got it, I have the context from the summary."},
+	}
+	a.messages = append(a.messages, keep...)
+
+	return nil
+}
+
+// AutoNextPrompt returns the auto-next-steps prompt
+func AutoNextPrompt() string {
+	return "What are the next steps? If there are remaining tasks, continue working on them. " +
+		"If everything is done, say so clearly."
+}
+
+// AutoIdeaPrompt returns the auto-next-idea prompt
+func AutoIdeaPrompt() string {
+	return "Based on what you've done so far, what improvements or optimizations would you suggest? " +
+		"Pick the most impactful one and implement it."
+}
+
+func truncateStr(s string, n int) string {
+	if len(s) <= n {
+		return s
+	}
+	return s[:n] + "..."
+}
+
+// Messages returns the current message history (for session saving)
+func (a *Agent) Messages() []llm.Message {
+	return a.messages
+}
+
+// Elapsed returns time since agent creation
+func (a *Agent) Elapsed() time.Duration {
+	return time.Since(a.StartTime)
 }
