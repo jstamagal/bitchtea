@@ -62,7 +62,8 @@ type Model struct {
 	toolStats map[string]int
 
 	// Session
-	session *session.Session
+	session         *session.Session
+	lastSavedMsgIdx int // index into agent.Messages() of last saved entry
 
 	// Auto-next tracking
 	autoNextPending bool
@@ -100,6 +101,42 @@ func NewModel(cfg *config.Config) Model {
 		streamBuffer: &strings.Builder{},
 		toolStats:    make(map[string]int),
 		session:      sess,
+	}
+}
+
+// ResumeSession loads a previous session's messages into the chat display
+func (m *Model) ResumeSession(sess *session.Session) {
+	m.session = sess
+	for _, e := range sess.Entries {
+		var msgType MsgType
+		nick := ""
+		switch e.Role {
+		case "user":
+			msgType = MsgUser
+			nick = m.config.UserNick
+		case "assistant":
+			msgType = MsgAgent
+			nick = m.config.AgentNick
+		case "tool":
+			msgType = MsgTool
+			nick = e.ToolName
+		case "system":
+			msgType = MsgSystem
+		default:
+			msgType = MsgSystem
+		}
+
+		content := e.Content
+		if len(content) > 500 {
+			content = content[:500] + "... (truncated from session)"
+		}
+
+		m.messages = append(m.messages, ChatMessage{
+			Time:    e.Timestamp,
+			Type:    msgType,
+			Nick:    nick,
+			Content: content,
+		})
 	}
 }
 
@@ -282,14 +319,16 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.agentState = agent.StateIdle
 		m.eventCh = nil
 
-		// Save to session
+		// Save new messages to session (incremental)
 		if m.session != nil {
-			for _, msg := range m.agent.Messages() {
+			msgs := m.agent.Messages()
+			for i := m.lastSavedMsgIdx; i < len(msgs); i++ {
 				_ = m.session.Append(session.Entry{
-					Role:    msg.Role,
-					Content: msg.Content,
+					Role:    msgs[i].Role,
+					Content: msgs[i].Content,
 				})
 			}
+			m.lastSavedMsgIdx = len(msgs)
 		}
 
 		// Process queued messages first
@@ -551,21 +590,28 @@ func (m Model) handleCommand(input string) (tea.Model, tea.Cmd) {
 			Time: time.Now(),
 			Type: MsgSystem,
 			Content: "Commands:\n" +
-				"  /model <name>    Switch LLM model\n" +
-				"  /compact         Compact conversation context\n" +
-				"  /clear           Clear chat display\n" +
-				"  /diff            Show git diff\n" +
-				"  /undo            Undo last git change (git checkout)\n" +
-				"  /commit [msg]    Git commit with message (or auto-generate)\n" +
-				"  /status          Git status\n" +
-				"  /tokens          Show token usage estimate\n" +
-				"  /auto-next       Toggle auto-next-steps\n" +
-				"  /auto-idea       Toggle auto-next-idea\n" +
-				"  /quit            Exit\n" +
+				"  /model <name>       Switch LLM model\n" +
+				"  /provider <name>    Set provider (openai, anthropic)\n" +
+				"  /baseurl <url>      Set API base URL\n" +
+				"  /apikey <key>       Set API key\n" +
+				"  /profile [cmd]      save/load/delete named profiles\n" +
+				"  /compact            Compact conversation context\n" +
+				"  /clear              Clear chat display\n" +
+				"  /diff               Show git diff\n" +
+				"  /undo               Undo last git change\n" +
+				"  /commit [msg]       Git commit\n" +
+				"  /status             Git status\n" +
+				"  /tokens             Token usage estimate\n" +
+				"  /sessions           List saved sessions\n" +
+				"  /tree               Show session tree\n" +
+				"  /fork               Fork session\n" +
+				"  /auto-next          Toggle auto-next-steps\n" +
+				"  /auto-idea          Toggle auto-next-idea\n" +
+				"  /quit               Exit\n" +
 				"\n" +
-				"  Use @filename to include file contents in your message.\n" +
-				"  Type while agent is working to queue messages (steering).\n" +
-				"  Ctrl+C to interrupt. Ctrl+C again to quit.",
+				"  Use @filename to include file contents.\n" +
+				"  Type while agent works to queue (steering).\n" +
+				"  Ctrl+C to interrupt, again to quit.",
 		})
 		m.refreshViewport()
 		return m, nil
@@ -686,6 +732,178 @@ func (m Model) handleCommand(input string) (tea.Model, tea.Cmd) {
 			status = "ON"
 		}
 		m.sysMsg(fmt.Sprintf("Auto-next-idea: %s", status))
+		return m, nil
+
+	case "/sessions", "/ls":
+		sessions, err := session.List(m.config.SessionDir)
+		if err != nil || len(sessions) == 0 {
+			m.sysMsg("No saved sessions.")
+			return m, nil
+		}
+		var sb strings.Builder
+		sb.WriteString("Sessions:\n")
+		limit := len(sessions)
+		if limit > 15 {
+			limit = 15
+		}
+		for i, s := range sessions[:limit] {
+			sb.WriteString(fmt.Sprintf("  %d. %s\n", i+1, session.Info(s)))
+		}
+		if len(sessions) > 15 {
+			sb.WriteString(fmt.Sprintf("  ... and %d more\n", len(sessions)-15))
+		}
+		m.sysMsg(sb.String())
+		return m, nil
+
+	case "/tree":
+		if m.session == nil {
+			m.sysMsg("No active session.")
+			return m, nil
+		}
+		m.addMessage(ChatMessage{
+			Time:    time.Now(),
+			Type:    MsgRaw,
+			Content: "\033[1;36m" + m.session.Tree() + "\033[0m",
+		})
+		m.refreshViewport()
+		return m, nil
+
+	case "/fork":
+		if m.session == nil || len(m.session.Entries) == 0 {
+			m.sysMsg("No session to fork from.")
+			return m, nil
+		}
+		lastID := m.session.Entries[len(m.session.Entries)-1].ID
+		newSess, err := m.session.Fork(lastID)
+		if err != nil {
+			m.errMsg(fmt.Sprintf("Fork failed: %v", err))
+			return m, nil
+		}
+		m.session = newSess
+		m.sysMsg(fmt.Sprintf("Forked to new session: %s", newSess.Path))
+		return m, nil
+
+	case "/baseurl":
+		if len(parts) < 2 {
+			m.sysMsg(fmt.Sprintf("Base URL: %s\nUsage: /baseurl <url>", m.config.BaseURL))
+		} else {
+			url := parts[1]
+			m.agent.SetBaseURL(url)
+			m.config.BaseURL = url
+			m.sysMsg(fmt.Sprintf("*** Base URL set to: %s", url))
+		}
+		return m, nil
+
+	case "/apikey":
+		if len(parts) < 2 {
+			masked := m.config.APIKey
+			if len(masked) > 8 {
+				masked = masked[:4] + "..." + masked[len(masked)-4:]
+			}
+			m.sysMsg(fmt.Sprintf("API Key: %s\nUsage: /apikey <key>", masked))
+		} else {
+			key := parts[1]
+			m.agent.SetAPIKey(key)
+			m.config.APIKey = key
+			masked := key
+			if len(masked) > 8 {
+				masked = masked[:4] + "..." + masked[len(masked)-4:]
+			}
+			m.sysMsg(fmt.Sprintf("*** API key set: %s", masked))
+		}
+		return m, nil
+
+	case "/provider":
+		if len(parts) < 2 {
+			m.sysMsg(fmt.Sprintf("Provider: %s\nUsage: /provider <openai|anthropic>", m.config.Provider))
+		} else {
+			prov := parts[1]
+			m.config.Provider = prov
+			m.sysMsg(fmt.Sprintf("*** Provider set to: %s", prov))
+		}
+		return m, nil
+
+	case "/profile":
+		if len(parts) < 2 {
+			// List profiles
+			names := config.ListProfiles()
+			if len(names) == 0 {
+				m.sysMsg("No saved profiles.\nUsage: /profile save <name> | /profile load <name> | /profile delete <name>")
+			} else {
+				m.sysMsg("Profiles: " + strings.Join(names, ", ") +
+					"\nUsage: /profile save <name> | /profile load <name> | /profile delete <name>")
+			}
+			return m, nil
+		}
+
+		action := parts[1]
+		switch action {
+		case "save":
+			if len(parts) < 3 {
+				m.errMsg("Usage: /profile save <name>")
+				return m, nil
+			}
+			name := parts[2]
+			p := config.Profile{
+				Name:     name,
+				Provider: m.config.Provider,
+				BaseURL:  m.config.BaseURL,
+				APIKey:   m.config.APIKey,
+				Model:    m.config.Model,
+			}
+			if err := config.SaveProfile(p); err != nil {
+				m.errMsg(fmt.Sprintf("Save failed: %v", err))
+			} else {
+				m.sysMsg(fmt.Sprintf("*** Profile saved: %s (provider=%s model=%s)", name, p.Provider, p.Model))
+			}
+
+		case "load":
+			if len(parts) < 3 {
+				m.errMsg("Usage: /profile load <name>")
+				return m, nil
+			}
+			name := parts[2]
+			p, err := config.LoadProfile(name)
+			if err != nil {
+				m.errMsg(fmt.Sprintf("Load failed: %v", err))
+				return m, nil
+			}
+			config.ApplyProfile(m.config, p)
+			m.agent.SetModel(p.Model)
+			m.agent.SetBaseURL(p.BaseURL)
+			m.agent.SetAPIKey(p.APIKey)
+			masked := p.APIKey
+			if len(masked) > 8 {
+				masked = masked[:4] + "..." + masked[len(masked)-4:]
+			}
+			m.sysMsg(fmt.Sprintf("*** Profile loaded: %s\n  provider=%s model=%s\n  baseurl=%s\n  apikey=%s",
+				name, p.Provider, p.Model, p.BaseURL, masked))
+
+		case "delete":
+			if len(parts) < 3 {
+				m.errMsg("Usage: /profile delete <name>")
+				return m, nil
+			}
+			name := parts[2]
+			if err := config.DeleteProfile(name); err != nil {
+				m.errMsg(fmt.Sprintf("Delete failed: %v", err))
+			} else {
+				m.sysMsg(fmt.Sprintf("*** Profile deleted: %s", name))
+			}
+
+		default:
+			// Treat as shorthand for /profile load <name>
+			p, err := config.LoadProfile(action)
+			if err != nil {
+				m.errMsg(fmt.Sprintf("Unknown profile action or profile not found: %s", action))
+				return m, nil
+			}
+			config.ApplyProfile(m.config, p)
+			m.agent.SetModel(p.Model)
+			m.agent.SetBaseURL(p.BaseURL)
+			m.agent.SetAPIKey(p.APIKey)
+			m.sysMsg(fmt.Sprintf("*** Profile loaded: %s (provider=%s model=%s)", action, p.Provider, p.Model))
+		}
 		return m, nil
 
 	default:

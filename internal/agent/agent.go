@@ -251,6 +251,23 @@ func (a *Agent) SetModel(model string) {
 	a.client.Model = model
 }
 
+// SetBaseURL changes the API base URL
+func (a *Agent) SetBaseURL(url string) {
+	a.config.BaseURL = url
+	a.client.BaseURL = url
+}
+
+// SetAPIKey changes the API key
+func (a *Agent) SetAPIKey(key string) {
+	a.config.APIKey = key
+	a.client.APIKey = key
+}
+
+// Config returns the current config (for profile save)
+func (a *Agent) Config() *config.Config {
+	return a.config
+}
+
 // EstimateTokens returns a rough token count (chars / 4)
 func (a *Agent) EstimateTokens() int {
 	total := 0
