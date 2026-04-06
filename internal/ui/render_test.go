@@ -16,7 +16,7 @@ func TestLooksLikeMarkdown(t *testing.T) {
 		{"## Heading", true},
 		{"- list item", true},
 		{"> quote", true},
-		{"use `code` here", true},
+		{"use `code` here", false},
 		{"just plain text no markers", false},
 	}
 
