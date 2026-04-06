@@ -1,6 +1,10 @@
 package ui
 
-import "github.com/charmbracelet/lipgloss"
+import (
+	"strings"
+
+	"github.com/charmbracelet/lipgloss"
+)
 
 // BitchX color palette — dark, aggressive, high contrast
 var (
@@ -80,9 +84,5 @@ var (
 
 // Separator returns a full-width separator line
 func Separator(width int) string {
-	s := ""
-	for i := 0; i < width; i++ {
-		s += "─"
-	}
-	return SeparatorStyle.Render(s)
+	return SeparatorStyle.Render(strings.Repeat("─", width))
 }

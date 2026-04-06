@@ -70,8 +70,7 @@ func DetectProvider(cfg *Config) {
 		if cfg.Model == "gpt-4o" {
 			cfg.Model = "claude-sonnet-4-20250514"
 		}
-	}
-	if key := os.Getenv("OPENAI_API_KEY"); key != "" {
+	} else if key := os.Getenv("OPENAI_API_KEY"); key != "" && cfg.APIKey == "" {
 		cfg.APIKey = key
 		cfg.Provider = "openai"
 	}
