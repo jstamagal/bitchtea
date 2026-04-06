@@ -16,25 +16,82 @@ bd dolt push          # Push beads data to remote
 
 **ALWAYS use non-interactive flags** with file operations to avoid hanging on confirmation prompts.
 
-Shell commands like `cp`, `mv`, and `rm` may be aliased to include `-i` (interactive) mode on some systems, causing the agent to hang indefinitely waiting for y/n input.
-
-**Use these forms instead:**
 ```bash
-# Force overwrite without prompting
 cp -f source dest           # NOT: cp source dest
 mv -f source dest           # NOT: mv source dest
 rm -f file                  # NOT: rm file
-
-# For recursive operations
 rm -rf directory            # NOT: rm -r directory
-cp -rf source dest          # NOT: cp -r source dest
 ```
 
-**Other commands that may prompt:**
-- `scp` - use `-o BatchMode=yes` for non-interactive
-- `ssh` - use `-o BatchMode=yes` to fail instead of prompting
-- `apt-get` - use `-y` flag
-- `brew` - use `HOMEBREW_NO_AUTO_UPDATE=1` env var
+## Project: bitchtea
+
+**What it is:** A TUI-based agentic coding assistant in Go. Connects to OpenAI/Anthropic APIs, streams responses, executes tools (read/write/edit/bash), persists sessions as JSONL.
+
+**Built with:** Go 1.24, charmbracelet stack (bubbletea, bubbles, glamour, lipgloss).
+
+### Build & Test
+
+```bash
+go build ./...              # Build — must pass before committing
+go test ./...               # Run all tests
+go test -race ./...         # Race detector — should be clean
+go vet ./...                # Static analysis — must pass before committing
+```
+
+All four must pass. If you change code, run all four before closing an issue.
+
+### Module Map
+
+```
+main.go                     Entry point, CLI flags, TUI bootstrap
+internal/
+  config/config.go          Config struct, env detection, profiles
+  agent/
+    agent.go                Agent loop: LLM ↔ tool orchestration
+    context.go              Context file discovery, @file expansion, MEMORY.md
+  llm/
+    client.go               OpenAI streaming client, types (Message, ToolCall, StreamEvent)
+    anthropic.go            Anthropic Messages API adapter
+    retry.go                Exponential backoff with jitter
+    cost.go                 Model pricing, CostTracker
+  session/session.go        JSONL session persistence, fork, tree
+  tools/tools.go            Tool registry: read, write, edit, bash
+  ui/
+    model.go                Bubbletea Model — the big file. Update(), View(), slash commands
+    message.go              ChatMessage types and Format()
+    render.go               Markdown rendering, text wrapping
+    styles.go               Lipgloss style definitions
+    themes.go               Theme system (bitchx, nord, dracula, gruvbox, monokai)
+    toolpanel.go            Collapsible tool sidebar
+    art.go                  ANSI splash art
+  sound/sound.go            Terminal bell notifications
+```
+
+### Dependency Flow (no circular deps)
+
+```
+main → config, session, ui
+ui   → agent, config, session, sound
+agent → config, llm, tools
+session → llm (for Message/ToolCall types)
+tools → llm (for ToolDef type)
+llm, config, sound → (no internal deps)
+```
+
+### Key Patterns
+
+- **Agent loop** (`agent.go:SendMessage`): Sends user message → streams LLM response → if tool calls, execute them and loop back for next LLM response. Events flow to UI via channel.
+- **Fake streamer for testing** (`agent_loop_test.go`): `fakeStreamer` implements `llm.ChatStreamer` interface. Use `NewAgentWithStreamer(cfg, streamer)` for offline tests.
+- **Session persistence**: JSONL files in `~/.local/share/bitchtea/sessions/`. Each entry has timestamp, role, content, tool metadata, parent ID for tree structure.
+- **Bubbletea architecture**: `Model.Update()` receives messages, returns commands. `Model.View()` renders. State flows through the `tea.Model` interface. Never block in Update.
+
+### What NOT to Do
+
+- Don't add Python. TypeScript or Go only.
+- Don't put files in `/tmp` — use `t.TempDir()` in tests.
+- Don't modify files outside your issue's scope. Each issue lists its files.
+- Don't add guardrails to the bash tool. Full system access is intentional.
+- Don't create MEMORY.md files. Use `bd remember` for persistent knowledge.
 
 <!-- BEGIN BEADS INTEGRATION v:1 profile:minimal hash:ca08a54f -->
 ## Beads Issue Tracker
