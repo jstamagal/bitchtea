@@ -120,18 +120,20 @@ func (s *Session) Fork(fromID string) (*Session, error) {
 		}
 	}
 
-	// Write all entries to the new file
+	// Write all entries to the new file atomically (single open)
+	f, err := os.OpenFile(newPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0644)
+	if err != nil {
+		return nil, fmt.Errorf("write fork: %w", err)
+	}
 	for _, e := range newSession.Entries {
 		data, err := json.Marshal(e)
 		if err != nil {
 			continue
 		}
-		f, err := os.OpenFile(newPath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
-		if err != nil {
-			return nil, fmt.Errorf("write fork: %w", err)
-		}
 		f.Write(append(data, '\n'))
-		f.Close()
+	}
+	if err := f.Close(); err != nil {
+		return nil, fmt.Errorf("close fork file: %w", err)
 	}
 
 	return newSession, nil

@@ -364,6 +364,7 @@ func (a *Agent) Messages() []llm.Message {
 }
 
 // RestoreMessages replaces the current message history with a prior session.
+// It resets session-local stats so that counters and timing start fresh.
 func (a *Agent) RestoreMessages(messages []llm.Message) {
 	a.messages = append([]llm.Message(nil), messages...)
 	if len(a.messages) == 0 || a.messages[0].Role != "system" {
@@ -372,6 +373,12 @@ func (a *Agent) RestoreMessages(messages []llm.Message) {
 			Content: buildSystemPrompt(a.config),
 		}}, a.messages...)
 	}
+
+	// Reset session-local stats so resume starts with clean counters
+	a.TurnCount = 0
+	a.ToolCalls = make(map[string]int)
+	a.CostTracker = llm.NewCostTracker()
+	a.StartTime = time.Now()
 }
 
 // Elapsed returns time since agent creation

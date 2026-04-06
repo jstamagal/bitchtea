@@ -3,6 +3,7 @@ package ui
 import (
 	"context"
 	"fmt"
+	"os"
 	"os/exec"
 	"strings"
 	"time"
@@ -94,7 +95,11 @@ func NewModel(cfg *config.Config) Model {
 	ag := agent.NewAgent(cfg)
 
 	// Create session
-	sess, _ := session.New(cfg.SessionDir)
+	sess, err := session.New(cfg.SessionDir)
+	if err != nil {
+		// Non-fatal: app works without session persistence
+		fmt.Fprintf(os.Stderr, "warning: session init failed: %v\n", err)
+	}
 
 	return Model{
 		config:       cfg,
@@ -574,10 +579,11 @@ func (m *Model) refreshViewport() {
 	}
 
 	var sb strings.Builder
-	for _, msg := range m.messages {
-		formatted := msg.Format()
+	for i := range m.messages {
+		m.messages[i].Width = wrapWidth
+		formatted := m.messages[i].Format()
 		// Word-wrap everything except raw messages (ANSI art)
-		if msg.Type != MsgRaw {
+		if m.messages[i].Type != MsgRaw {
 			formatted = WrapText(formatted, wrapWidth)
 		}
 		sb.WriteString(formatted)
