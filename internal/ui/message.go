@@ -24,6 +24,7 @@ type ChatMessage struct {
 	Type    MsgType
 	Nick    string // sender nick (user/agent name)
 	Content string // may contain ANSI codes for raw messages
+	Width   int    // viewport width for markdown rendering (0 = use default)
 }
 
 // Format renders a ChatMessage for display in the viewport
@@ -38,7 +39,11 @@ func (m ChatMessage) Format() string {
 	case MsgAgent:
 		nick := AgentNickStyle.Render(fmt.Sprintf("<%s>", m.Nick))
 		// Render markdown in agent responses
-		content := RenderMarkdown(m.Content, 100)
+		renderWidth := m.Width
+		if renderWidth < 20 {
+			renderWidth = 100 // fallback for messages created before viewport ready
+		}
+		content := RenderMarkdown(m.Content, renderWidth)
 		return fmt.Sprintf(" %s %s %s", ts, nick, content)
 
 	case MsgSystem:
