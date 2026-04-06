@@ -391,6 +391,33 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 
+	case SignalMsg:
+		// Handle OS signals (SIGINT, SIGTERM) sent from main.go
+		if m.streaming && m.cancel != nil {
+			m.cancel()
+			m.streaming = false
+			m.agentState = agent.StateIdle
+			m.addMessage(ChatMessage{
+				Time:    time.Now(),
+				Type:    MsgSystem,
+				Content: "Interrupted by signal.",
+			})
+			m.refreshViewport()
+			return m, nil
+		}
+		return m, tea.Quit
+	case tea.SuspendMsg:
+		// Ctrl+Z: suspend gracefully - bubbletea handles terminal restoration
+		return m, tea.Suspend
+
+	case tea.QuitMsg:
+		// SIGINT/SIGTERM from OS: cancel any active streaming before quitting
+		if m.streaming && m.cancel != nil {
+			m.cancel()
+			m.streaming = false
+		}
+		return m, tea.Quit
+
 	case agentEventMsg:
 		newModel, cmd := m.handleAgentEvent(msg.event)
 		// Chain: after handling this event, wait for the next one
