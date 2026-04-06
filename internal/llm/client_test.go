@@ -2,9 +2,11 @@ package llm
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 )
 
@@ -144,4 +146,64 @@ func TestStreamChatAPIError(t *testing.T) {
 	if !gotError {
 		t.Fatal("expected error event for 429 response")
 	}
+}
+
+func TestStreamChatToolCallLargeArguments(t *testing.T) {
+	largeValue := strings.Repeat("a", 70*1024)
+	argObject, err := json.Marshal(map[string]string{"content": largeValue})
+	if err != nil {
+		t.Fatalf("marshal arg object: %v", err)
+	}
+	argString, err := json.Marshal(string(argObject))
+	if err != nil {
+		t.Fatalf("marshal arg string: %v", err)
+	}
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.WriteHeader(200)
+
+		chunk := fmt.Sprintf(
+			`{"choices":[{"delta":{"tool_calls":[{"index":0,"id":"call_big","type":"function","function":{"name":"write","arguments":%s}}]},"finish_reason":null}]}`,
+			argString,
+		)
+
+		flusher := w.(http.Flusher)
+		fmt.Fprintf(w, "data: %s\n\n", chunk)
+		flusher.Flush()
+		fmt.Fprint(w, "data: [DONE]\n\n")
+		flusher.Flush()
+	}))
+	defer server.Close()
+
+	client := NewClient("test-key", server.URL, "test-model", "openai")
+	events := make(chan StreamEvent, 100)
+
+	go client.StreamChat(context.Background(), []Message{
+		{Role: "user", Content: "write a big file"},
+	}, nil, events)
+
+	var gotToolCall bool
+	for ev := range events {
+		switch ev.Type {
+		case "tool_call":
+			gotToolCall = true
+			if !strings.Contains(ev.ToolArgs, largeValue[:1024]) {
+				t.Fatalf("expected large argument content in tool args, got %q", ev.ToolArgs[:min(len(ev.ToolArgs), 128)])
+			}
+		case "error":
+			t.Fatalf("unexpected error for large tool call: %v", ev.Error)
+		}
+	}
+
+	if !gotToolCall {
+		t.Fatal("expected large tool call event")
+	}
+}
+
+func min(a, b int) int {
+	if a < b {
+		return a
+	}
+	return b
 }

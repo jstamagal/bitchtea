@@ -31,6 +31,11 @@ Thumbs.db
 # Agent memory
 MEMORY.md
 
+# Scratch / review notes
+90skid.md
+REVIEW_TODO.md
+tasks.json
+
 # Beads / Dolt files (added by bd init)
 .dolt/
 *.db

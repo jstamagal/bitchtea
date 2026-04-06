@@ -5,6 +5,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/jstamagal/bitchtea/internal/llm"
 )
 
 func TestNewAndAppend(t *testing.T) {
@@ -166,5 +168,60 @@ func TestListNonexistentDir(t *testing.T) {
 	}
 	if sessions != nil {
 		t.Fatalf("expected nil sessions, got %v", sessions)
+	}
+}
+
+func TestMessageRoundTripWithToolMetadata(t *testing.T) {
+	assistant := llm.Message{
+		Role:    "assistant",
+		Content: "Reading config now.",
+		ToolCalls: []llm.ToolCall{
+			{
+				ID:   "call_123",
+				Type: "function",
+				Function: llm.FunctionCall{
+					Name:      "read",
+					Arguments: `{"path":"README.md"}`,
+				},
+			},
+		},
+	}
+	tool := llm.Message{
+		Role:       "tool",
+		Content:    "file contents",
+		ToolCallID: "call_123",
+	}
+
+	entries := []Entry{
+		EntryFromMessage(assistant),
+		EntryFromMessage(tool),
+	}
+	roundTrip := MessagesFromEntries(entries)
+
+	if len(roundTrip) != 2 {
+		t.Fatalf("expected 2 messages after round trip, got %d", len(roundTrip))
+	}
+	if len(roundTrip[0].ToolCalls) != 1 {
+		t.Fatalf("expected assistant tool calls to survive round trip, got %+v", roundTrip[0].ToolCalls)
+	}
+	if roundTrip[0].ToolCalls[0].Function.Name != "read" {
+		t.Fatalf("wrong tool name after round trip: %+v", roundTrip[0].ToolCalls[0])
+	}
+	if roundTrip[1].ToolCallID != "call_123" {
+		t.Fatalf("expected tool call id to survive round trip, got %q", roundTrip[1].ToolCallID)
+	}
+}
+
+func TestMessagesFromEntriesSkipsLegacyToolEntryWithoutToolCallID(t *testing.T) {
+	msgs := MessagesFromEntries([]Entry{
+		{Role: "assistant", Content: "done"},
+		{Role: "tool", Content: "legacy tool output"},
+	})
+
+	if len(msgs) != 1 {
+		t.Fatalf("expected legacy tool entry to be skipped, got %d messages", len(msgs))
+	}
+	if msgs[0].Role != "assistant" {
+		t.Fatalf("expected assistant message to remain, got %q", msgs[0].Role)
 	}
 }

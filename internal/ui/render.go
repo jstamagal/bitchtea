@@ -2,30 +2,21 @@ package ui
 
 import (
 	"strings"
+	"sync"
 
 	"github.com/charmbracelet/glamour"
 	"github.com/charmbracelet/lipgloss"
 )
 
-// markdownRenderer renders markdown content for the terminal
-var markdownRenderer *glamour.TermRenderer
-
-func init() {
-	var err error
-	markdownRenderer, err = glamour.NewTermRenderer(
-		glamour.WithAutoStyle(),
-		glamour.WithWordWrap(100),
-	)
-	if err != nil {
-		// Fall back to no rendering
-		markdownRenderer = nil
-	}
-}
+var (
+	markdownRenderers   = make(map[int]*glamour.TermRenderer)
+	markdownRenderersMu sync.Mutex
+)
 
 // RenderMarkdown renders markdown content for terminal display.
 // Falls back to raw text if rendering fails.
 func RenderMarkdown(content string, width int) string {
-	if markdownRenderer == nil || content == "" {
+	if content == "" {
 		return content
 	}
 
@@ -34,7 +25,12 @@ func RenderMarkdown(content string, width int) string {
 		return content
 	}
 
-	rendered, err := markdownRenderer.Render(content)
+	renderer := markdownRendererForWidth(width)
+	if renderer == nil {
+		return content
+	}
+
+	rendered, err := renderer.Render(content)
 	if err != nil {
 		return content
 	}
@@ -43,6 +39,31 @@ func RenderMarkdown(content string, width int) string {
 	rendered = strings.TrimRight(rendered, "\n ")
 
 	return rendered
+}
+
+func markdownRendererForWidth(width int) *glamour.TermRenderer {
+	if width <= 0 {
+		width = 100
+	}
+
+	markdownRenderersMu.Lock()
+	defer markdownRenderersMu.Unlock()
+
+	if renderer, ok := markdownRenderers[width]; ok {
+		return renderer
+	}
+
+	renderer, err := glamour.NewTermRenderer(
+		glamour.WithAutoStyle(),
+		glamour.WithWordWrap(width),
+	)
+	if err != nil {
+		markdownRenderers[width] = nil
+		return nil
+	}
+
+	markdownRenderers[width] = renderer
+	return renderer
 }
 
 // looksLikeMarkdown does a cheap check for markdown-ish content

@@ -3,6 +3,10 @@ package ui
 import (
 	"strings"
 	"testing"
+
+	"github.com/jstamagal/bitchtea/internal/config"
+	"github.com/jstamagal/bitchtea/internal/llm"
+	"github.com/jstamagal/bitchtea/internal/session"
 )
 
 func TestToolPanelStartFinish(t *testing.T) {
@@ -85,5 +89,73 @@ func TestToolPanelResultTruncation(t *testing.T) {
 
 	if len(p.Tools[0].Result) > 70 {
 		t.Fatalf("expected truncated result, got length %d", len(p.Tools[0].Result))
+	}
+}
+
+func TestResumeSessionRestoresAgentMessagesAndToolNick(t *testing.T) {
+	cfg := config.DefaultConfig()
+	cfg.WorkDir = t.TempDir()
+	cfg.SessionDir = t.TempDir()
+
+	model := NewModel(&cfg)
+	sess := &session.Session{
+		Path: "resume.jsonl",
+		Entries: []session.Entry{
+			{Role: "system", Content: "system prompt"},
+			{Role: "user", Content: "check README"},
+			{
+				Role:    "assistant",
+				Content: "Reading it now.",
+				ToolCalls: []llm.ToolCall{
+					{
+						ID:   "call_1",
+						Type: "function",
+						Function: llm.FunctionCall{
+							Name:      "read",
+							Arguments: `{"path":"README.md"}`,
+						},
+					},
+				},
+			},
+			{Role: "tool", Content: "README contents", ToolCallID: "call_1"},
+			{Role: "assistant", Content: "Done."},
+		},
+	}
+
+	model.ResumeSession(sess)
+
+	if got := len(model.agent.Messages()); got != len(sess.Entries) {
+		t.Fatalf("expected %d restored agent messages, got %d", len(sess.Entries), got)
+	}
+	if model.lastSavedMsgIdx != len(sess.Entries) {
+		t.Fatalf("expected lastSavedMsgIdx=%d, got %d", len(sess.Entries), model.lastSavedMsgIdx)
+	}
+	if len(model.messages) != len(sess.Entries) {
+		t.Fatalf("expected %d chat messages, got %d", len(sess.Entries), len(model.messages))
+	}
+	if model.messages[3].Nick != "read" {
+		t.Fatalf("expected resumed tool nick to be read, got %q", model.messages[3].Nick)
+	}
+}
+
+func TestThemeCommandSwitchesTheme(t *testing.T) {
+	defer SetTheme("bitchx")
+
+	cfg := config.DefaultConfig()
+	cfg.WorkDir = t.TempDir()
+	cfg.SessionDir = t.TempDir()
+
+	model := NewModel(&cfg)
+	updated, _ := model.handleCommand("/theme nord")
+	got := updated.(Model)
+
+	if CurrentThemeName() != "Nord" {
+		t.Fatalf("expected active theme Nord, got %q", CurrentThemeName())
+	}
+	if len(got.messages) == 0 {
+		t.Fatal("expected theme command to emit a status message")
+	}
+	if !strings.Contains(got.messages[len(got.messages)-1].Content, "Theme switched") {
+		t.Fatalf("unexpected theme status message: %q", got.messages[len(got.messages)-1].Content)
 	}
 }

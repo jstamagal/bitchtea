@@ -38,26 +38,36 @@ type Event struct {
 // Agent manages the conversation loop
 type Agent struct {
 	client   *llm.Client
+	streamer llm.ChatStreamer
 	tools    *tools.Registry
 	config   *config.Config
 	messages []llm.Message
 
 	// Stats
-	TurnCount    int
-	ToolCalls    map[string]int // tool name -> call count
-	StartTime    time.Time
-	CostTracker  *llm.CostTracker
+	TurnCount   int
+	ToolCalls   map[string]int // tool name -> call count
+	StartTime   time.Time
+	CostTracker *llm.CostTracker
 }
 
 // NewAgent creates a new agent
 func NewAgent(cfg *config.Config) *Agent {
+	return NewAgentWithStreamer(cfg, nil)
+}
+
+// NewAgentWithStreamer creates a new agent with an injectable chat streamer.
+func NewAgentWithStreamer(cfg *config.Config, streamer llm.ChatStreamer) *Agent {
 	client := llm.NewClient(cfg.APIKey, cfg.BaseURL, cfg.Model, cfg.Provider)
+	if streamer == nil {
+		streamer = client
+	}
 
 	// System prompt
 	systemPrompt := buildSystemPrompt(cfg)
 
 	a := &Agent{
 		client:   client,
+		streamer: streamer,
 		tools:    tools.NewRegistry(cfg.WorkDir),
 		config:   cfg,
 		messages: []llm.Message{
@@ -118,7 +128,7 @@ func (a *Agent) SendMessage(ctx context.Context, userMsg string, events chan<- E
 
 		// Stream LLM response
 		streamEvents := make(chan llm.StreamEvent, 100)
-		go a.client.StreamChat(ctx, a.messages, a.tools.Definitions(), streamEvents)
+		go a.streamer.StreamChat(ctx, a.messages, a.tools.Definitions(), streamEvents)
 
 		var textAccum strings.Builder
 		var toolCalls []llm.ToolCall
@@ -193,10 +203,10 @@ func (a *Agent) SendMessage(ctx context.Context, userMsg string, events chan<- E
 			if err != nil {
 				result = fmt.Sprintf("Error: %v", err)
 				events <- Event{
-					Type:      "tool_result",
-					ToolName:  tc.Function.Name,
+					Type:       "tool_result",
+					ToolName:   tc.Function.Name,
 					ToolResult: result,
-					ToolError: err,
+					ToolError:  err,
 				}
 			} else {
 				events <- Event{
@@ -308,7 +318,7 @@ func (a *Agent) Compact(ctx context.Context) error {
 	}
 
 	events := make(chan llm.StreamEvent, 100)
-	go a.client.StreamChat(ctx, summaryMsgs, nil, events)
+	go a.streamer.StreamChat(ctx, summaryMsgs, nil, events)
 
 	var summary strings.Builder
 	for ev := range events {
@@ -351,6 +361,17 @@ func truncateStr(s string, n int) string {
 // Messages returns the current message history (for session saving)
 func (a *Agent) Messages() []llm.Message {
 	return a.messages
+}
+
+// RestoreMessages replaces the current message history with a prior session.
+func (a *Agent) RestoreMessages(messages []llm.Message) {
+	a.messages = append([]llm.Message(nil), messages...)
+	if len(a.messages) == 0 || a.messages[0].Role != "system" {
+		a.messages = append([]llm.Message{{
+			Role:    "system",
+			Content: buildSystemPrompt(a.config),
+		}}, a.messages...)
+	}
 }
 
 // Elapsed returns time since agent creation
