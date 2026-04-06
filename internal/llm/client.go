@@ -102,33 +102,60 @@ func (c *Client) streamChatOpenAI(ctx context.Context, messages []Message, tools
 		reqBody.Tools = tools
 	}
 
-	body, err := json.Marshal(reqBody)
+	reqBodyBytes, err := json.Marshal(reqBody)
 	if err != nil {
 		events <- StreamEvent{Type: "error", Error: fmt.Errorf("marshal: %w", err)}
 		return
 	}
 
-	req, err := http.NewRequestWithContext(ctx, "POST", c.BaseURL+"/chat/completions", bytes.NewReader(body))
+	// Execute request with retry on rate limits and server errors
+	var resp *http.Response
+	retryCfg := DefaultRetryConfig()
+
+	attempts, err := RetryWithBackoff(ctx, retryCfg, func() (bool, error) {
+		req, err := http.NewRequestWithContext(ctx, "POST", c.BaseURL+"/chat/completions", bytes.NewReader(reqBodyBytes))
+		if err != nil {
+			return false, fmt.Errorf("request: %w", err)
+		}
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("Authorization", "Bearer "+c.APIKey)
+		req.Header.Set("Accept", "text/event-stream")
+
+		resp, err = c.HTTP.Do(req)
+		if err != nil {
+			return false, fmt.Errorf("http: %w", err)
+		}
+
+		if resp.StatusCode == 200 {
+			return false, nil // success
+		}
+
+		// Read body before potentially closing
+		respBody, _ := io.ReadAll(resp.Body)
+		resp.Body.Close()
+
+		if !IsRetryable(resp.StatusCode) {
+			return false, fmt.Errorf("API %d: %s", resp.StatusCode, string(respBody))
+		}
+
+		// Rate limited or server error - retry
+		return true, nil
+	})
+
 	if err != nil {
-		events <- StreamEvent{Type: "error", Error: fmt.Errorf("request: %w", err)}
+		events <- StreamEvent{Type: "error", Error: fmt.Errorf("after %d attempts: %w", attempts, err)}
 		return
 	}
-
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Authorization", "Bearer "+c.APIKey)
-	req.Header.Set("Accept", "text/event-stream")
-
-	resp, err := c.HTTP.Do(req)
-	if err != nil {
-		events <- StreamEvent{Type: "error", Error: fmt.Errorf("http: %w", err)}
-		return
-	}
-	defer resp.Body.Close()
 
 	if resp.StatusCode != 200 {
-		errBody, _ := io.ReadAll(resp.Body)
-		events <- StreamEvent{Type: "error", Error: fmt.Errorf("API %d: %s", resp.StatusCode, string(errBody))}
+		// This shouldn't happen, but handle it
+		events <- StreamEvent{Type: "error", Error: fmt.Errorf("unexpected status: %d", resp.StatusCode)}
 		return
+	}
+
+	// Notify if we retried (attempts > 1 means we retried at least once)
+	if attempts > 1 {
+		events <- StreamEvent{Type: "text", Text: fmt.Sprintf("\n[retried %d time(s) due to rate limit]\n", attempts-1)}
 	}
 
 	// Parse SSE stream
@@ -207,6 +234,8 @@ func (c *Client) streamChatOpenAI(ctx context.Context, messages []Message, tools
 			existing.ToolArgDelta = tc.Function.Arguments
 		}
 	}
+
+	resp.Body.Close()
 
 	if err := scanner.Err(); err != nil {
 		events <- StreamEvent{Type: "error", Error: fmt.Errorf("stream: %w", err)}

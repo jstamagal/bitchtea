@@ -24,8 +24,9 @@ type Config struct {
 	MaxTokens     int
 
 	// UI
-	UserNick  string
-	AgentNick string
+	UserNick           string
+	AgentNick          string
+	NotificationSound  bool
 
 	// Paths
 	WorkDir    string
@@ -51,8 +52,9 @@ func DefaultConfig() Config {
 		AutoNextIdea:  false,
 		MaxTokens:     4096,
 
-		UserNick:  username,
-		AgentNick: "bitchtea",
+		UserNick:           username,
+		AgentNick:          "bitchtea",
+		NotificationSound:  false,
 
 		WorkDir:    wd,
 		SessionDir: filepath.Join(home, ".local", "share", "bitchtea", "sessions"),

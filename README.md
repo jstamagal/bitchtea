@@ -143,6 +143,7 @@ export ANTHROPIC_API_KEY=sk-ant-...
 | `Ctrl+T` | Toggle tool panel |
 | `PgUp/PgDn` | Scroll viewport |
 | Mouse wheel | Scroll viewport |
+| `Tab` | Complete slash commands and @file references |
 
 ## Tech Stack
 
@@ -183,10 +184,10 @@ export ANTHROPIC_API_KEY=sk-ant-...
 
 ## What's Next
 
-- [ ] Tab completion for slash commands and @file references
-- [ ] Retry with exponential backoff on rate limits
+- [x] Tab completion for slash commands and @file references
+- [x] Retry with exponential backoff on rate limits
+- [x] Cost tracking per provider/model
+- [x] Theme system (color schemes)
+- [x] Notification sounds on completion
 - [ ] VHS tape recordings for GIF demos
-- [ ] Theme system (color schemes)
 - [ ] Multi-agent dispatch via acpx
-- [ ] Cost tracking per provider/model
-- [ ] Notification sounds on completion

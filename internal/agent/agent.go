@@ -43,12 +43,10 @@ type Agent struct {
 	messages []llm.Message
 
 	// Stats
-	TotalTokens  int
 	TurnCount    int
 	ToolCalls    map[string]int // tool name -> call count
 	StartTime    time.Time
-	CharsSent    int // rough token proxy
-	CharsRecvd   int
+	CostTracker  *llm.CostTracker
 }
 
 // NewAgent creates a new agent
@@ -59,14 +57,15 @@ func NewAgent(cfg *config.Config) *Agent {
 	systemPrompt := buildSystemPrompt(cfg)
 
 	a := &Agent{
-		client: client,
-		tools:  tools.NewRegistry(cfg.WorkDir),
-		config: cfg,
+		client:   client,
+		tools:    tools.NewRegistry(cfg.WorkDir),
+		config:   cfg,
 		messages: []llm.Message{
 			{Role: "system", Content: systemPrompt},
 		},
-		ToolCalls: make(map[string]int),
-		StartTime: time.Now(),
+		ToolCalls:   make(map[string]int),
+		StartTime:   time.Now(),
+		CostTracker: llm.NewCostTracker(),
 	}
 
 	// Inject context files (AGENTS.md etc.)
@@ -105,11 +104,13 @@ func (a *Agent) SendMessage(ctx context.Context, userMsg string, events chan<- E
 
 	// Expand @file references
 	expanded := ExpandFileRefs(userMsg, a.config.WorkDir)
-	a.CharsSent += len(expanded)
 
 	// Add user message
 	a.messages = append(a.messages, llm.Message{Role: "user", Content: expanded})
 	a.TurnCount++
+
+	// Track input tokens (rough estimate: chars/4)
+	a.CostTracker.AddUsage(len(expanded)/4, 0)
 
 	// Agent loop - keeps going while there are tool calls
 	for {
@@ -157,7 +158,8 @@ func (a *Agent) SendMessage(ctx context.Context, userMsg string, events chan<- E
 		}
 		a.messages = append(a.messages, assistantMsg)
 
-		a.CharsRecvd += textAccum.Len()
+		// Track output tokens (rough estimate: chars/4)
+		a.CostTracker.AddUsage(0, textAccum.Len()/4)
 
 		// If no tool calls, we're done (maybe auto-next)
 		if len(toolCalls) == 0 {
@@ -354,4 +356,9 @@ func (a *Agent) Messages() []llm.Message {
 // Elapsed returns time since agent creation
 func (a *Agent) Elapsed() time.Duration {
 	return time.Since(a.StartTime)
+}
+
+// Cost returns the estimated cost in USD using the cost tracker
+func (a *Agent) Cost() float64 {
+	return a.CostTracker.EstimateCost(a.config.Model)
 }

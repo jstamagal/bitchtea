@@ -79,13 +79,13 @@ func (p *ToolPanel) Render(height int) string {
 
 	panelStyle := lipgloss.NewStyle().
 		Border(lipgloss.RoundedBorder()).
-		BorderForeground(ColorCyan).
+		BorderForeground(Theme.Cyan).
 		Width(ToolPanelWidth - 2).
 		Padding(0, 1)
 
 	headerStyle := lipgloss.NewStyle().
 		Bold(true).
-		Foreground(ColorCyan)
+		Foreground(Theme.Cyan)
 
 	var lines []string
 	lines = append(lines, headerStyle.Render("Tools"))
@@ -127,13 +127,13 @@ func (p *ToolPanel) Render(height int) string {
 			switch ts.Status {
 			case "running":
 				icon = "◉"
-				style = lipgloss.NewStyle().Foreground(ColorYellow)
+				style = lipgloss.NewStyle().Foreground(Theme.Yellow)
 			case "done":
 				icon = "✓"
-				style = lipgloss.NewStyle().Foreground(ColorGreen)
+				style = lipgloss.NewStyle().Foreground(Theme.Green)
 			case "error":
 				icon = "✗"
-				style = lipgloss.NewStyle().Foreground(ColorRed)
+				style = lipgloss.NewStyle().Foreground(Theme.Red)
 			}
 
 			durStr := ""
