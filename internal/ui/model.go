@@ -782,6 +782,13 @@ func (m Model) handleCommand(input string) (tea.Model, tea.Cmd) {
 			})
 		} else {
 			newModel := parts[1]
+			if !strings.Contains(newModel, ".") && !strings.Contains(newModel, "-") || len(newModel) < 3 || strings.Contains(newModel, " ") {
+				m.addMessage(ChatMessage{
+					Time:    time.Now(),
+					Type:    MsgError,
+					Content: fmt.Sprintf("Warning: model name %q looks suspicious. Expected something like gpt-4o, claude-3.5-sonnet, etc.", newModel),
+				})
+			}
 			m.agent.SetModel(newModel)
 			m.addMessage(ChatMessage{
 				Time:    time.Now(),
@@ -987,6 +994,10 @@ func (m Model) handleCommand(input string) (tea.Model, tea.Cmd) {
 			m.sysMsg(fmt.Sprintf("Base URL: %s\nUsage: /baseurl <url>", m.config.BaseURL))
 		} else {
 			url := parts[1]
+			if !strings.HasPrefix(url, "http://") && !strings.HasPrefix(url, "https://") {
+				m.errMsg(fmt.Sprintf("Invalid URL %q. Must start with http:// or https://.", url))
+				return m, nil
+			}
 			m.agent.SetBaseURL(url)
 			m.config.BaseURL = url
 			m.sysMsg(fmt.Sprintf("*** Base URL set to: %s", url))
@@ -1002,6 +1013,10 @@ func (m Model) handleCommand(input string) (tea.Model, tea.Cmd) {
 			m.sysMsg(fmt.Sprintf("API Key: %s\nUsage: /apikey <key>", masked))
 		} else {
 			key := parts[1]
+			if len(key) < 10 {
+				m.errMsg(fmt.Sprintf("API key too short (%d chars). Must be at least 10 characters.", len(key)))
+				return m, nil
+			}
 			m.agent.SetAPIKey(key)
 			m.config.APIKey = key
 			masked := key
@@ -1017,6 +1032,10 @@ func (m Model) handleCommand(input string) (tea.Model, tea.Cmd) {
 			m.sysMsg(fmt.Sprintf("Provider: %s\nUsage: /provider <openai|anthropic>", m.config.Provider))
 		} else {
 			prov := parts[1]
+			if prov != "openai" && prov != "anthropic" {
+				m.errMsg(fmt.Sprintf("Invalid provider %q. Must be openai or anthropic.", prov))
+				return m, nil
+			}
 			m.config.Provider = prov
 			m.agent.SetProvider(prov)
 			m.sysMsg(fmt.Sprintf("*** Provider set to: %s", prov))
