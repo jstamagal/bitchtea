@@ -158,30 +158,57 @@ func (c *Client) StreamChatAnthropic(ctx context.Context, messages []Message, to
 	}
 
 	// Anthropic uses /messages endpoint (base URL should be https://api.anthropic.com/v1)
-	url := strings.TrimSuffix(c.BaseURL, "/") + "/messages"
+	apiURL := strings.TrimSuffix(c.BaseURL, "/") + "/messages"
 
-	req, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewReader(body))
+	// Execute request with retry on rate limits and server errors
+	var resp *http.Response
+	retryCfg := DefaultRetryConfig()
+
+	attempts, err := RetryWithBackoff(ctx, retryCfg, func() (bool, error) {
+		req, err := http.NewRequestWithContext(ctx, "POST", apiURL, bytes.NewReader(body))
+		if err != nil {
+			return false, fmt.Errorf("request: %w", err)
+		}
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("x-api-key", c.APIKey)
+		req.Header.Set("anthropic-version", "2023-06-01")
+
+		resp, err = c.HTTP.Do(req)
+		if err != nil {
+			return false, fmt.Errorf("http: %w", err)
+		}
+
+		if resp.StatusCode == 200 {
+			return false, nil // success
+		}
+
+		// Read body before potentially closing
+		respBody, _ := io.ReadAll(resp.Body)
+		resp.Body.Close()
+
+		if !IsRetryable(resp.StatusCode) {
+			return false, fmt.Errorf("API %d: %s", resp.StatusCode, string(respBody))
+		}
+
+		// Rate limited or server error - retry
+		return true, nil
+	})
+
 	if err != nil {
-		events <- StreamEvent{Type: "error", Error: fmt.Errorf("request: %w", err)}
+		events <- StreamEvent{Type: "error", Error: fmt.Errorf("after %d attempts: %w", attempts, err)}
 		return
 	}
-
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("x-api-key", c.APIKey)
-	req.Header.Set("anthropic-version", "2023-06-01")
-
-	resp, err := c.HTTP.Do(req)
-	if err != nil {
-		events <- StreamEvent{Type: "error", Error: fmt.Errorf("http: %w", err)}
-		return
-	}
-	defer resp.Body.Close()
 
 	if resp.StatusCode != 200 {
-		errBody, _ := io.ReadAll(resp.Body)
-		events <- StreamEvent{Type: "error", Error: fmt.Errorf("API %d: %s", resp.StatusCode, string(errBody))}
+		events <- StreamEvent{Type: "error", Error: fmt.Errorf("unexpected status: %d", resp.StatusCode)}
 		return
 	}
+
+	// Notify if we retried (attempts > 1 means we retried at least once)
+	if attempts > 1 {
+		events <- StreamEvent{Type: "text", Text: fmt.Sprintf("\n[retried %d time(s) due to rate limit]\n", attempts-1)}
+	}
+	defer resp.Body.Close()
 
 	// Parse Anthropic SSE stream
 	scanner := bufio.NewScanner(resp.Body)
