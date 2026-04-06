@@ -70,7 +70,7 @@ func markdownRendererForWidth(width int) *glamour.TermRenderer {
 func looksLikeMarkdown(s string) bool {
 	markers := []string{
 		"```", "**", "##", "- ", "* ", "> ", "1. ",
-		"[", "![", "`",
+		"[", "![",
 	}
 	for _, m := range markers {
 		if strings.Contains(s, m) {
