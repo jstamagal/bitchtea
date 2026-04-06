@@ -3,6 +3,8 @@ package main
 import (
 	"fmt"
 	"os"
+	"os/signal"
+	"syscall"
 
 	tea "github.com/charmbracelet/bubbletea"
 
@@ -89,9 +91,28 @@ func main() {
 	if sess != nil {
 		m.ResumeSession(sess)
 	}
+
+	// Set up signal channel for graceful shutdown
+	sigCh := make(chan os.Signal, 1)
+	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
+
+	// Create the program
 	p := tea.NewProgram(m, tea.WithAltScreen())
 
+	// Forward signals to the program's event loop
+	go func() {
+		for sig := range sigCh {
+			// Send the signal as a message to the model
+			p.Send(ui.SignalMsg{Signal: sig})
+		}
+	}()
+
 	if _, err := p.Run(); err != nil {
+		// Check if it was just an interrupt (graceful shutdown)
+		if err == tea.ErrInterrupted {
+			fmt.Fprintln(os.Stderr, "\nLater, coward.")
+			os.Exit(0)
+		}
 		fmt.Fprintf(os.Stderr, "bitchtea crashed: %v\n", err)
 		os.Exit(1)
 	}
