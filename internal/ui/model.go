@@ -16,6 +16,7 @@ import (
 	"github.com/jstamagal/bitchtea/internal/agent"
 	"github.com/jstamagal/bitchtea/internal/config"
 	"github.com/jstamagal/bitchtea/internal/session"
+	"github.com/jstamagal/bitchtea/internal/sound"
 )
 
 // agentEventMsg wraps agent events for the bubbletea message loop
@@ -350,6 +351,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.streaming = false
 		m.agentState = agent.StateIdle
 		m.eventCh = nil
+
+		// Play notification sound if enabled
+		if m.config.NotificationSound {
+			sound.Done()
+		}
 
 		// Update tool panel
 		if m.toolPanel != nil {
@@ -783,9 +789,10 @@ func (m Model) handleCommand(input string) (tea.Model, tea.Cmd) {
 
 	case "/tokens":
 		tokens := m.agent.EstimateTokens()
+		cost := m.agent.Cost()
 		msgs := m.agent.MessageCount()
-		m.sysMsg(fmt.Sprintf("~%s tokens | %d messages | %d turns",
-			formatTokens(tokens), msgs, m.agent.TurnCount))
+		m.sysMsg(fmt.Sprintf("~%s tokens | $%.4f | %d messages | %d turns",
+			formatTokens(tokens), cost, msgs, m.agent.TurnCount))
 		return m, nil
 
 	case "/auto-next":
@@ -804,6 +811,25 @@ func (m Model) handleCommand(input string) (tea.Model, tea.Cmd) {
 			status = "ON"
 		}
 		m.sysMsg(fmt.Sprintf("Auto-next-idea: %s", status))
+		return m, nil
+
+	case "/sound":
+		m.config.NotificationSound = !m.config.NotificationSound
+		status := "OFF"
+		if m.config.NotificationSound {
+			status = "ON"
+			sound.Done()
+		}
+		m.sysMsg(fmt.Sprintf("Notification sound: %s", status))
+		return m, nil
+
+	case "/theme":
+		if len(parts) < 2 {
+			m.sysMsg("Available themes: bitchx, nord, dracula, gruvbox, monokai")
+		} else {
+			newTheme := parts[1]
+			m.sysMsg(fmt.Sprintf("Theme %s not implemented", newTheme))
+		}
 		return m, nil
 
 	case "/memory":

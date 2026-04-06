@@ -1,3 +1,32 @@
+# Binaries
 bitchtea
+90skid
 *.exe
 /dist/
+
+# Go test binaries
+*.test
+
+# Vendor / cached deps
+charmbracelet/
+
+# OS junk
+.DS_Store
+Thumbs.db
+
+# IDE / editor
+.idea/
+.vscode/
+*.swp
+*~
+
+# Env / secrets
+.env
+.env.*
+!env.example
+
+# Runtime
+*.log
+
+# Agent memory
+MEMORY.md
