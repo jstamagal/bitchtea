@@ -30,3 +30,8 @@ Thumbs.db
 
 # Agent memory
 MEMORY.md
+
+# Beads / Dolt files (added by bd init)
+.dolt/
+*.db
+.beads-credential-key
