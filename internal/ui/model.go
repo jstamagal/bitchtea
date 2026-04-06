@@ -115,6 +115,19 @@ func NewModel(cfg *config.Config) Model {
 // ResumeSession loads a previous session's messages into the chat display
 func (m *Model) ResumeSession(sess *session.Session) {
 	m.session = sess
+	messages := session.MessagesFromEntries(sess.Entries)
+	if len(messages) > 0 {
+		m.agent.RestoreMessages(messages)
+		m.lastSavedMsgIdx = len(messages)
+	}
+
+	toolNames := make(map[string]string)
+	for _, e := range sess.Entries {
+		for _, tc := range e.ToolCalls {
+			toolNames[tc.ID] = tc.Function.Name
+		}
+	}
+
 	for _, e := range sess.Entries {
 		var msgType MsgType
 		nick := ""
@@ -128,6 +141,12 @@ func (m *Model) ResumeSession(sess *session.Session) {
 		case "tool":
 			msgType = MsgTool
 			nick = e.ToolName
+			if nick == "" {
+				nick = toolNames[e.ToolCallID]
+			}
+			if nick == "" {
+				nick = "tool"
+			}
 		case "system":
 			msgType = MsgSystem
 		default:
@@ -367,10 +386,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.session != nil {
 			msgs := m.agent.Messages()
 			for i := m.lastSavedMsgIdx; i < len(msgs); i++ {
-				_ = m.session.Append(session.Entry{
-					Role:    msgs[i].Role,
-					Content: msgs[i].Content,
-				})
+				_ = m.session.Append(session.EntryFromMessage(msgs[i]))
 			}
 			m.lastSavedMsgIdx = len(msgs)
 		}
@@ -685,6 +701,8 @@ func (m Model) handleCommand(input string) (tea.Model, tea.Cmd) {
 				"  /fork               Fork session\n" +
 				"  /auto-next          Toggle auto-next-steps\n" +
 				"  /auto-idea          Toggle auto-next-idea\n" +
+				"  /theme <name>       Switch color theme\n" +
+				"  /sound              Toggle completion bell\n" +
 				"  /quit               Exit\n" +
 				"\n" +
 				"  Use @filename to include file contents.\n" +
@@ -825,10 +843,15 @@ func (m Model) handleCommand(input string) (tea.Model, tea.Cmd) {
 
 	case "/theme":
 		if len(parts) < 2 {
-			m.sysMsg("Available themes: bitchx, nord, dracula, gruvbox, monokai")
+			m.sysMsg(fmt.Sprintf("Current theme: %s\nAvailable themes: %s",
+				CurrentThemeName(), strings.Join(ListThemes(), ", ")))
 		} else {
 			newTheme := parts[1]
-			m.sysMsg(fmt.Sprintf("Theme %s not implemented", newTheme))
+			if !SetTheme(newTheme) {
+				m.errMsg(fmt.Sprintf("Unknown theme: %s", newTheme))
+				return m, nil
+			}
+			m.sysMsg(fmt.Sprintf("Theme switched to: %s", CurrentThemeName()))
 		}
 		return m, nil
 

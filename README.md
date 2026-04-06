@@ -60,6 +60,8 @@ bitchtea/
 - **Word wrapping** for long lines
 - **Multi-line input** via textarea (Enter sends, Ctrl+P/N for history)
 - **Tool panel** — collapsible sidebar showing tool call stats and recent activity (Ctrl+T to toggle)
+- **Theme switching** with built-in palettes (`/theme nord`, `/theme gruvbox`, etc.)
+- **Completion bell** toggle via `/sound`
 - 6 randomized ANSI art splash screens
 - Queue indicator when steering messages are pending
 
@@ -129,6 +131,8 @@ export ANTHROPIC_API_KEY=sk-ant-...
 | `/fork` | Fork session from current point |
 | `/auto-next` | Toggle auto-next-steps |
 | `/auto-idea` | Toggle auto-next-idea |
+| `/theme <name>` | Switch color theme |
+| `/sound` | Toggle completion bell |
 | `/help` | Show help |
 | `/quit` | Exit |
 
@@ -151,6 +155,18 @@ export ANTHROPIC_API_KEY=sk-ant-...
 - [lipgloss](https://github.com/charmbracelet/lipgloss) — Terminal styling
 - [bubbles](https://github.com/charmbracelet/bubbles) — Pre-built components (viewport, textarea, spinner)
 - [glamour](https://github.com/charmbracelet/glamour) — Markdown rendering
+
+## Testing
+
+```bash
+go test ./...
+go vet ./...
+go build ./...
+```
+
+The unit suite now includes offline agent-loop coverage using an injected fake
+streamer, so core turn/tool behavior can be tested without a live LLM
+connection. A true headless CLI/integration mode is still an open follow-up.
 
 ## UI Layout
 

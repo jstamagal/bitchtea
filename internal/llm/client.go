@@ -20,6 +20,11 @@ type Client struct {
 	HTTP     *http.Client
 }
 
+// ChatStreamer is the minimal streaming surface used by the agent loop.
+type ChatStreamer interface {
+	StreamChat(ctx context.Context, messages []Message, tools []ToolDef, events chan<- StreamEvent)
+}
+
 // Message represents a chat message
 type Message struct {
 	Role       string     `json:"role"`
@@ -160,6 +165,7 @@ func (c *Client) streamChatOpenAI(ctx context.Context, messages []Message, tools
 
 	// Parse SSE stream
 	scanner := bufio.NewScanner(resp.Body)
+	scanner.Buffer(make([]byte, 0, 256*1024), 256*1024)
 	// Tool call accumulators
 	toolCalls := make(map[int]*StreamEvent)
 
@@ -183,11 +189,11 @@ func (c *Client) streamChatOpenAI(ctx context.Context, messages []Message, tools
 		var chunk struct {
 			Choices []struct {
 				Delta struct {
-					Content   string     `json:"content"`
+					Content   string `json:"content"`
 					ToolCalls []struct {
-						Index    int          `json:"index"`
-						ID       string       `json:"id"`
-						Type     string       `json:"type"`
+						Index    int    `json:"index"`
+						ID       string `json:"id"`
+						Type     string `json:"type"`
 						Function struct {
 							Name      string `json:"name"`
 							Arguments string `json:"arguments"`

@@ -8,18 +8,22 @@ import (
 	"sort"
 	"strings"
 	"time"
+
+	"github.com/jstamagal/bitchtea/internal/llm"
 )
 
 // Entry is a single line in a JSONL session file
 type Entry struct {
-	Timestamp time.Time `json:"ts"`
-	Role      string    `json:"role"`      // user, assistant, system, tool
-	Content   string    `json:"content"`
-	ToolName  string    `json:"tool_name,omitempty"`
-	ToolArgs  string    `json:"tool_args,omitempty"`
-	ParentID  string    `json:"parent_id,omitempty"` // for tree structure (branching)
-	BranchTag string    `json:"branch,omitempty"`    // branch label
-	ID        string    `json:"id"`
+	Timestamp  time.Time      `json:"ts"`
+	Role       string         `json:"role"` // user, assistant, system, tool
+	Content    string         `json:"content"`
+	ToolName   string         `json:"tool_name,omitempty"`
+	ToolArgs   string         `json:"tool_args,omitempty"`
+	ToolCallID string         `json:"tool_call_id,omitempty"`
+	ToolCalls  []llm.ToolCall `json:"tool_calls,omitempty"`
+	ParentID   string         `json:"parent_id,omitempty"` // for tree structure (branching)
+	BranchTag  string         `json:"branch,omitempty"`    // branch label
+	ID         string         `json:"id"`
 }
 
 // Session manages reading/writing JSONL session files
@@ -234,6 +238,39 @@ func Latest(dir string) string {
 		return ""
 	}
 	return sessions[0]
+}
+
+// EntryFromMessage converts an in-memory LLM message into a session entry.
+func EntryFromMessage(msg llm.Message) Entry {
+	return Entry{
+		Role:       msg.Role,
+		Content:    msg.Content,
+		ToolCallID: msg.ToolCallID,
+		ToolCalls:  append([]llm.ToolCall(nil), msg.ToolCalls...),
+	}
+}
+
+// MessagesFromEntries reconstructs LLM message history from session entries.
+// Legacy tool entries without tool_call_id are skipped because the provider APIs
+// cannot replay them safely.
+func MessagesFromEntries(entries []Entry) []llm.Message {
+	msgs := make([]llm.Message, 0, len(entries))
+	for _, e := range entries {
+		if e.Role == "tool" && e.ToolCallID == "" {
+			continue
+		}
+
+		msg := llm.Message{
+			Role:       e.Role,
+			Content:    e.Content,
+			ToolCallID: e.ToolCallID,
+		}
+		if len(e.ToolCalls) > 0 {
+			msg.ToolCalls = append([]llm.ToolCall(nil), e.ToolCalls...)
+		}
+		msgs = append(msgs, msg)
+	}
+	return msgs
 }
 
 func splitLines(data []byte) [][]byte {

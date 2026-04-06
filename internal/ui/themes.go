@@ -1,6 +1,10 @@
 package ui
 
-import "github.com/charmbracelet/lipgloss"
+import (
+	"sort"
+
+	"github.com/charmbracelet/lipgloss"
+)
 
 // Theme holds colors for the TUI
 var Theme = struct {
@@ -117,6 +121,7 @@ func ListThemes() []string {
 	for name := range themes {
 		names = append(names, name)
 	}
+	sort.Strings(names)
 	return names
 }
 

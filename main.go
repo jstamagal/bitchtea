@@ -131,6 +131,8 @@ Commands (inside the TUI):
   /fork                  Fork session
   /auto-next             Toggle auto-next-steps
   /auto-idea             Toggle auto-next-idea
+  /theme <name>          Switch color theme
+  /sound                 Toggle completion bell
   /help                  Show help
   /quit                  Exit
 
