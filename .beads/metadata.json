@@ -1,0 +1,7 @@
+{
+  "database": "dolt",
+  "backend": "dolt",
+  "dolt_mode": "embedded",
+  "dolt_database": "bitchtea",
+  "project_id": "520d70f2-a450-4679-adf2-e3a9978d9c30"
+}
