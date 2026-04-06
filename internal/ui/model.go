@@ -28,6 +28,11 @@ type agentEventMsg struct {
 // agentDoneMsg signals the agent event channel is closed
 type agentDoneMsg struct{}
 
+// SignalMsg wraps an OS signal for the bubbletea message loop
+type SignalMsg struct {
+	Signal os.Signal
+}
+
 // Model is the top-level bubbletea model
 type Model struct {
 	// Config
@@ -270,7 +275,30 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.refreshViewport()
 
 	case tea.KeyMsg:
+		// Up/down arrow: history navigation when cursor is on first/last line,
+		// otherwise fall through to textarea for normal multiline cursor movement.
 		switch msg.String() {
+		case "up":
+			if m.input.Line() == 0 && len(m.history) > 0 && m.historyIdx > 0 {
+				m.historyIdx--
+				m.input.SetValue(m.history[m.historyIdx])
+				m.input.SetCursor(len(m.history[m.historyIdx]))
+				return m, nil
+			}
+
+		case "down":
+			if m.input.Line() >= m.input.LineCount()-1 {
+				if m.historyIdx < len(m.history)-1 {
+					m.historyIdx++
+					m.input.SetValue(m.history[m.historyIdx])
+					m.input.SetCursor(len(m.history[m.historyIdx]))
+				} else if m.historyIdx == len(m.history)-1 {
+					m.historyIdx = len(m.history)
+					m.input.SetValue("")
+				}
+				return m, nil
+			}
+
 		case "ctrl+c":
 			if m.streaming && m.cancel != nil {
 				m.cancel()
