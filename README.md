@@ -1,209 +1,163 @@
-### Attention Agent
-**For the love of God organize your directory**
-**Create some better docs**
-**Keep up the rich git history**
-
 # bitchtea
 
-An agentic coding harness that puts the BITCH back in your terminal. BitchX-inspired TUI for LLM-powered coding sessions.
-
-## Architecture
+A terminal coding assistant that doesn't hold your hand. BitchX-inspired TUI for LLM-powered coding sessions, built in Go with the [Charm](https://charm.sh) stack.
 
 ```
-bitchtea/
-├── main.go                     # CLI entry point, flag parsing
-├── internal/
-│   ├── ui/                     # bubbletea TUI layer
-│   │   ├── model.go            # top-level bubbletea Model (Update/View/Init)
-│   │   ├── message.go          # ChatMessage types and formatting
-│   │   ├── styles.go           # lipgloss color palette and styles
-│   │   ├── art.go              # ANSI art splash screens (6 variants)
-│   │   ├── render.go           # glamour markdown rendering, word wrap
-│   │   ├── toolpanel.go        # collapsible tool sidebar component
-│   │   ├── message_test.go
-│   │   ├── render_test.go
-│   │   └── toolpanel_test.go
-│   ├── agent/                  # agent loop and context management
-│   │   ├── agent.go            # SendMessage loop, tool dispatch, auto-next
-│   │   ├── context.go          # AGENTS.md discovery, MEMORY.md, @file expansion
-│   │   └── context_test.go
-│   ├── llm/                    # LLM API clients
-│   │   ├── client.go           # OpenAI-compatible streaming (SSE)
-│   │   ├── anthropic.go        # Native Anthropic Messages API streaming
-│   │   ├── client_test.go
-│   │   └── anthropic_test.go
-│   ├── session/                # JSONL session persistence
-│   │   ├── session.go          # New/Load/Append/Fork/Tree/List
-│   │   └── session_test.go
-│   ├── tools/                  # tool implementations
-│   │   ├── tools.go            # read, write, edit, bash
-│   │   └── tools_test.go
-│   └── config/                 # configuration and profiles
-│       ├── config.go           # Config struct, profiles, env detection
-│       └── config_test.go
-├── go.mod
-└── go.sum
+┌─ bitchtea — anthropic/claude-sonnet-4-20250514 ─────────[3:42pm]─┐
+│──────────────────────────────────────────────────────────────────│
+│ [11:36] <you> fix this broken migration                          │
+│ [11:37] <bitchtea> Looking at the schema...                      │
+│ [11:37]   → read: db/migrations/003_add_users.sql                │
+│ [11:38] <bitchtea> Found it. Column type mismatch:               │
+│         ```sql                                                   │
+│         ALTER TABLE users ADD email VARCHAR(255);           ╭────│
+│         ```                                                 │Tool│
+│ [11:38]   → edit: applied 1 edit                            │ ───│
+│ [11:39] <bitchtea> Fixed. Running migration...              │read│
+│ [11:39]   → bash: go run cmd/migrate/main.go up             │edit│
+│                                                             │bash│
+│──────────────────────────────────────────────────────────────╰────│
+│ [bitchtea] ◉ running tools...   read(3) bash(2) | ~4k tokens    │
+│──────────────────────────────────────────────────────────────────│
+│ >> _                                                             │
+└──────────────────────────────────────────────────────────────────┘
 ```
 
-## Features
+## Install
 
-### Dual Provider Support
-- **OpenAI** — OpenAI-compatible API (GPT-4o, etc). Set `OPENAI_API_KEY`.
-- **Anthropic** — Native Messages API streaming. Set `ANTHROPIC_API_KEY`.
-- Switch at runtime with `/provider` and `/model`.
-- Profiles let you save/load provider+model+key combos.
+```bash
+go install github.com/jstamagal/bitchtea@latest
+```
 
-### UI
-- BitchX-style top/bottom bars with model, provider, token count, elapsed time
-- Scrollable viewport with mouse wheel support
-- **Markdown rendering** via glamour (code blocks, bold, lists, headings)
-- **Word wrapping** for long lines
-- **Multi-line input** via textarea (Enter sends, Ctrl+P/N for history)
-- **Tool panel** — collapsible sidebar showing tool call stats and recent activity (Ctrl+T to toggle)
-- **Theme switching** with built-in palettes (`/theme nord`, `/theme gruvbox`, etc.)
-- **Completion bell** toggle via `/sound`
-- 6 randomized ANSI art splash screens
-- Queue indicator when steering messages are pending
+Or build from source:
 
-### Agent Loop
-- Streams LLM responses token by token into the viewport
-- Detects tool calls, executes them, feeds results back, loops
-- Tools: `read`, `write`, `edit`, `bash` (same as Claude Code)
-- Auto-next-steps: keeps the agent working after each turn
-- Auto-next-idea: brainstorms improvements after auto-next completes
-- Context compaction when approaching token limits
+```bash
+git clone ssh://git@jelly.hedgehog-bortle.ts.net:2222/jstamagal/bitchtea.git
+cd bitchtea
+go build -o bitchtea .
+```
 
-### Session Management
-- JSONL session files with tree structure
-- `/resume` to pick up old sessions
-- `/fork` to branch from any point
-- `/tree` to visualize session structure
-- `/sessions` to list all saved sessions
+## Quick Start
 
-### Context
-- Auto-discovers `AGENTS.md`, `CLAUDE.md` walking up the directory tree
-- Loads `MEMORY.md` from working directory
-- Auto-saves `MEMORY.md` with session summaries every 3 turns
-- `@file` references expand to file contents in messages
+```bash
+export ANTHROPIC_API_KEY=sk-ant-...   # or OPENAI_API_KEY=sk-...
+bitchtea
+```
 
-### Steering
-Type while the agent is working. Messages get queued and injected after the current turn completes. Like IRC — the channel keeps going but you can jump in.
+It auto-detects which provider you've configured. Start typing.
 
 ## Usage
 
-```bash
-# Basic
-export OPENAI_API_KEY=sk-...
-./bitchtea
-
-# With Anthropic
-export ANTHROPIC_API_KEY=sk-ant-...
-./bitchtea
-
-# Flags
-./bitchtea --model claude-sonnet-4-20250514
-./bitchtea --resume                    # resume latest session
-./bitchtea --resume path/to/session.jsonl
-./bitchtea --profile myprofile
-./bitchtea --auto-next-steps
-./bitchtea --auto-next-idea
 ```
+bitchtea [flags]
+
+Flags:
+  -m, --model <name>     Model to use (default: auto-detected)
+  -p, --profile <name>   Load a saved connection profile
+  -r, --resume [path]    Resume a session (latest if no path)
+  --auto-next-steps      Keep the agent working after each turn
+  --auto-next-idea       Brainstorm improvements after auto-next completes
+  -h, --help             Show help
+
+Environment:
+  OPENAI_API_KEY         OpenAI API key
+  OPENAI_BASE_URL        OpenAI-compatible base URL
+  ANTHROPIC_API_KEY      Anthropic API key
+  BITCHTEA_MODEL         Default model override
+  BITCHTEA_PROVIDER      Force provider (openai, anthropic)
+```
+
+## What It Does
+
+bitchtea connects to an LLM, streams responses into a terminal viewport, and gives the model four tools to work with: **read**, **write**, **edit**, and **bash**. The agent loop detects tool calls, executes them, feeds results back, and keeps going until the work is done. You steer it with natural language.
+
+### Providers
+
+Supports **OpenAI** (and any OpenAI-compatible API) and **Anthropic** natively. Both stream token-by-token via SSE. Switch at runtime with `/provider` and `/model`, or save combos as profiles with `/profile save`.
+
+### Steering
+
+Type while the agent is working. Messages queue up and get injected after the current turn finishes. Like IRC -- the channel keeps going but you can jump in any time.
+
+### Sessions
+
+Every conversation persists as a JSONL file with tree structure. Resume with `--resume` or `/sessions`. Fork from any point with `/fork`. Visualize the tree with `/tree`.
+
+### Context
+
+Auto-discovers `AGENTS.md` and `CLAUDE.md` walking up the directory tree. Supports `@file` references that expand inline. Compacts context automatically when approaching token limits, or manually with `/compact`.
 
 ## Commands
 
-| Command | Description |
-|---------|-------------|
-| `/model <name>` | Switch LLM model |
-| `/provider <name>` | Set provider (openai, anthropic) |
+| Command | What it does |
+|---|---|
+| `/model <name>` | Switch model |
+| `/provider <name>` | Switch provider (openai, anthropic) |
 | `/baseurl <url>` | Set API base URL |
 | `/apikey <key>` | Set API key |
-| `/profile save/load/delete <name>` | Manage connection profiles |
+| `/profile save\|load\|delete <n>` | Manage connection profiles |
 | `/compact` | Compact conversation context |
 | `/clear` | Clear chat display |
 | `/diff` | Show git diff |
 | `/status` | Git status |
 | `/undo` | Revert unstaged changes |
 | `/commit [msg]` | Git commit |
-| `/tokens` | Token usage estimate |
-| `/memory` | Show MEMORY.md contents |
-| `/sessions` | List saved sessions |
-| `/tree` | Show session tree |
-| `/fork` | Fork session from current point |
+| `/tokens` | Token usage |
+| `/memory` | Show MEMORY.md |
+| `/sessions` | List sessions |
+| `/tree` | Session tree |
+| `/fork` | Fork session |
 | `/auto-next` | Toggle auto-next-steps |
 | `/auto-idea` | Toggle auto-next-idea |
-| `/theme <name>` | Switch color theme |
+| `/theme <name>` | Switch theme (bitchx, nord, dracula, gruvbox, monokai) |
 | `/sound` | Toggle completion bell |
-| `/help` | Show help |
+| `/help` | Help |
 | `/quit` | Exit |
 
 ## Keybindings
 
 | Key | Action |
-|-----|--------|
+|---|---|
 | `Enter` | Send message |
-| `Ctrl+C` | Interrupt agent / Quit |
-| `Ctrl+P` | Input history up |
-| `Ctrl+N` | Input history down |
+| `Ctrl+C` | Interrupt / quit |
+| `Ctrl+Z` | Suspend |
 | `Ctrl+T` | Toggle tool panel |
+| `Up/Down` | Input history |
 | `PgUp/PgDn` | Scroll viewport |
-| Mouse wheel | Scroll viewport |
-| `Tab` | Complete slash commands and @file references |
+| `Mouse wheel` | Scroll viewport |
+| `Tab` | Complete commands and @file refs |
 
-## Tech Stack
+## Architecture
 
-- [bubbletea](https://github.com/charmbracelet/bubbletea) — Elm-architecture TUI framework
-- [lipgloss](https://github.com/charmbracelet/lipgloss) — Terminal styling
-- [bubbles](https://github.com/charmbracelet/bubbles) — Pre-built components (viewport, textarea, spinner)
-- [glamour](https://github.com/charmbracelet/glamour) — Markdown rendering
+```
+main.go                   CLI entry, flag parsing, signal handling
+internal/
+  config/                 Config struct, env detection, profiles
+  agent/                  Agent loop (LLM <-> tool orchestration), context discovery
+  llm/                    Streaming clients (OpenAI + Anthropic), retry, cost tracking
+  session/                JSONL persistence, fork, tree
+  tools/                  Tool registry: read, write, edit, bash
+  ui/                     Bubbletea model, rendering, themes, tool panel, ANSI art
+  sound/                  Terminal bell
+```
+
+Dependency flow: `main -> config, session, ui -> agent -> llm, tools`. No circular deps.
+
+## Built With
+
+- [bubbletea](https://github.com/charmbracelet/bubbletea) -- Elm-architecture TUI framework
+- [lipgloss](https://github.com/charmbracelet/lipgloss) -- Terminal styling
+- [bubbles](https://github.com/charmbracelet/bubbles) -- Viewport, textarea, spinner
+- [glamour](https://github.com/charmbracelet/glamour) -- Markdown rendering
 
 ## Testing
 
 ```bash
-go test ./...
-go vet ./...
-go build ./...
+go test ./...           # unit tests (includes offline agent loop via fake streamer)
+go vet ./...            # static analysis
+go build ./...          # build check
 ```
 
-The unit suite now includes offline agent-loop coverage using an injected fake
-streamer, so core turn/tool behavior can be tested without a live LLM
-connection. A true headless CLI/integration mode is still an open follow-up.
+## Heritage
 
-## UI Layout
-
-```
-┌─ bitchtea — openai/gpt-4o [auto] ──────────[3:42pm]─┐
-│──────────────────────────────────────────────────────│
-│ [11:36] <jstamagal> how to fix this npm error        │
-│ [11:37] <bitchtea> Let me look at that...            │
-│ [11:37]   → read: reading package.json               │
-│ [11:38] <bitchtea> Found the issue. Here's the fix:  │
-│         ```json                                      │
-│         { "dependencies": { ... } }             ╭────│
-│         ```                                     │Tool│
-│ [11:38]   → edit: Applied 1 edit(s)             │ ───│
-│ [11:39] <bitchtea> Fixed. Running tests now...  │read│
-│ [11:39]   → bash: npm test                      │edit│
-│                                                 │bash│
-│──────────────────────────────────────────────────╰────│
-│ [bitchtea] ◉ running tools...   read(3) bash(2) | ~4k│
-│──────────────────────────────────────────────────────│
-│ >> fix the npm dependency issue and run tests_       │
-│                                                      │
-└──────────────────────────────────────────────────────┘
-```
-
-## References
-- https://en.wikipedia.org/wiki/BitchX
-- UI Screenshots: ~/Pictures/bx
-- Charmbracelet repos: ./charmbracelet/repos
-- Modern BitchX port: ./prime001/BitchX
-
-## What's Next
-
-- [x] Tab completion for slash commands and @file references
-- [x] Retry with exponential backoff on rate limits
-- [x] Cost tracking per provider/model
-- [x] Theme system (color schemes)
-- [x] Notification sounds on completion
-- [ ] VHS tape recordings for GIF demos
-- [ ] Multi-agent dispatch via acpx
+Named after [BitchX](https://en.wikipedia.org/wiki/BitchX), the IRC client that didn't care about your feelings. Six randomized ANSI splash screens carry on the tradition.
