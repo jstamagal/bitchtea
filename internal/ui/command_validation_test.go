@@ -206,3 +206,72 @@ func TestAPIKeyDoesNotMutateOnInvalidInput(t *testing.T) {
 		t.Errorf("apikey should not change on invalid input, got %q", model.config.APIKey)
 	}
 }
+
+func TestDebugCommand(t *testing.T) {
+	tests := []struct {
+		name        string
+		input       string
+		wantError   bool
+		wantContain string
+	}{
+		{"debug on", "/debug on", false, "Debug mode: ON"},
+		{"debug off", "/debug off", false, "Debug mode: OFF"},
+		{"debug no arg shows status", "/debug", false, "Debug mode: OFF"},
+		{"debug invalid arg", "/debug maybe", true, "/debug on|off"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			m := newTestModel(t)
+			result, _ := m.handleCommand(tt.input)
+			msg := lastMsg(result)
+			if !strings.Contains(msg.Content, tt.wantContain) {
+				t.Errorf("expected message containing %q, got %q", tt.wantContain, msg.Content)
+			}
+			if tt.wantError && msg.Type != MsgError {
+				t.Errorf("expected MsgError, got %v", msg.Type)
+			}
+			if !tt.wantError && msg.Type == MsgError {
+				t.Errorf("unexpected error: %q", msg.Content)
+			}
+		})
+	}
+}
+
+func TestDebugModeToggle(t *testing.T) {
+	m := newTestModel(t)
+
+	// Off by default
+	if m.debugMode {
+		t.Error("debug mode should be off by default")
+	}
+
+	// Turn on
+	result, _ := m.handleCommand("/debug on")
+	model := result.(Model)
+	if !model.debugMode {
+		t.Error("debug mode should be on after /debug on")
+	}
+
+	// Turn off
+	result, _ = model.handleCommand("/debug off")
+	model = result.(Model)
+	if model.debugMode {
+		t.Error("debug mode should be off after /debug off")
+	}
+}
+
+func TestDebugStatusShowsCurrent(t *testing.T) {
+	m := newTestModel(t)
+
+	// Enable debug first
+	result, _ := m.handleCommand("/debug on")
+	model := result.(Model)
+
+	// Check status shows ON
+	result, _ = model.handleCommand("/debug")
+	msg := lastMsg(result)
+	if !strings.Contains(msg.Content, "Debug mode: ON") {
+		t.Errorf("expected 'Debug mode: ON', got %q", msg.Content)
+	}
+}

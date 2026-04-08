@@ -11,6 +11,16 @@ import (
 	"strings"
 )
 
+// DebugInfo holds request/response details for debug logging
+type DebugInfo struct {
+	Method         string
+	URL            string
+	RequestHeaders map[string]string
+	RequestBody    string
+	StatusCode     int
+	ResponseBody   string
+}
+
 // Client is a streaming chat client supporting OpenAI and Anthropic APIs
 type Client struct {
 	APIKey   string
@@ -18,6 +28,10 @@ type Client struct {
 	Model    string
 	Provider string // "openai" or "anthropic"
 	HTTP     *http.Client
+
+	// DebugHook, when non-nil, is called with request/response details before
+	// streaming begins. It is only invoked on successful (200) responses.
+	DebugHook func(DebugInfo)
 }
 
 // ChatStreamer is the minimal streaming surface used by the agent loop.
@@ -161,6 +175,21 @@ func (c *Client) streamChatOpenAI(ctx context.Context, messages []Message, tools
 	// Notify if we retried (attempts > 1 means we retried at least once)
 	if attempts > 1 {
 		events <- StreamEvent{Type: "text", Text: fmt.Sprintf("\n[retried %d time(s) due to rate limit]\n", attempts-1)}
+	}
+
+	// Debug logging
+	if c.DebugHook != nil {
+		headers := make(map[string]string)
+		headers["Content-Type"] = "application/json"
+		headers["Authorization"] = "Bearer [REDACTED]"
+		headers["Accept"] = "text/event-stream"
+		c.DebugHook(DebugInfo{
+			Method:         "POST",
+			URL:            c.BaseURL + "/chat/completions",
+			RequestHeaders: headers,
+			RequestBody:    string(reqBodyBytes),
+			StatusCode:     resp.StatusCode,
+		})
 	}
 
 	// Parse SSE stream

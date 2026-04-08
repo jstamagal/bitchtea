@@ -281,6 +281,11 @@ func (a *Agent) SetProvider(provider string) {
 	a.client.Provider = provider
 }
 
+// SetDebugHook sets a debug callback on the underlying LLM client
+func (a *Agent) SetDebugHook(hook func(llm.DebugInfo)) {
+	a.client.DebugHook = hook
+}
+
 // Config returns the current config (for profile save)
 func (a *Agent) Config() *config.Config {
 	return a.config
