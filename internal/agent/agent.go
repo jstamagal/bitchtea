@@ -2,6 +2,7 @@ package agent
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -50,6 +51,23 @@ type Agent struct {
 	ToolCalls   map[string]int // tool name -> call count
 	StartTime   time.Time
 	CostTracker *llm.CostTracker
+
+	lastTurnState turnState
+}
+
+type turnState int
+
+const (
+	turnStateIdle turnState = iota
+	turnStateCompleted
+	turnStateErrored
+	turnStateCanceled
+)
+
+// FollowUpRequest is an agent-authored autonomous continuation prompt.
+type FollowUpRequest struct {
+	Label  string
+	Prompt string
 }
 
 // NewAgent creates a new agent
@@ -160,6 +178,11 @@ func (a *Agent) SendMessage(ctx context.Context, userMsg string, events chan<- E
 				})
 
 			case "error":
+				if errors.Is(ev.Error, context.Canceled) {
+					a.lastTurnState = turnStateCanceled
+				} else {
+					a.lastTurnState = turnStateErrored
+				}
 				events <- Event{Type: "state", State: StateIdle}
 				events <- Event{Type: "error", Error: ev.Error}
 				events <- Event{Type: "done"}
@@ -188,14 +211,7 @@ func (a *Agent) SendMessage(ctx context.Context, userMsg string, events chan<- E
 
 		// If no tool calls, we're done (maybe auto-next)
 		if len(toolCalls) == 0 {
-			// Auto-next-steps: inject a follow-up prompt
-			if a.config.AutoNextSteps && textAccum.Len() > 0 {
-				events <- Event{Type: "state", State: StateIdle}
-				events <- Event{Type: "done"}
-				// The auto-next message will be sent as a separate SendMessage call
-				// from the UI layer, so we just signal done here
-				return
-			}
+			a.lastTurnState = turnStateCompleted
 			events <- Event{Type: "state", State: StateIdle}
 			events <- Event{Type: "done"}
 			return
@@ -377,11 +393,70 @@ func AutoIdeaPrompt() string {
 		"Pick the most impactful one and implement it."
 }
 
+// MaybeQueueFollowUp returns an autonomous continuation prompt derived from the
+// last completed assistant turn. Failed or canceled turns never queue follow-up
+// work because they need an explicit user decision first.
+func (a *Agent) MaybeQueueFollowUp() *FollowUpRequest {
+	if a.lastTurnState != turnStateCompleted {
+		return nil
+	}
+	if !a.config.AutoNextSteps && !a.config.AutoNextIdea {
+		return nil
+	}
+
+	summary := truncateStr(compactWhitespace(a.lastAssistantContent()), 1200)
+	if summary == "" {
+		summary = "No assistant summary was captured for the previous turn."
+	}
+
+	req := &FollowUpRequest{}
+	switch {
+	case a.config.AutoNextSteps && a.config.AutoNextIdea:
+		req.Label = "auto-next"
+		req.Prompt = "Continue from your most recent completed turn.\n\n" +
+			"Last assistant summary:\n" + summary + "\n\n" +
+			"Identify the highest-impact remaining task or improvement, implement it now, " +
+			"and keep going until the work is actually complete. If everything is already done, say so clearly."
+	case a.config.AutoNextSteps:
+		req.Label = "auto-next-steps"
+		req.Prompt = "Continue from your most recent completed turn.\n\n" +
+			"Last assistant summary:\n" + summary + "\n\n" +
+			"Resume the highest-priority remaining work. If everything is already done, say so clearly."
+	case a.config.AutoNextIdea:
+		req.Label = "auto-next-idea"
+		req.Prompt = "Continue from your most recent completed turn.\n\n" +
+			"Last assistant summary:\n" + summary + "\n\n" +
+			"Pick the most impactful improvement suggested by this summary and implement it. " +
+			"If there is nothing worthwhile left, say so clearly."
+	default:
+		return nil
+	}
+
+	return req
+}
+
 func truncateStr(s string, n int) string {
 	if len(s) <= n {
 		return s
 	}
 	return s[:n] + "..."
+}
+
+func compactWhitespace(s string) string {
+	return strings.Join(strings.Fields(s), " ")
+}
+
+func (a *Agent) lastAssistantContent() string {
+	for i := len(a.messages) - 1; i >= 0; i-- {
+		if a.messages[i].Role != "assistant" {
+			continue
+		}
+		content := strings.TrimSpace(a.messages[i].Content)
+		if content != "" {
+			return content
+		}
+	}
+	return ""
 }
 
 // Messages returns the current message history (for session saving)
@@ -412,6 +487,7 @@ func (a *Agent) RestoreMessages(messages []llm.Message) {
 	a.ToolCalls = make(map[string]int)
 	a.CostTracker = llm.NewCostTracker()
 	a.StartTime = time.Now()
+	a.lastTurnState = turnStateIdle
 }
 
 // Elapsed returns time since agent creation

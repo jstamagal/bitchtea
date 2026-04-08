@@ -256,3 +256,46 @@ func TestNewAgentTracksBootstrapMessageCount(t *testing.T) {
 		t.Fatalf("expected bootstrap messages to be in history, got %d", got)
 	}
 }
+
+func TestMaybeQueueFollowUpIncludesLastAssistantSummary(t *testing.T) {
+	cfg := config.DefaultConfig()
+	cfg.WorkDir = t.TempDir()
+	cfg.SessionDir = t.TempDir()
+	cfg.AutoNextSteps = true
+	cfg.AutoNextIdea = true
+
+	agent := NewAgentWithStreamer(&cfg, &fakeStreamer{})
+	agent.messages = append(agent.messages,
+		llm.Message{Role: "user", Content: "ship it"},
+		llm.Message{Role: "assistant", Content: "Implemented the fix, added tests, and still need to verify the binary help output."},
+	)
+	agent.lastTurnState = turnStateCompleted
+
+	followUp := agent.MaybeQueueFollowUp()
+	if followUp == nil {
+		t.Fatal("expected follow-up request")
+	}
+	if followUp.Label != "auto-next" {
+		t.Fatalf("expected combined auto-next label, got %q", followUp.Label)
+	}
+	if !strings.Contains(followUp.Prompt, "Implemented the fix, added tests") {
+		t.Fatalf("expected prompt to include assistant summary, got %q", followUp.Prompt)
+	}
+	if !strings.Contains(followUp.Prompt, "highest-impact remaining task or improvement") {
+		t.Fatalf("expected combined follow-up instructions, got %q", followUp.Prompt)
+	}
+}
+
+func TestMaybeQueueFollowUpSkipsCanceledTurn(t *testing.T) {
+	cfg := config.DefaultConfig()
+	cfg.WorkDir = t.TempDir()
+	cfg.SessionDir = t.TempDir()
+	cfg.AutoNextSteps = true
+
+	agent := NewAgentWithStreamer(&cfg, &fakeStreamer{})
+	agent.lastTurnState = turnStateCanceled
+
+	if followUp := agent.MaybeQueueFollowUp(); followUp != nil {
+		t.Fatalf("expected no follow-up after canceled turn, got %#v", followUp)
+	}
+}
