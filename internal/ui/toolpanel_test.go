@@ -138,7 +138,7 @@ func TestResumeSessionRestoresAgentMessagesAndToolNick(t *testing.T) {
 	}
 }
 
-func TestThemeCommandSwitchesTheme(t *testing.T) {
+func TestThemeCommandInvalidTheme(t *testing.T) {
 	defer SetTheme("bitchx")
 
 	cfg := config.DefaultConfig()
@@ -146,16 +146,14 @@ func TestThemeCommandSwitchesTheme(t *testing.T) {
 	cfg.SessionDir = t.TempDir()
 
 	model := NewModel(&cfg)
-	updated, _ := model.handleCommand("/theme nord")
+	updated, _ := model.handleCommand("/theme nonexistent")
 	got := updated.(Model)
 
-	if CurrentThemeName() != "Nord" {
-		t.Fatalf("expected active theme Nord, got %q", CurrentThemeName())
+	// Should still be bitchx
+	if CurrentThemeName() != "BitchX" {
+		t.Fatalf("expected active theme BitchX, got %q", CurrentThemeName())
 	}
 	if len(got.messages) == 0 {
-		t.Fatal("expected theme command to emit a status message")
-	}
-	if !strings.Contains(got.messages[len(got.messages)-1].Content, "Theme switched") {
-		t.Fatalf("unexpected theme status message: %q", got.messages[len(got.messages)-1].Content)
+		t.Fatal("expected theme command to emit an error message")
 	}
 }

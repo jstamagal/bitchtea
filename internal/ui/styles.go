@@ -80,6 +80,12 @@ var (
 	BoldWhite = lipgloss.NewStyle().
 			Bold(true).
 			Foreground(ColorWhite)
+
+	ThinkingBarStyle = lipgloss.NewStyle().
+				Bold(true).
+				Foreground(ColorWhite).
+				Background(ColorDarkBg).
+				Padding(0, 1)
 )
 
 // Separator returns a full-width separator line
