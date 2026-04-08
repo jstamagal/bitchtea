@@ -44,10 +44,61 @@ func TestRenderMarkdownCode(t *testing.T) {
 	}
 }
 
+func TestRenderMarkdownNarrowWidth(t *testing.T) {
+	input := "## Heading\n- alpha beta gamma delta"
+	result := RenderMarkdown(input, 18)
+
+	for _, want := range []string{"Heading", "alpha", "delta"} {
+		if !strings.Contains(result, want) {
+			t.Fatalf("expected narrow render to contain %q, got %q", want, result)
+		}
+	}
+
+	if !strings.Contains(result, "\n") {
+		t.Fatalf("expected narrow render to wrap, got %q", result)
+	}
+}
+
+func TestRenderMarkdownWideWidth(t *testing.T) {
+	input := "## Heading\n- alpha beta gamma delta"
+	result := RenderMarkdown(input, 120)
+
+	for _, want := range []string{"Heading", "alpha beta gamma delta"} {
+		if !strings.Contains(result, want) {
+			t.Fatalf("expected wide render to contain %q, got %q", want, result)
+		}
+	}
+}
+
 func TestRenderMarkdownEmpty(t *testing.T) {
 	result := RenderMarkdown("", 80)
 	if result != "" {
 		t.Errorf("expected empty string, got: %q", result)
+	}
+}
+
+func TestRenderMarkdownFallsBackWhenRendererUnavailable(t *testing.T) {
+	input := "## Heading"
+	width := 777
+
+	markdownRenderersMu.Lock()
+	old, existed := markdownRenderers[width]
+	markdownRenderers[width] = nil
+	markdownRenderersMu.Unlock()
+
+	t.Cleanup(func() {
+		markdownRenderersMu.Lock()
+		defer markdownRenderersMu.Unlock()
+		if existed {
+			markdownRenderers[width] = old
+			return
+		}
+		delete(markdownRenderers, width)
+	})
+
+	result := RenderMarkdown(input, width)
+	if result != input {
+		t.Fatalf("expected raw fallback, got %q", result)
 	}
 }
 
@@ -74,4 +125,62 @@ func TestWrapTextMultiline(t *testing.T) {
 	if result != input {
 		t.Errorf("expected passthrough for short lines, got: %q", result)
 	}
+}
+
+func TestWrapTextANSIAware(t *testing.T) {
+	input := "\x1b[31malpha beta gamma delta epsilon\x1b[0m"
+	result := WrapText(input, 12)
+
+	if !strings.Contains(result, "\x1b[31m") || !strings.Contains(result, "\x1b[0m") {
+		t.Fatalf("expected ANSI codes to be preserved, got %q", result)
+	}
+
+	lines := strings.Split(result, "\n")
+	if len(lines) < 2 {
+		t.Fatalf("expected wrapped ANSI output, got %q", result)
+	}
+
+	for _, line := range lines {
+		if w := visibleWidth(line); w > 12 {
+			t.Fatalf("expected visible width <= 12, got %d for %q", w, line)
+		}
+	}
+}
+
+func TestWrapTextNarrowWidth(t *testing.T) {
+	input := "alpha beta gamma delta"
+	result := WrapText(input, 7)
+	lines := strings.Split(result, "\n")
+
+	if len(lines) < 3 {
+		t.Fatalf("expected narrow wrapping across several lines, got %q", result)
+	}
+
+	for _, line := range lines {
+		if w := visibleWidth(line); w > 7 {
+			t.Fatalf("expected visible width <= 7, got %d for %q", w, line)
+		}
+	}
+}
+
+func visibleWidth(s string) int {
+	var b strings.Builder
+	b.Grow(len(s))
+
+	inEscape := false
+	for i := 0; i < len(s); i++ {
+		ch := s[i]
+		switch {
+		case inEscape && ch == 'm':
+			inEscape = false
+		case inEscape:
+			continue
+		case ch == 0x1b:
+			inEscape = true
+		default:
+			b.WriteByte(ch)
+		}
+	}
+
+	return len([]rune(b.String()))
 }
