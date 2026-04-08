@@ -29,6 +29,12 @@ rm -rf directory            # NOT: rm -r directory
 
 **Built with:** Go 1.24, charmbracelet stack (bubbletea, bubbles, glamour, lipgloss).
 
+### Beads Backend Safety
+
+- This repo currently uses embedded Dolt for `bd`, and embedded mode is single-writer.
+- Do not run multiple `bd` commands in parallel from the same repo checkout. Keep `bd` access strictly serial.
+- If `bd` reports an exclusive lock on `.beads/embeddeddolt` and no live `bd`/`dolt` process owns `.beads/embeddeddolt/.lock`, remove the stale lock with `rm -f .beads/embeddeddolt/.lock` and retry the command serially.
+
 ### Build & Test
 
 ```bash
