@@ -66,9 +66,6 @@ type Model struct {
 	// Queued messages (steering - typed while agent is working)
 	queued []string
 
-	// Stats
-	toolStats map[string]int
-
 	// Session
 	session         *session.Session
 	lastSavedMsgIdx int // index into agent.Messages() of last saved entry
@@ -117,7 +114,6 @@ func NewModel(cfg *config.Config) Model {
 		history:      []string{},
 		historyIdx:   -1,
 		streamBuffer: &strings.Builder{},
-		toolStats:    make(map[string]int),
 		session:      sess,
 	}
 }
@@ -529,10 +525,8 @@ func (m *Model) handleAgentEvent(ev agent.Event) (tea.Model, tea.Cmd) {
 			Nick:    ev.ToolName,
 			Content: fmt.Sprintf("calling %s...", ev.ToolName),
 		})
-		m.toolStats[ev.ToolName]++
 		if m.toolPanel != nil {
 			m.toolPanel.StartTool(ev.ToolName)
-			m.toolPanel.Stats = m.toolStats
 		}
 		m.refreshViewport()
 
@@ -701,7 +695,7 @@ func (m Model) View() string {
 
 	// Tool stats + tokens + elapsed
 	var statsItems []string
-	for name, count := range m.toolStats {
+	for name, count := range m.toolPanel.Stats {
 		statsItems = append(statsItems, fmt.Sprintf("%s(%d)", name, count))
 	}
 	statsStr := strings.Join(statsItems, " ")
@@ -1169,7 +1163,7 @@ func (m *Model) autoSaveMemory() {
 	}
 
 	summary.WriteString("\n## Tool Usage\n")
-	for name, count := range m.toolStats {
+	for name, count := range m.toolPanel.Stats {
 		summary.WriteString(fmt.Sprintf("- %s: %d calls\n", name, count))
 	}
 
