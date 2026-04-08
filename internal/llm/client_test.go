@@ -122,6 +122,54 @@ func TestStreamChatToolCall(t *testing.T) {
 	}
 }
 
+func TestStreamChatUsage(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.WriteHeader(200)
+
+		chunks := []string{
+			`{"choices":[{"delta":{"content":"hello"},"finish_reason":null}]}`,
+			`{"choices":[],"usage":{"prompt_tokens":123,"completion_tokens":45,"total_tokens":168}}`,
+		}
+
+		flusher := w.(http.Flusher)
+		for _, chunk := range chunks {
+			fmt.Fprintf(w, "data: %s\n\n", chunk)
+			flusher.Flush()
+		}
+		fmt.Fprint(w, "data: [DONE]\n\n")
+		flusher.Flush()
+	}))
+	defer server.Close()
+
+	client := NewClient("test-key", server.URL, "test-model", "openai")
+	events := make(chan StreamEvent, 100)
+
+	go client.StreamChat(context.Background(), []Message{
+		{Role: "user", Content: "hi"},
+	}, nil, events)
+
+	var usage *TokenUsage
+	for ev := range events {
+		switch ev.Type {
+		case "usage":
+			usage = ev.Usage
+		case "error":
+			t.Fatalf("unexpected error: %v", ev.Error)
+		}
+	}
+
+	if usage == nil {
+		t.Fatal("expected usage event")
+	}
+	if usage.InputTokens != 123 {
+		t.Fatalf("expected 123 input tokens, got %d", usage.InputTokens)
+	}
+	if usage.OutputTokens != 45 {
+		t.Fatalf("expected 45 output tokens, got %d", usage.OutputTokens)
+	}
+}
+
 func TestStreamChatAPIError(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(429)

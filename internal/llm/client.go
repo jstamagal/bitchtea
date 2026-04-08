@@ -88,14 +88,22 @@ type StreamEvent struct {
 
 	// For error events
 	Error error
+
+	// For usage events
+	Usage *TokenUsage
 }
 
 // ChatRequest is the request body for chat completions
 type ChatRequest struct {
-	Model    string    `json:"model"`
-	Messages []Message `json:"messages"`
-	Tools    []ToolDef `json:"tools,omitempty"`
-	Stream   bool      `json:"stream"`
+	Model         string             `json:"model"`
+	Messages      []Message          `json:"messages"`
+	Tools         []ToolDef          `json:"tools,omitempty"`
+	Stream        bool               `json:"stream"`
+	StreamOptions *chatStreamOptions `json:"stream_options,omitempty"`
+}
+
+type chatStreamOptions struct {
+	IncludeUsage bool `json:"include_usage"`
 }
 
 // StreamChat sends a streaming chat completion request, dispatching to the
@@ -116,6 +124,9 @@ func (c *Client) streamChatOpenAI(ctx context.Context, messages []Message, tools
 		Model:    c.Model,
 		Messages: messages,
 		Stream:   true,
+		StreamOptions: &chatStreamOptions{
+			IncludeUsage: true,
+		},
 	}
 	if len(tools) > 0 {
 		reqBody.Tools = tools
@@ -216,6 +227,11 @@ func (c *Client) streamChatOpenAI(ctx context.Context, messages []Message, tools
 		}
 
 		var chunk struct {
+			Usage *struct {
+				PromptTokens     int `json:"prompt_tokens"`
+				CompletionTokens int `json:"completion_tokens"`
+				TotalTokens      int `json:"total_tokens"`
+			} `json:"usage"`
 			Choices []struct {
 				Delta struct {
 					Content   string `json:"content"`
@@ -235,6 +251,16 @@ func (c *Client) streamChatOpenAI(ctx context.Context, messages []Message, tools
 
 		if err := json.Unmarshal([]byte(data), &chunk); err != nil {
 			continue // skip malformed chunks
+		}
+
+		if chunk.Usage != nil {
+			events <- StreamEvent{
+				Type: "usage",
+				Usage: &TokenUsage{
+					InputTokens:  chunk.Usage.PromptTokens,
+					OutputTokens: chunk.Usage.CompletionTokens,
+				},
+			}
 		}
 
 		if len(chunk.Choices) == 0 {

@@ -124,6 +124,55 @@ func TestStreamChatAnthropicToolCall(t *testing.T) {
 	}
 }
 
+func TestStreamChatAnthropicUsage(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.WriteHeader(200)
+
+		events := []string{
+			`{"type":"message_start","message":{"usage":{"input_tokens":210,"output_tokens":0}}}`,
+			`{"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}`,
+			`{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"hello"}}`,
+			`{"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":34}}`,
+			`{"type":"message_stop"}`,
+		}
+
+		flusher := w.(http.Flusher)
+		for _, ev := range events {
+			fmt.Fprintf(w, "data: %s\n\n", ev)
+			flusher.Flush()
+		}
+	}))
+	defer server.Close()
+
+	client := NewClient("test-key", server.URL, "claude-sonnet-4-20250514", "anthropic")
+	events := make(chan StreamEvent, 100)
+
+	go client.StreamChat(context.Background(), []Message{
+		{Role: "user", Content: "hi"},
+	}, nil, events)
+
+	var usage *TokenUsage
+	for ev := range events {
+		switch ev.Type {
+		case "usage":
+			usage = ev.Usage
+		case "error":
+			t.Fatalf("unexpected error: %v", ev.Error)
+		}
+	}
+
+	if usage == nil {
+		t.Fatal("expected usage event")
+	}
+	if usage.InputTokens != 210 {
+		t.Fatalf("expected 210 input tokens, got %d", usage.InputTokens)
+	}
+	if usage.OutputTokens != 34 {
+		t.Fatalf("expected 34 output tokens, got %d", usage.OutputTokens)
+	}
+}
+
 func TestStreamChatAnthropicAPIError(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(429)
