@@ -20,6 +20,9 @@ var Theme = struct {
 	Gray    lipgloss.Color
 	DarkBg  lipgloss.Color
 	BarBg   lipgloss.Color
+
+	ThinkingBarFg lipgloss.Color
+	ThinkingBarBg lipgloss.Color
 }{
 	Name:    "bitchx",
 	Cyan:    lipgloss.Color("14"),
@@ -32,6 +35,9 @@ var Theme = struct {
 	Gray:    lipgloss.Color("8"),
 	DarkBg:  lipgloss.Color("0"),
 	BarBg:   lipgloss.Color("4"),
+
+	ThinkingBarFg: lipgloss.Color("15"),
+	ThinkingBarBg: lipgloss.Color("0"),
 }
 
 // Built-in themes
@@ -47,71 +53,24 @@ var themes = map[string]struct {
 	Gray    lipgloss.Color
 	DarkBg  lipgloss.Color
 	BarBg   lipgloss.Color
+
+	ThinkingBarFg lipgloss.Color
+	ThinkingBarBg lipgloss.Color
 }{
 	"bitchx": {
-		Name:    "BitchX",
-		Cyan:    lipgloss.Color("14"),
-		Green:   lipgloss.Color("10"),
-		Magenta: lipgloss.Color("13"),
-		Yellow:  lipgloss.Color("11"),
-		Red:     lipgloss.Color("9"),
-		Blue:    lipgloss.Color("12"),
-		White:   lipgloss.Color("15"),
-		Gray:    lipgloss.Color("8"),
-		DarkBg:  lipgloss.Color("0"),
-		BarBg:   lipgloss.Color("4"),
-	},
-	"nord": {
-		Name:    "Nord",
-		Cyan:    lipgloss.Color("6"),
-		Green:   lipgloss.Color("14"),
-		Magenta: lipgloss.Color("13"),
-		Yellow:  lipgloss.Color("3"),
-		Red:     lipgloss.Color("1"),
-		Blue:    lipgloss.Color("4"),
-		White:   lipgloss.Color("7"),
-		Gray:    lipgloss.Color("8"),
-		DarkBg:  lipgloss.Color("0"),
-		BarBg:   lipgloss.Color("10"),
-	},
-	"dracula": {
-		Name:    "Dracula",
-		Cyan:    lipgloss.Color("6"),
-		Green:   lipgloss.Color("76"),
-		Magenta: lipgloss.Color("13"),
-		Yellow:  lipgloss.Color("11"),
-		Red:     lipgloss.Color("9"),
-		Blue:    lipgloss.Color("4"),
-		White:   lipgloss.Color("7"),
-		Gray:    lipgloss.Color("8"),
-		DarkBg:  lipgloss.Color("0"),
-		BarBg:   lipgloss.Color("13"),
-	},
-	"gruvbox": {
-		Name:    "Gruvbox",
-		Cyan:    lipgloss.Color("109"),
-		Green:   lipgloss.Color("142"),
-		Magenta: lipgloss.Color("175"),
-		Yellow:  lipgloss.Color("214"),
-		Red:     lipgloss.Color("167"),
-		Blue:    lipgloss.Color("109"),
-		White:   lipgloss.Color("223"),
-		Gray:    lipgloss.Color("245"),
-		DarkBg:  lipgloss.Color("235"),
-		BarBg:   lipgloss.Color("237"),
-	},
-	"monokai": {
-		Name:    "Monokai",
-		Cyan:    lipgloss.Color("45"),
-		Green:   lipgloss.Color("76"),
-		Magenta: lipgloss.Color("5"),
-		Yellow:  lipgloss.Color("3"),
-		Red:     lipgloss.Color("1"),
-		Blue:    lipgloss.Color("4"),
-		White:   lipgloss.Color("15"),
-		Gray:    lipgloss.Color("7"),
-		DarkBg:  lipgloss.Color("0"),
-		BarBg:   lipgloss.Color("13"),
+		Name:          "BitchX",
+		Cyan:          lipgloss.Color("14"),
+		Green:         lipgloss.Color("10"),
+		Magenta:       lipgloss.Color("13"),
+		Yellow:        lipgloss.Color("11"),
+		Red:           lipgloss.Color("9"),
+		Blue:          lipgloss.Color("12"),
+		White:         lipgloss.Color("15"),
+		Gray:          lipgloss.Color("8"),
+		DarkBg:        lipgloss.Color("0"),
+		BarBg:         lipgloss.Color("4"),
+		ThinkingBarFg: lipgloss.Color("15"),
+		ThinkingBarBg: lipgloss.Color("0"),
 	},
 }
 
@@ -143,6 +102,9 @@ func SetTheme(name string) bool {
 		Gray    lipgloss.Color
 		DarkBg  lipgloss.Color
 		BarBg   lipgloss.Color
+
+		ThinkingBarFg lipgloss.Color
+		ThinkingBarBg lipgloss.Color
 	}(t)
 	rebuildStyles()
 	return true
@@ -215,6 +177,12 @@ func rebuildStyles() {
 	BoldWhite = lipgloss.NewStyle().
 		Bold(true).
 		Foreground(Theme.White)
+
+	ThinkingBarStyle = lipgloss.NewStyle().
+		Bold(true).
+		Foreground(Theme.ThinkingBarFg).
+		Background(Theme.ThinkingBarBg).
+		Padding(0, 1)
 }
 
 func init() {

@@ -700,15 +700,9 @@ func (m Model) View() string {
 	tokens := m.agent.EstimateTokens()
 	tokenStr := formatTokens(tokens)
 
-	// When agent is active (thinking/tool call), use hardcoded inverted style:
-	// black background with white text, regardless of theme.
 	barStyle := BottomBarStyle
 	if agentActive {
-		barStyle = lipgloss.NewStyle().
-			Bold(true).
-			Foreground(lipgloss.Color("15")). // bright white
-			Background(lipgloss.Color("0")).   // black
-			Padding(0, 1)
+		barStyle = ThinkingBarStyle
 	}
 
 	statusLeft := barStyle.Render(fmt.Sprintf(" [%s] %s ", m.config.AgentNick, stateStr))
