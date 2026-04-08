@@ -14,6 +14,9 @@ func TestDefaultConfig(t *testing.T) {
 	if cfg.MaxTokens != 4096 {
 		t.Fatalf("expected max tokens 4096, got %d", cfg.MaxTokens)
 	}
+	if cfg.SoundType != "bell" {
+		t.Fatalf("expected sound type 'bell', got %q", cfg.SoundType)
+	}
 	if cfg.WorkDir == "" {
 		t.Fatal("WorkDir should not be empty")
 	}

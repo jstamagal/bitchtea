@@ -433,7 +433,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 		// Play notification sound if enabled
 		if m.config.NotificationSound {
-			sound.Done()
+			sound.Play(m.config.SoundType)
 		}
 
 		// Update tool panel
@@ -961,7 +961,7 @@ func (m Model) handleCommand(input string) (tea.Model, tea.Cmd) {
 		status := "OFF"
 		if m.config.NotificationSound {
 			status = "ON"
-			sound.Done()
+			sound.Play(m.config.SoundType)
 		}
 		m.sysMsg(fmt.Sprintf("Notification sound: %s", status))
 		return m, nil
