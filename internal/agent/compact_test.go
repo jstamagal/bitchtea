@@ -2,6 +2,7 @@ package agent
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
 
@@ -215,5 +216,36 @@ func TestCompactPreservesToolMetadata(t *testing.T) {
 	}
 	if resultMsg.Role != "tool" {
 		t.Fatalf("tool result role not preserved: got %q", resultMsg.Role)
+	}
+}
+
+type blockingStreamer struct {
+	calls int
+}
+
+func (b *blockingStreamer) StreamChat(ctx context.Context, _ []llm.Message, _ []llm.ToolDef, events chan<- llm.StreamEvent) {
+	b.calls++
+	defer close(events)
+	<-ctx.Done()
+}
+
+func TestCompactReturnsCanceledContextWithoutStartingStream(t *testing.T) {
+	cfg := config.DefaultConfig()
+	cfg.WorkDir = t.TempDir()
+	cfg.SessionDir = t.TempDir()
+
+	streamer := &blockingStreamer{}
+	agent := NewAgentWithStreamer(&cfg, streamer)
+	agent.messages = makeMessages(8)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	err := agent.Compact(ctx)
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("expected context.Canceled, got %v", err)
+	}
+	if streamer.calls != 0 {
+		t.Fatalf("expected compact to skip streamer on canceled context, got %d calls", streamer.calls)
 	}
 }
