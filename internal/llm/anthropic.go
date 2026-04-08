@@ -210,6 +210,21 @@ func (c *Client) StreamChatAnthropic(ctx context.Context, messages []Message, to
 	}
 	defer resp.Body.Close()
 
+	// Debug logging
+	if c.DebugHook != nil {
+		headers := make(map[string]string)
+		headers["Content-Type"] = "application/json"
+		headers["x-api-key"] = "[REDACTED]"
+		headers["anthropic-version"] = "2023-06-01"
+		c.DebugHook(DebugInfo{
+			Method:         "POST",
+			URL:            apiURL,
+			RequestHeaders: headers,
+			RequestBody:    string(body),
+			StatusCode:     resp.StatusCode,
+		})
+	}
+
 	// Parse Anthropic SSE stream
 	scanner := bufio.NewScanner(resp.Body)
 	// Increase scanner buffer for large tool call arguments
