@@ -1,0 +1,22 @@
+[
+  [
+    {
+      "Type": "tool_call",
+      "ToolCallID": "call_1",
+      "ToolName": "read",
+      "ToolArgs": "{\"path\":\"test.txt\"}"
+    },
+    {
+      "Type": "done"
+    }
+  ],
+  [
+    {
+      "Type": "text",
+      "Text": "done after tool"
+    },
+    {
+      "Type": "done"
+    }
+  ]
+]
