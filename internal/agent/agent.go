@@ -160,7 +160,9 @@ func (a *Agent) SendMessage(ctx context.Context, userMsg string, events chan<- E
 				})
 
 			case "error":
+				events <- Event{Type: "state", State: StateIdle}
 				events <- Event{Type: "error", Error: ev.Error}
+				events <- Event{Type: "done"}
 				return
 
 			case "done":
@@ -319,6 +321,9 @@ func (a *Agent) Compact(ctx context.Context) error {
 	if len(a.messages) < 6 {
 		return nil // nothing to compact
 	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 
 	// Build a summary request
 	var sb strings.Builder
@@ -340,6 +345,9 @@ func (a *Agent) Compact(ctx context.Context) error {
 
 	var summary strings.Builder
 	for ev := range events {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
 		if ev.Type == "text" {
 			summary.WriteString(ev.Text)
 		}

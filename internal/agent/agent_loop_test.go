@@ -186,6 +186,54 @@ func TestSendMessageUsesReportedUsageWhenAvailable(t *testing.T) {
 	}
 }
 
+func TestSendMessageEmitsDoneAfterStreamError(t *testing.T) {
+	cfg := config.DefaultConfig()
+	cfg.WorkDir = t.TempDir()
+	cfg.SessionDir = t.TempDir()
+
+	streamer := &fakeStreamer{
+		responses: []func(chan<- llm.StreamEvent){
+			func(events chan<- llm.StreamEvent) {
+				events <- llm.StreamEvent{Type: "error", Error: context.Canceled}
+			},
+		},
+	}
+
+	agent := NewAgentWithStreamer(&cfg, streamer)
+	eventCh := make(chan Event, 16)
+
+	go agent.SendMessage(context.Background(), "hello", eventCh)
+
+	var gotError bool
+	var gotDone bool
+	var gotIdle bool
+	for ev := range eventCh {
+		switch ev.Type {
+		case "error":
+			gotError = true
+			if ev.Error != context.Canceled {
+				t.Fatalf("expected context.Canceled error, got %v", ev.Error)
+			}
+		case "done":
+			gotDone = true
+		case "state":
+			if ev.State == StateIdle {
+				gotIdle = true
+			}
+		}
+	}
+
+	if !gotError {
+		t.Fatal("expected error event")
+	}
+	if !gotDone {
+		t.Fatal("expected done event after stream error")
+	}
+	if !gotIdle {
+		t.Fatal("expected idle state before termination")
+	}
+}
+
 func TestNewAgentTracksBootstrapMessageCount(t *testing.T) {
 	workDir := t.TempDir()
 	if err := os.WriteFile(filepath.Join(workDir, "AGENTS.md"), []byte("project rules"), 0644); err != nil {
