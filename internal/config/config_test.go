@@ -23,6 +23,9 @@ func TestDefaultConfig(t *testing.T) {
 	if cfg.SessionDir == "" {
 		t.Fatal("SessionDir should not be empty")
 	}
+	if cfg.LogDir == "" {
+		t.Fatal("LogDir should not be empty")
+	}
 }
 
 func TestDetectProviderOpenAI(t *testing.T) {

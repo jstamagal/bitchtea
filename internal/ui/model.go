@@ -70,6 +70,7 @@ type Model struct {
 	// Session
 	session         *session.Session
 	lastSavedMsgIdx int // index into agent.Messages() of last saved entry
+	transcript      *TranscriptLogger
 
 	// Auto-next tracking
 	autoNextPending bool
@@ -107,6 +108,11 @@ func NewModel(cfg *config.Config) Model {
 		fmt.Fprintf(os.Stderr, "warning: session init failed: %v\n", err)
 	}
 
+	transcript, err := NewTranscriptLogger(cfg.LogDir)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "warning: transcript init failed: %v\n", err)
+	}
+
 	return Model{
 		config:       cfg,
 		agent:        ag,
@@ -119,6 +125,7 @@ func NewModel(cfg *config.Config) Model {
 		historyIdx:   -1,
 		streamBuffer: &strings.Builder{},
 		session:      sess,
+		transcript:   transcript,
 	}
 }
 
@@ -302,6 +309,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case "ctrl+c":
 			if m.streaming && m.cancel != nil {
 				m.cancel()
+				_ = m.transcript.FinishAgentMessage()
 				m.streaming = false
 				m.agentState = agent.StateIdle
 				m.addMessage(ChatMessage{
@@ -395,6 +403,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// Handle OS signals (SIGINT, SIGTERM) sent from main.go
 		if m.streaming && m.cancel != nil {
 			m.cancel()
+			_ = m.transcript.FinishAgentMessage()
 			m.streaming = false
 			m.agentState = agent.StateIdle
 			m.addMessage(ChatMessage{
@@ -414,8 +423,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// SIGINT/SIGTERM from OS: cancel any active streaming before quitting
 		if m.streaming && m.cancel != nil {
 			m.cancel()
+			_ = m.transcript.FinishAgentMessage()
 			m.streaming = false
 		}
+		_ = m.transcript.Close()
 		return m, tea.Quit
 
 	case agentEventMsg:
@@ -427,6 +438,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return newModel, cmd
 
 	case agentDoneMsg:
+		_ = m.transcript.FinishAgentMessage()
 		m.streaming = false
 		m.agentState = agent.StateIdle
 		m.eventCh = nil
@@ -523,6 +535,12 @@ func (m *Model) handleAgentEvent(ev agent.Event) (tea.Model, tea.Cmd) {
 		m.streamBuffer.WriteString(ev.Text)
 		// Update the last agent message in-place for streaming effect
 		m.updateStreamingMessage()
+		if len(m.messages) > 0 {
+			last := m.messages[len(m.messages)-1]
+			if last.Type == MsgAgent {
+				_ = m.transcript.AppendAgentChunk(last.Time, last.Nick, ev.Text)
+			}
+		}
 		m.refreshViewport()
 
 	case "tool_start":
@@ -612,6 +630,7 @@ func (m *Model) sendToAgent(input string) tea.Cmd {
 
 func (m *Model) addMessage(msg ChatMessage) {
 	m.messages = append(m.messages, msg)
+	_ = m.transcript.LogMessage(msg)
 }
 
 func (m *Model) updateStreamingMessage() {
