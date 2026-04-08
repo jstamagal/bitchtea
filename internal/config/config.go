@@ -32,6 +32,7 @@ type Config struct {
 	// Paths
 	WorkDir    string
 	SessionDir string
+	LogDir     string
 }
 
 // DefaultConfig returns a config with sane defaults
@@ -60,6 +61,7 @@ func DefaultConfig() Config {
 
 		WorkDir:    wd,
 		SessionDir: filepath.Join(home, ".local", "share", "bitchtea", "sessions"),
+		LogDir:     filepath.Join(home, ".local", "share", "bitchtea", "logs"),
 	}
 }
 
