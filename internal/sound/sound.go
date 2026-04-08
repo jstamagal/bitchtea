@@ -1,25 +1,32 @@
 package sound
 
+import (
+	"io"
+	"os"
+)
+
+// Output receives terminal bell bytes. Tests override it to capture output.
+var Output io.Writer = os.Stdout
+
 // Play plays a notification sound
 func Play(soundType string) {
 	switch soundType {
+	case "bell":
+		writeBell(1)
 	case "done":
-		// Terminal bell
-		print("\a")
+		writeBell(1)
 	case "success":
-		// Single bell
-		print("\a")
+		writeBell(1)
 	case "error":
-		// Three quick beeps
-		print("\a\a\a")
+		writeBell(3)
 	default:
-		print("\a")
+		writeBell(1)
 	}
 }
 
 // Beep sends a terminal bell character
 func Beep() {
-	print("\a")
+	writeBell(1)
 }
 
 // Success plays a success sound
@@ -35,4 +42,10 @@ func Error() {
 // Done plays a completion sound
 func Done() {
 	Play("done")
+}
+
+func writeBell(count int) {
+	for range count {
+		_, _ = io.WriteString(Output, "\a")
+	}
 }
