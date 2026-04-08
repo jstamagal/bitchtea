@@ -288,6 +288,7 @@ Commands (inside the TUI):
   /auto-idea             Toggle auto-next-idea
   /theme <name>          Switch color theme
   /sound                 Toggle completion bell
+  /mp3 [cmd]             Toggle MP3 panel and player
   /help                  Show help
   /quit                  Exit
 
