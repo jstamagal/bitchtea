@@ -185,3 +185,26 @@ func TestSendMessageUsesReportedUsageWhenAvailable(t *testing.T) {
 		t.Fatalf("expected 54 output tokens, got %d", agent.CostTracker.OutputTokens)
 	}
 }
+
+func TestNewAgentTracksBootstrapMessageCount(t *testing.T) {
+	workDir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(workDir, "AGENTS.md"), []byte("project rules"), 0644); err != nil {
+		t.Fatalf("write AGENTS.md: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(workDir, "MEMORY.md"), []byte("previous notes"), 0644); err != nil {
+		t.Fatalf("write MEMORY.md: %v", err)
+	}
+
+	cfg := config.DefaultConfig()
+	cfg.WorkDir = workDir
+	cfg.SessionDir = t.TempDir()
+
+	agent := NewAgentWithStreamer(&cfg, &fakeStreamer{})
+
+	if got := agent.BootstrapMessageCount(); got != 5 {
+		t.Fatalf("expected 5 bootstrap messages, got %d", got)
+	}
+	if got := agent.MessageCount(); got != 5 {
+		t.Fatalf("expected bootstrap messages to be in history, got %d", got)
+	}
+}
