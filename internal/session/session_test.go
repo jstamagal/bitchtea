@@ -109,6 +109,132 @@ func TestFork(t *testing.T) {
 	}
 }
 
+func TestForkFromFirstEntryPersistsSingleRootEntry(t *testing.T) {
+	dir := t.TempDir()
+
+	s, err := New(dir)
+	if err != nil {
+		t.Fatalf("new: %v", err)
+	}
+
+	if err := s.Append(Entry{Role: "user", Content: "root"}); err != nil {
+		t.Fatalf("append root: %v", err)
+	}
+	if err := s.Append(Entry{Role: "assistant", Content: "reply"}); err != nil {
+		t.Fatalf("append reply: %v", err)
+	}
+
+	forked, err := s.Fork(s.Entries[0].ID)
+	if err != nil {
+		t.Fatalf("fork: %v", err)
+	}
+
+	if len(forked.Entries) != 1 {
+		t.Fatalf("expected 1 entry in fork, got %d", len(forked.Entries))
+	}
+	if forked.Entries[0].ID != s.Entries[0].ID {
+		t.Fatalf("expected root entry id %q, got %q", s.Entries[0].ID, forked.Entries[0].ID)
+	}
+	if forked.Entries[0].ParentID != "" {
+		t.Fatalf("expected root entry parent id to stay empty, got %q", forked.Entries[0].ParentID)
+	}
+
+	loaded, err := Load(forked.Path)
+	if err != nil {
+		t.Fatalf("load fork: %v", err)
+	}
+	if len(loaded.Entries) != 1 {
+		t.Fatalf("expected 1 loaded entry in fork, got %d", len(loaded.Entries))
+	}
+	if loaded.Entries[0].ID != s.Entries[0].ID {
+		t.Fatalf("expected loaded root entry id %q, got %q", s.Entries[0].ID, loaded.Entries[0].ID)
+	}
+}
+
+func TestForkFromMiddlePreservesParentChainAndTruncatesTail(t *testing.T) {
+	dir := t.TempDir()
+
+	s, err := New(dir)
+	if err != nil {
+		t.Fatalf("new: %v", err)
+	}
+
+	for _, entry := range []Entry{
+		{Role: "user", Content: "one"},
+		{Role: "assistant", Content: "two"},
+		{Role: "user", Content: "three"},
+		{Role: "assistant", Content: "four"},
+	} {
+		if err := s.Append(entry); err != nil {
+			t.Fatalf("append %q: %v", entry.Content, err)
+		}
+	}
+
+	forked, err := s.Fork(s.Entries[1].ID)
+	if err != nil {
+		t.Fatalf("fork: %v", err)
+	}
+
+	if len(forked.Entries) != 2 {
+		t.Fatalf("expected 2 entries in fork, got %d", len(forked.Entries))
+	}
+	if forked.Entries[1].ParentID != forked.Entries[0].ID {
+		t.Fatalf("expected fork parent chain %q -> %q, got parent %q", forked.Entries[0].ID, forked.Entries[1].ID, forked.Entries[1].ParentID)
+	}
+
+	loaded, err := Load(forked.Path)
+	if err != nil {
+		t.Fatalf("load fork: %v", err)
+	}
+	if len(loaded.Entries) != 2 {
+		t.Fatalf("expected 2 loaded entries in fork, got %d", len(loaded.Entries))
+	}
+	if loaded.Entries[1].ID != s.Entries[1].ID {
+		t.Fatalf("expected fork tip id %q, got %q", s.Entries[1].ID, loaded.Entries[1].ID)
+	}
+	if loaded.Entries[1].ParentID != s.Entries[0].ID {
+		t.Fatalf("expected loaded fork parent id %q, got %q", s.Entries[0].ID, loaded.Entries[1].ParentID)
+	}
+}
+
+func TestAppendAfterForkUsesForkTipAsParent(t *testing.T) {
+	dir := t.TempDir()
+
+	s, err := New(dir)
+	if err != nil {
+		t.Fatalf("new: %v", err)
+	}
+
+	for _, entry := range []Entry{
+		{Role: "user", Content: "one"},
+		{Role: "assistant", Content: "two"},
+		{Role: "user", Content: "three"},
+	} {
+		if err := s.Append(entry); err != nil {
+			t.Fatalf("append %q: %v", entry.Content, err)
+		}
+	}
+
+	forked, err := s.Fork(s.Entries[0].ID)
+	if err != nil {
+		t.Fatalf("fork: %v", err)
+	}
+
+	if err := forked.Append(Entry{Role: "assistant", Content: "branch reply"}); err != nil {
+		t.Fatalf("append to fork: %v", err)
+	}
+
+	if len(forked.Entries) != 2 {
+		t.Fatalf("expected 2 entries after append, got %d", len(forked.Entries))
+	}
+	if forked.Entries[1].ParentID != forked.Entries[0].ID {
+		t.Fatalf("expected appended fork entry parent id %q, got %q", forked.Entries[0].ID, forked.Entries[1].ParentID)
+	}
+	if forked.Entries[1].ParentID == s.Entries[len(s.Entries)-1].ID {
+		t.Fatalf("fork append should not point at original session tail %q", s.Entries[len(s.Entries)-1].ID)
+	}
+}
+
 func TestTree(t *testing.T) {
 	dir := t.TempDir()
 
@@ -223,5 +349,64 @@ func TestMessagesFromEntriesSkipsLegacyToolEntryWithoutToolCallID(t *testing.T) 
 	}
 	if msgs[0].Role != "assistant" {
 		t.Fatalf("expected assistant message to remain, got %q", msgs[0].Role)
+	}
+}
+
+func TestMessagesFromEntriesRoundTripThroughFork(t *testing.T) {
+	dir := t.TempDir()
+
+	s, err := New(dir)
+	if err != nil {
+		t.Fatalf("new: %v", err)
+	}
+
+	source := []llm.Message{
+		{Role: "user", Content: "inspect README"},
+		{
+			Role:    "assistant",
+			Content: "I will read the file.",
+			ToolCalls: []llm.ToolCall{
+				{
+					ID:   "call_readme",
+					Type: "function",
+					Function: llm.FunctionCall{
+						Name:      "read",
+						Arguments: `{"path":"README.md"}`,
+					},
+				},
+			},
+		},
+		{Role: "tool", Content: "README contents", ToolCallID: "call_readme"},
+		{Role: "assistant", Content: "done"},
+	}
+
+	for _, msg := range source {
+		if err := s.Append(EntryFromMessage(msg)); err != nil {
+			t.Fatalf("append %q: %v", msg.Role, err)
+		}
+	}
+
+	forked, err := s.Fork(s.Entries[2].ID)
+	if err != nil {
+		t.Fatalf("fork: %v", err)
+	}
+
+	loaded, err := Load(forked.Path)
+	if err != nil {
+		t.Fatalf("load fork: %v", err)
+	}
+
+	roundTrip := MessagesFromEntries(loaded.Entries)
+	if len(roundTrip) != 3 {
+		t.Fatalf("expected 3 messages after fork round trip, got %d", len(roundTrip))
+	}
+	if roundTrip[1].Role != "assistant" || len(roundTrip[1].ToolCalls) != 1 {
+		t.Fatalf("expected assistant tool call metadata to survive fork round trip, got %+v", roundTrip[1])
+	}
+	if roundTrip[1].ToolCalls[0].ID != "call_readme" {
+		t.Fatalf("expected tool call id to survive fork round trip, got %+v", roundTrip[1].ToolCalls[0])
+	}
+	if roundTrip[2].Role != "tool" || roundTrip[2].ToolCallID != "call_readme" {
+		t.Fatalf("expected tool result metadata to survive fork round trip, got %+v", roundTrip[2])
 	}
 }
