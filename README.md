@@ -1,6 +1,6 @@
 # bitchtea
 
-A terminal coding assistant that doesn't hold your hand. BitchX-inspired TUI for LLM-powered coding sessions, built in Go with the [Charm](https://charm.sh) stack.
+A terminal coding assistant that does the work instead of performing concern about it. BitchX-inspired TUI for LLM-powered coding sessions, built in Go with the Charm stack.
 
 ```
 ┌─ bitchtea — anthropic/claude-sonnet-4-20250514 ─────────[3:42pm]─┐
@@ -40,78 +40,78 @@ go build -o bitchtea .
 ## Quick Start
 
 ```bash
-export ANTHROPIC_API_KEY=sk-ant-...   # or OPENAI_API_KEY=sk-...
+export ANTHROPIC_API_KEY=sk-ant-...
 bitchtea
 ```
 
-It auto-detects which provider you've configured. Start typing.
+OpenAI-compatible endpoints work too:
+
+```bash
+export OPENAI_API_KEY=sk-...
+export OPENAI_BASE_URL=https://your-provider.example/v1
+bitchtea
+```
+
+`bitchtea` auto-detects the configured provider, opens the TUI, and starts streaming once you send a prompt.
 
 ## Usage
 
-```
+```text
 bitchtea [flags]
 
 Flags:
-  -m, --model <name>     Model to use (default: auto-detected)
+  -m, --model <name>     Model to use
   -p, --profile <name>   Load a saved connection profile
   -r, --resume [path]    Resume a session (latest if no path)
   --auto-next-steps      Keep the agent working after each turn
   --auto-next-idea       Brainstorm improvements after auto-next completes
   -h, --help             Show help
-
-Environment:
-  OPENAI_API_KEY         OpenAI API key
-  OPENAI_BASE_URL        OpenAI-compatible base URL
-  ANTHROPIC_API_KEY      Anthropic API key
-  BITCHTEA_MODEL         Default model override
-  BITCHTEA_PROVIDER      Force provider (openai, anthropic)
 ```
 
-## What It Does
+Environment:
 
-bitchtea connects to an LLM, streams responses into a terminal viewport, and gives the model four tools to work with: **read**, **write**, **edit**, and **bash**. The agent loop detects tool calls, executes them, feeds results back, and keeps going until the work is done. You steer it with natural language.
+```text
+OPENAI_API_KEY         OpenAI API key
+OPENAI_BASE_URL        OpenAI-compatible base URL
+ANTHROPIC_API_KEY      Anthropic API key
+BITCHTEA_MODEL         Default model override
+BITCHTEA_PROVIDER      Force provider (openai, anthropic)
+```
 
-### Providers
+## What You Get
 
-Supports **OpenAI** (and any OpenAI-compatible API) and **Anthropic** natively. Both stream token-by-token via SSE. Switch at runtime with `/provider` and `/model`, or save combos as profiles with `/profile save`.
-
-### Steering
-
-Type while the agent is working. Messages queue up and get injected after the current turn finishes. Like IRC -- the channel keeps going but you can jump in any time.
-
-### Sessions
-
-Every conversation persists as a JSONL file with tree structure. Resume with `--resume` or `/sessions`. Fork from any point with `/fork`. Visualize the tree with `/tree`.
-
-### Context
-
-Auto-discovers `AGENTS.md` and `CLAUDE.md` walking up the directory tree. Supports `@file` references that expand inline. Compacts context automatically when approaching token limits, or manually with `/compact`.
+- Natural-language coding workflow with tool execution for reading files, editing code, writing files, and running shell commands.
+- Streaming responses in a single scrolling terminal buffer while tool activity stays visible in the side panel.
+- Live steering: you can type while the agent is still working and your next message gets queued for the next turn.
+- Session persistence with resume and fork support.
+- Runtime switches for provider, model, profiles, theme, and sound without leaving the UI.
 
 ## Commands
 
 | Command | What it does |
 |---|---|
 | `/model <name>` | Switch model |
-| `/provider <name>` | Switch provider (openai, anthropic) |
+| `/provider <name>` | Switch provider |
 | `/baseurl <url>` | Set API base URL |
 | `/apikey <key>` | Set API key |
-| `/profile save\|load\|delete <n>` | Manage connection profiles |
+| `/profile save\|load\|delete <name>` | Manage connection profiles |
 | `/compact` | Compact conversation context |
 | `/clear` | Clear chat display |
 | `/diff` | Show git diff |
 | `/status` | Git status |
 | `/undo` | Revert unstaged changes |
 | `/commit [msg]` | Git commit |
-| `/tokens` | Token usage |
-| `/memory` | Show MEMORY.md |
-| `/sessions` | List sessions |
-| `/tree` | Session tree |
-| `/fork` | Fork session |
+| `/copy` | Copy the last assistant message |
+| `/tokens` | Show token usage estimate |
+| `/memory` | Show `MEMORY.md` from the current workspace |
+| `/sessions` | List saved sessions |
+| `/tree` | Show session tree |
+| `/fork` | Fork the current session |
 | `/auto-next` | Toggle auto-next-steps |
 | `/auto-idea` | Toggle auto-next-idea |
-| `/theme <name>` | Switch theme (bitchx, nord, dracula, gruvbox, monokai) |
+| `/theme <name>` | Switch theme |
 | `/sound` | Toggle completion bell |
-| `/help` | Help |
+| `/help` | Show help |
 | `/quit` | Exit |
 
 ## Keybindings
@@ -119,45 +119,41 @@ Auto-discovers `AGENTS.md` and `CLAUDE.md` walking up the directory tree. Suppor
 | Key | Action |
 |---|---|
 | `Enter` | Send message |
-| `Ctrl+C` | Interrupt / quit |
+| `Ctrl+C` | Interrupt or quit |
 | `Ctrl+Z` | Suspend |
 | `Ctrl+T` | Toggle tool panel |
 | `Up/Down` | Input history |
 | `PgUp/PgDn` | Scroll viewport |
 | `Mouse wheel` | Scroll viewport |
-| `Tab` | Complete commands and @file refs |
+| `Tab` | Complete commands and `@file` references |
 
-## Architecture
+## Sessions And Context
 
-```
-main.go                   CLI entry, flag parsing, signal handling
-internal/
-  config/                 Config struct, env detection, profiles
-  agent/                  Agent loop (LLM <-> tool orchestration), context discovery
-  llm/                    Streaming clients (OpenAI + Anthropic), retry, cost tracking
-  session/                JSONL persistence, fork, tree
-  tools/                  Tool registry: read, write, edit, bash
-  ui/                     Bubbletea model, rendering, themes, tool panel, ANSI art
-  sound/                  Terminal bell
-```
+- Sessions are stored as JSONL under `~/.local/share/bitchtea/sessions/`.
+- Use `--resume` or `/sessions` to continue prior work.
+- Use `/fork` when you want to branch from the current conversation state.
+- `AGENTS.md` and `CLAUDE.md` are discovered upward from the working directory and injected as context.
+- `@file` references inline file contents into your prompt.
 
-Dependency flow: `main -> config, session, ui -> agent -> llm, tools`. No circular deps.
+## Themes
 
-## Built With
+Built-in themes:
 
-- [bubbletea](https://github.com/charmbracelet/bubbletea) -- Elm-architecture TUI framework
-- [lipgloss](https://github.com/charmbracelet/lipgloss) -- Terminal styling
-- [bubbles](https://github.com/charmbracelet/bubbles) -- Viewport, textarea, spinner
-- [glamour](https://github.com/charmbracelet/glamour) -- Markdown rendering
+- `bitchx`
+- `nord`
+- `dracula`
+- `gruvbox`
+- `monokai`
 
-## Testing
+## Building From Source
 
 ```bash
-go test ./...           # unit tests (includes offline agent loop via fake streamer)
-go vet ./...            # static analysis
-go build ./...          # build check
+go build -o bitchtea .
+./bitchtea --help
 ```
+
+Contributor and architecture notes live in [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ## Heritage
 
-Named after [BitchX](https://en.wikipedia.org/wiki/BitchX), the IRC client that didn't care about your feelings. Six randomized ANSI splash screens carry on the tradition.
+Named after [BitchX](https://en.wikipedia.org/wiki/BitchX), the IRC client that did not care about your feelings. The ANSI splash art keeps the tone honest.
