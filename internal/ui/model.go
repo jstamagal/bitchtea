@@ -50,6 +50,7 @@ type Model struct {
 	input     textarea.Model
 	spinner   spinner.Model
 	toolPanel *ToolPanel
+	mp3       *mp3Controller
 
 	// State
 	messages     []ChatMessage
@@ -120,6 +121,7 @@ func NewModel(cfg *config.Config) Model {
 		input:        ta,
 		spinner:      sp,
 		toolPanel:    NewToolPanel(),
+		mp3:          newMP3Controller(),
 		messages:     []ChatMessage{},
 		history:      []string{},
 		historyIdx:   -1,
@@ -188,6 +190,7 @@ func (m Model) Init() tea.Cmd {
 	return tea.Batch(
 		textarea.Blink,
 		m.spinner.Tick,
+		mp3TickCmd(),
 		tea.EnterAltScreen,
 		tea.EnableMouseCellMotion,
 		m.showSplash(),
@@ -221,9 +224,14 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			vpHeight = 1
 		}
 
-		// Account for tool panel width
+		// Account for side panel width
 		vpWidth := msg.Width
-		if m.toolPanel != nil && m.toolPanel.Visible && m.streaming {
+		if m.mp3 != nil && m.mp3.visible && msg.Width > 90 {
+			vpWidth = msg.Width - mp3PanelWidth
+			if vpWidth < 40 {
+				vpWidth = msg.Width
+			}
+		} else if m.toolPanel != nil && m.toolPanel.Visible && m.streaming {
 			vpWidth = msg.Width - ToolPanelWidth
 			if vpWidth < 40 {
 				vpWidth = msg.Width // too narrow, hide panel
@@ -399,6 +407,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 
+		if handled, cmd := m.handleMP3Key(msg); handled {
+			return m, cmd
+		}
+
 	case SignalMsg:
 		// Handle OS signals (SIGINT, SIGTERM) sent from main.go
 		if m.streaming && m.cancel != nil {
@@ -425,6 +437,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.cancel()
 			_ = m.transcript.FinishAgentMessage()
 			m.streaming = false
+		}
+		if m.mp3 != nil {
+			m.mp3.stop()
 		}
 		_ = m.transcript.Close()
 		return m, tea.Quit
@@ -513,6 +528,19 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			go m.autoSaveMemory()
 		}
 
+		return m, nil
+
+	case mp3TickMsg:
+		return m, mp3TickCmd()
+
+	case mp3DoneMsg:
+		if m.mp3 != nil {
+			status, cmd := m.mp3.handleDone(msg)
+			if status != "" {
+				m.sysMsg(status)
+			}
+			return m, cmd
+		}
 		return m, nil
 
 	case spinner.TickMsg:
@@ -699,7 +727,10 @@ func (m Model) View() string {
 	vpView := m.viewport.View()
 
 	showPanel := m.toolPanel != nil && m.toolPanel.Visible && m.streaming && m.width > 80
-	if showPanel {
+	if m.mp3 != nil && m.mp3.visible && m.width > 90 {
+		panel := m.mp3.renderPanel(m.viewport.Height)
+		vpView = lipgloss.JoinHorizontal(lipgloss.Top, vpView, panel)
+	} else if showPanel {
 		panel := m.toolPanel.Render(m.viewport.Height)
 		vpView = lipgloss.JoinHorizontal(lipgloss.Top, vpView, panel)
 	}
@@ -735,6 +766,10 @@ func (m Model) View() string {
 	statsStr := strings.Join(statsItems, " ")
 	if statsStr != "" {
 		statsStr += " | "
+	}
+	if m.mp3 != nil && m.mp3.hasTracks() {
+		mp3Status := truncateRunes(m.mp3.statusText(), mp3StatusBarWidth)
+		statsStr += mp3Status + " | "
 	}
 	statsStr += fmt.Sprintf("~%s tok | %s", tokenStr, elapsed)
 
@@ -794,6 +829,7 @@ func (m Model) handleCommand(input string) (tea.Model, tea.Cmd) {
 				"  /theme <name>       Switch color theme\n" +
 				"  /debug on|off       Toggle verbose API logging\n" +
 				"  /sound              Toggle completion bell\n" +
+				"  /mp3 [cmd]          Toggle MP3 panel and player\n" +
 				"  /quit               Exit\n" +
 				"\n" +
 				"  Use @filename to include file contents.\n" +
@@ -987,6 +1023,44 @@ func (m Model) handleCommand(input string) (tea.Model, tea.Cmd) {
 		}
 		m.sysMsg(fmt.Sprintf("Notification sound: %s", status))
 		return m, nil
+
+	case "/mp3":
+		if m.mp3 == nil {
+			m.errMsg("MP3 controller unavailable.")
+			return m, nil
+		}
+		if len(parts) == 1 {
+			status, cmd := m.mp3.toggle()
+			m.sysMsg(status)
+			return m, cmd
+		}
+
+		var (
+			status string
+			cmd    tea.Cmd
+		)
+
+		switch strings.ToLower(parts[1]) {
+		case "rescan":
+			status = m.mp3.rescan()
+		case "play":
+			status, cmd = m.mp3.playIndex(m.mp3.current)
+		case "pause", "toggle":
+			status = m.mp3.togglePause()
+		case "next":
+			status, cmd = m.mp3.next()
+		case "prev", "previous":
+			status, cmd = m.mp3.prev()
+		default:
+			m.errMsg("Usage: /mp3 [rescan|play|pause|next|prev]")
+			return m, nil
+		}
+		if strings.Contains(strings.ToLower(status), "failed") || strings.HasPrefix(status, "No MP3s") || strings.HasPrefix(status, "Usage:") {
+			m.errMsg(status)
+		} else {
+			m.sysMsg(status)
+		}
+		return m, cmd
 
 	case "/theme":
 		if len(parts) < 2 {
@@ -1222,6 +1296,38 @@ func (m *Model) sysMsg(content string) {
 func (m *Model) errMsg(content string) {
 	m.addMessage(ChatMessage{Time: time.Now(), Type: MsgError, Content: content})
 	m.refreshViewport()
+}
+
+func (m *Model) handleMP3Key(msg tea.KeyMsg) (bool, tea.Cmd) {
+	if m.mp3 == nil || !m.mp3.visible {
+		return false, nil
+	}
+	if strings.TrimSpace(m.input.Value()) != "" {
+		return false, nil
+	}
+
+	var (
+		status string
+		cmd    tea.Cmd
+	)
+
+	switch msg.String() {
+	case " ":
+		status = m.mp3.togglePause()
+	case "left", "j":
+		status, cmd = m.mp3.prev()
+	case "right", "k":
+		status, cmd = m.mp3.next()
+	default:
+		return false, nil
+	}
+
+	if strings.Contains(strings.ToLower(status), "failed") || strings.HasPrefix(status, "No MP3s") {
+		m.errMsg(status)
+	} else {
+		m.sysMsg(status)
+	}
+	return true, cmd
 }
 
 // autoSaveMemory asks the agent to generate a memory summary and saves it

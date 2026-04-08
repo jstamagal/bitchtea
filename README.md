@@ -111,6 +111,7 @@ BITCHTEA_PROVIDER      Force provider (openai, anthropic)
 | `/auto-idea` | Toggle auto-next-idea |
 | `/theme <name>` | Switch theme |
 | `/sound` | Toggle completion bell |
+| `/mp3 [rescan\|play\|pause\|next\|prev]` | Toggle the MP3 panel and control playback from `~/.bitchtea/mp3` |
 | `/help` | Show help |
 | `/quit` | Exit |
 
@@ -122,6 +123,8 @@ BITCHTEA_PROVIDER      Force provider (openai, anthropic)
 | `Ctrl+C` | Interrupt or quit |
 | `Ctrl+Z` | Suspend |
 | `Ctrl+T` | Toggle tool panel |
+| `Space` | Pause or resume music when the MP3 panel is open and the input is empty |
+| `Left/Right` or `j/k` | Previous or next track when the MP3 panel is open and the input is empty |
 | `Up/Down` | Input history |
 | `PgUp/PgDn` | Scroll viewport |
 | `Mouse wheel` | Scroll viewport |
