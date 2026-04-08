@@ -6,7 +6,7 @@ import "fmt"
 // Source: OpenAI/Anthropic pricing pages
 var modelPricing = map[string]ModelPricing{
 	// OpenAI GPT-4o series
-	"gpt-4o":           {InputCostPerM: 5.00, OutputCostPerM: 15.00},
+	"gpt-4o":            {InputCostPerM: 5.00, OutputCostPerM: 15.00},
 	"gpt-4o-mini":       {InputCostPerM: 0.15, OutputCostPerM: 0.60},
 	"chatgpt-4o-latest": {InputCostPerM: 5.00, OutputCostPerM: 15.00},
 	"gpt-4-turbo":       {InputCostPerM: 10.00, OutputCostPerM: 30.00},
@@ -31,8 +31,14 @@ var modelPricing = map[string]ModelPricing{
 
 // ModelPricing holds cost information for a model
 type ModelPricing struct {
-	InputCostPerM   float64 // cost per 1M input tokens
-	OutputCostPerM  float64 // cost per 1M output tokens
+	InputCostPerM  float64 // cost per 1M input tokens
+	OutputCostPerM float64 // cost per 1M output tokens
+}
+
+// TokenUsage holds the token counts reported by a provider for one response.
+type TokenUsage struct {
+	InputTokens  int
+	OutputTokens int
 }
 
 // GetPricing returns pricing for a model, or nil if unknown
@@ -78,8 +84,8 @@ func FormatCost(cost float64) string {
 
 // CostTracker tracks token usage and calculates costs
 type CostTracker struct {
-	InputTokens   int // total input tokens used
-	OutputTokens  int // total output tokens used
+	InputTokens  int // total input tokens used
+	OutputTokens int // total output tokens used
 }
 
 // NewCostTracker creates a new cost tracker
@@ -91,6 +97,11 @@ func NewCostTracker() *CostTracker {
 func (c *CostTracker) AddUsage(inputTokens, outputTokens int) {
 	c.InputTokens += inputTokens
 	c.OutputTokens += outputTokens
+}
+
+// AddTokenUsage adds provider-reported usage from a single response.
+func (c *CostTracker) AddTokenUsage(usage TokenUsage) {
+	c.AddUsage(usage.InputTokens, usage.OutputTokens)
 }
 
 // TotalTokens returns total tokens used

@@ -119,12 +119,10 @@ func (a *Agent) SendMessage(ctx context.Context, userMsg string, events chan<- E
 	a.messages = append(a.messages, llm.Message{Role: "user", Content: expanded})
 	a.TurnCount++
 
-	// Track input tokens (rough estimate: chars/4)
-	a.CostTracker.AddUsage(len(expanded)/4, 0)
-
 	// Agent loop - keeps going while there are tool calls
 	for {
 		events <- Event{Type: "state", State: StateThinking}
+		estimatedInputTokens := a.EstimateTokens()
 
 		// Stream LLM response
 		streamEvents := make(chan llm.StreamEvent, 100)
@@ -132,12 +130,20 @@ func (a *Agent) SendMessage(ctx context.Context, userMsg string, events chan<- E
 
 		var textAccum strings.Builder
 		var toolCalls []llm.ToolCall
+		var usage llm.TokenUsage
+		var gotUsage bool
 
 		for ev := range streamEvents {
 			switch ev.Type {
 			case "text":
 				textAccum.WriteString(ev.Text)
 				events <- Event{Type: "text", Text: ev.Text}
+
+			case "usage":
+				if ev.Usage != nil {
+					usage = *ev.Usage
+					gotUsage = true
+				}
 
 			case "tool_call":
 				toolCalls = append(toolCalls, llm.ToolCall{
@@ -168,8 +174,11 @@ func (a *Agent) SendMessage(ctx context.Context, userMsg string, events chan<- E
 		}
 		a.messages = append(a.messages, assistantMsg)
 
-		// Track output tokens (rough estimate: chars/4)
-		a.CostTracker.AddUsage(0, textAccum.Len()/4)
+		if gotUsage {
+			a.CostTracker.AddTokenUsage(usage)
+		} else {
+			a.CostTracker.AddUsage(estimatedInputTokens, textAccum.Len()/4)
+		}
 
 		// If no tool calls, we're done (maybe auto-next)
 		if len(toolCalls) == 0 {

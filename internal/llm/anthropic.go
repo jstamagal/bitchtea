@@ -11,6 +11,11 @@ import (
 	"strings"
 )
 
+type anthropicUsage struct {
+	InputTokens  int `json:"input_tokens"`
+	OutputTokens int `json:"output_tokens"`
+}
+
 // anthropicRequest is the request body for the Anthropic Messages API
 type anthropicRequest struct {
 	Model     string             `json:"model"`
@@ -237,6 +242,8 @@ func (c *Client) StreamChatAnthropic(ctx context.Context, messages []Message, to
 		argsStr string
 	}
 	var activeTools []toolAccum
+	var usage TokenUsage
+	var usageSeen bool
 
 	for scanner.Scan() {
 		line := scanner.Text()
@@ -248,8 +255,9 @@ func (c *Client) StreamChatAnthropic(ctx context.Context, messages []Message, to
 		data := strings.TrimPrefix(line, "data: ")
 
 		var event struct {
-			Type  string `json:"type"`
-			Index int    `json:"index"`
+			Type  string          `json:"type"`
+			Index int             `json:"index"`
+			Usage *anthropicUsage `json:"usage"`
 			Delta struct {
 				Type        string `json:"type"`
 				Text        string `json:"text"`
@@ -257,14 +265,15 @@ func (c *Client) StreamChatAnthropic(ctx context.Context, messages []Message, to
 				StopReason  string `json:"stop_reason"`
 			} `json:"delta"`
 			ContentBlock struct {
-				Type  string `json:"type"`
-				ID    string `json:"id"`
-				Name  string `json:"name"`
-				Text  string `json:"text"`
+				Type  string          `json:"type"`
+				ID    string          `json:"id"`
+				Name  string          `json:"name"`
+				Text  string          `json:"text"`
 				Input json.RawMessage `json:"input"`
 			} `json:"content_block"`
 			Message struct {
-				StopReason string `json:"stop_reason"`
+				StopReason string          `json:"stop_reason"`
+				Usage      *anthropicUsage `json:"usage"`
 			} `json:"message"`
 		}
 
@@ -273,6 +282,15 @@ func (c *Client) StreamChatAnthropic(ctx context.Context, messages []Message, to
 		}
 
 		switch event.Type {
+		case "message_start":
+			if event.Message.Usage != nil {
+				usage = TokenUsage{
+					InputTokens:  event.Message.Usage.InputTokens,
+					OutputTokens: event.Message.Usage.OutputTokens,
+				}
+				usageSeen = true
+			}
+
 		case "content_block_start":
 			switch event.ContentBlock.Type {
 			case "text":
@@ -316,9 +334,16 @@ func (c *Client) StreamChatAnthropic(ctx context.Context, messages []Message, to
 			}
 
 		case "message_delta":
-			// End of message
+			if event.Usage != nil {
+				usage.OutputTokens = event.Usage.OutputTokens
+				usageSeen = true
+			}
 
 		case "message_stop":
+			if usageSeen {
+				usageCopy := usage
+				events <- StreamEvent{Type: "usage", Usage: &usageCopy}
+			}
 			events <- StreamEvent{Type: "done"}
 			return
 

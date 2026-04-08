@@ -75,6 +75,9 @@ func TestSendMessageWithInjectedStreamer(t *testing.T) {
 	if streamer.calls != 1 {
 		t.Fatalf("expected 1 streamer call, got %d", streamer.calls)
 	}
+	if agent.CostTracker.TotalTokens() == 0 {
+		t.Fatal("expected fallback token estimation to record usage")
+	}
 }
 
 func TestSendMessageExecutesToolCallWithoutNetwork(t *testing.T) {
@@ -143,5 +146,42 @@ func TestSendMessageExecutesToolCallWithoutNetwork(t *testing.T) {
 	}
 	if streamer.calls != 2 {
 		t.Fatalf("expected 2 streamer calls, got %d", streamer.calls)
+	}
+}
+
+func TestSendMessageUsesReportedUsageWhenAvailable(t *testing.T) {
+	cfg := config.DefaultConfig()
+	cfg.WorkDir = t.TempDir()
+	cfg.SessionDir = t.TempDir()
+
+	streamer := &fakeStreamer{
+		responses: []func(chan<- llm.StreamEvent){
+			func(events chan<- llm.StreamEvent) {
+				events <- llm.StreamEvent{Type: "text", Text: "ok"}
+				events <- llm.StreamEvent{
+					Type:  "usage",
+					Usage: &llm.TokenUsage{InputTokens: 321, OutputTokens: 54},
+				}
+				events <- llm.StreamEvent{Type: "done"}
+			},
+		},
+	}
+
+	agent := NewAgentWithStreamer(&cfg, streamer)
+	eventCh := make(chan Event, 16)
+
+	go agent.SendMessage(context.Background(), "hello", eventCh)
+
+	for ev := range eventCh {
+		if ev.Type == "error" {
+			t.Fatalf("unexpected error event: %v", ev.Error)
+		}
+	}
+
+	if agent.CostTracker.InputTokens != 321 {
+		t.Fatalf("expected 321 input tokens, got %d", agent.CostTracker.InputTokens)
+	}
+	if agent.CostTracker.OutputTokens != 54 {
+		t.Fatalf("expected 54 output tokens, got %d", agent.CostTracker.OutputTokens)
 	}
 }
