@@ -33,6 +33,15 @@ type Session struct {
 	Entries []Entry
 }
 
+// Checkpoint captures lightweight autonomous-turn state without mutating
+// project files like MEMORY.md.
+type Checkpoint struct {
+	TurnCount int            `json:"turn_count"`
+	ToolCalls map[string]int `json:"tool_calls,omitempty"`
+	Model     string         `json:"model,omitempty"`
+	Timestamp time.Time      `json:"timestamp"`
+}
+
 // New creates a new session
 func New(dir string) (*Session, error) {
 	if err := os.MkdirAll(dir, 0755); err != nil {
@@ -241,6 +250,29 @@ func Latest(dir string) string {
 		return ""
 	}
 	return sessions[0]
+}
+
+// SaveCheckpoint writes the current autonomous-turn checkpoint into the session
+// directory using a fixed hidden filename.
+func SaveCheckpoint(dir string, checkpoint Checkpoint) error {
+	if err := os.MkdirAll(dir, 0755); err != nil {
+		return fmt.Errorf("create session dir: %w", err)
+	}
+	checkpoint.Timestamp = time.Now()
+	if checkpoint.ToolCalls == nil {
+		checkpoint.ToolCalls = map[string]int{}
+	}
+
+	data, err := json.MarshalIndent(checkpoint, "", "  ")
+	if err != nil {
+		return fmt.Errorf("marshal checkpoint: %w", err)
+	}
+
+	path := filepath.Join(dir, ".bitchtea_checkpoint.json")
+	if err := os.WriteFile(path, data, 0644); err != nil {
+		return fmt.Errorf("write checkpoint: %w", err)
+	}
+	return nil
 }
 
 // EntryFromMessage converts an in-memory LLM message into a session entry.

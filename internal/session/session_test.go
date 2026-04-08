@@ -273,6 +273,40 @@ func TestLatest(t *testing.T) {
 	}
 }
 
+func TestSaveCheckpointWritesHiddenJSONFile(t *testing.T) {
+	dir := t.TempDir()
+	err := SaveCheckpoint(dir, Checkpoint{
+		TurnCount: 7,
+		ToolCalls: map[string]int{"read": 2, "bash": 1},
+		Model:     "gpt-test",
+	})
+	if err != nil {
+		t.Fatalf("save checkpoint: %v", err)
+	}
+
+	data, err := os.ReadFile(filepath.Join(dir, ".bitchtea_checkpoint.json"))
+	if err != nil {
+		t.Fatalf("read checkpoint: %v", err)
+	}
+
+	var checkpoint Checkpoint
+	if err := json.Unmarshal(data, &checkpoint); err != nil {
+		t.Fatalf("unmarshal checkpoint: %v", err)
+	}
+	if checkpoint.TurnCount != 7 {
+		t.Fatalf("expected turn count 7, got %d", checkpoint.TurnCount)
+	}
+	if checkpoint.ToolCalls["read"] != 2 {
+		t.Fatalf("expected read call count 2, got %d", checkpoint.ToolCalls["read"])
+	}
+	if checkpoint.Model != "gpt-test" {
+		t.Fatalf("expected model gpt-test, got %q", checkpoint.Model)
+	}
+	if checkpoint.Timestamp.IsZero() {
+		t.Fatal("expected checkpoint timestamp to be set")
+	}
+}
+
 func TestInfo(t *testing.T) {
 	dir := t.TempDir()
 	s, _ := New(dir)

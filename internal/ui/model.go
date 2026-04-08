@@ -73,9 +73,6 @@ type Model struct {
 	lastSavedMsgIdx int // index into agent.Messages() of last saved entry
 	transcript      *TranscriptLogger
 
-	// Auto-next tracking
-	autoNextPending bool
-
 	// Debug mode - verbose API logging
 	debugMode bool
 }
@@ -457,6 +454,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.streaming = false
 		m.agentState = agent.StateIdle
 		m.eventCh = nil
+		m.cancel = nil
 
 		// Play notification sound if enabled
 		if m.config.NotificationSound {
@@ -481,6 +479,14 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.lastSavedMsgIdx = len(msgs)
 		}
 
+		if err := session.SaveCheckpoint(m.config.SessionDir, session.Checkpoint{
+			TurnCount: m.agent.TurnCount,
+			ToolCalls: cloneToolStats(m.agent.ToolCalls),
+			Model:     m.agent.Model(),
+		}); err != nil {
+			m.errMsg(fmt.Sprintf("checkpoint save failed: %v", err))
+		}
+
 		// Process queued messages first
 		if len(m.queued) > 0 {
 			next := m.queued[0]
@@ -495,37 +501,14 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, m.sendToAgent(next)
 		}
 
-		// Auto-next-steps
-		if m.config.AutoNextSteps && !m.autoNextPending {
-			m.autoNextPending = true
-			prompt := agent.AutoNextPrompt()
+		if followUp := m.agent.MaybeQueueFollowUp(); followUp != nil {
 			m.addMessage(ChatMessage{
 				Time:    time.Now(),
 				Type:    MsgSystem,
-				Content: "*** auto-next-steps: continuing...",
+				Content: fmt.Sprintf("*** %s: continuing...", followUp.Label),
 			})
 			m.refreshViewport()
-			return m, m.sendToAgent(prompt)
-		}
-
-		// Auto-next-idea (only fires once after auto-next-steps completes)
-		if m.config.AutoNextIdea && m.autoNextPending {
-			m.autoNextPending = false
-			prompt := agent.AutoIdeaPrompt()
-			m.addMessage(ChatMessage{
-				Time:    time.Now(),
-				Type:    MsgSystem,
-				Content: "*** auto-next-idea: brainstorming...",
-			})
-			m.refreshViewport()
-			return m, m.sendToAgent(prompt)
-		}
-
-		m.autoNextPending = false
-
-		// Auto-save memory after agent completes a task
-		if m.agent.TurnCount > 0 && m.agent.TurnCount%3 == 0 {
-			go m.autoSaveMemory()
+			return m, m.sendToAgent(followUp.Prompt)
 		}
 
 		return m, nil
@@ -645,6 +628,9 @@ func waitForAgentEvent(ch chan agent.Event) tea.Cmd {
 }
 
 func (m *Model) sendToAgent(input string) tea.Cmd {
+	if m.cancel != nil {
+		m.cancel()
+	}
 	ctx, cancel := context.WithCancel(context.Background())
 	m.cancel = cancel
 	m.streaming = true
@@ -1325,37 +1311,6 @@ func (m *Model) handleMP3Key(msg tea.KeyMsg) (bool, tea.Cmd) {
 	return true, cmd
 }
 
-// autoSaveMemory asks the agent to generate a memory summary and saves it
-func (m *Model) autoSaveMemory() {
-	msgs := m.agent.Messages()
-	if len(msgs) < 4 {
-		return
-	}
-
-	// Build a simple summary from the conversation
-	var summary strings.Builder
-	summary.WriteString("# MEMORY.md\n")
-	summary.WriteString(fmt.Sprintf("Last updated: %s\n\n", time.Now().Format(time.RFC3339)))
-	summary.WriteString("## Session Summary\n")
-
-	for _, msg := range msgs {
-		if msg.Role == "user" && len(msg.Content) > 0 {
-			content := msg.Content
-			if len(content) > 200 {
-				content = content[:200] + "..."
-			}
-			summary.WriteString(fmt.Sprintf("- User asked: %s\n", content))
-		}
-	}
-
-	summary.WriteString("\n## Tool Usage\n")
-	for name, count := range m.toolPanel.Stats {
-		summary.WriteString(fmt.Sprintf("- %s: %d calls\n", name, count))
-	}
-
-	_ = agent.SaveMemory(m.config.WorkDir, summary.String())
-}
-
 // runGit runs a git command and returns its output
 func runGit(workDir string, args ...string) string {
 	cmd := exec.Command("git", args...)
@@ -1370,4 +1325,12 @@ func formatTokens(n int) string {
 		return fmt.Sprintf("%d", n)
 	}
 	return fmt.Sprintf("%.1fk", float64(n)/1000.0)
+}
+
+func cloneToolStats(stats map[string]int) map[string]int {
+	cloned := make(map[string]int, len(stats))
+	for name, count := range stats {
+		cloned[name] = count
+	}
+	return cloned
 }
