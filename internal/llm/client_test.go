@@ -201,6 +201,77 @@ func TestStreamChatToolCallLargeArguments(t *testing.T) {
 	}
 }
 
+func TestDebugHookOpenAI(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.WriteHeader(200)
+		flusher := w.(http.Flusher)
+		fmt.Fprintf(w, "data: %s\n\n", `{"choices":[{"delta":{"content":"ok"},"finish_reason":null}]}`)
+		flusher.Flush()
+		fmt.Fprint(w, "data: [DONE]\n\n")
+		flusher.Flush()
+	}))
+	defer server.Close()
+
+	client := NewClient("test-key", server.URL, "test-model", "openai")
+
+	var captured *DebugInfo
+	client.DebugHook = func(info DebugInfo) {
+		captured = &info
+	}
+
+	events := make(chan StreamEvent, 100)
+	go client.StreamChat(context.Background(), []Message{
+		{Role: "user", Content: "hi"},
+	}, nil, events)
+
+	for range events {
+	}
+
+	if captured == nil {
+		t.Fatal("DebugHook was not called")
+	}
+	if captured.Method != "POST" {
+		t.Errorf("expected POST, got %s", captured.Method)
+	}
+	if !strings.Contains(captured.URL, "/chat/completions") {
+		t.Errorf("expected URL containing /chat/completions, got %s", captured.URL)
+	}
+	if captured.StatusCode != 200 {
+		t.Errorf("expected status 200, got %d", captured.StatusCode)
+	}
+	if captured.RequestHeaders["Authorization"] != "Bearer [REDACTED]" {
+		t.Errorf("expected redacted auth header, got %s", captured.RequestHeaders["Authorization"])
+	}
+	if !strings.Contains(captured.RequestBody, "test-model") {
+		t.Errorf("expected request body to contain model name, got %s", captured.RequestBody)
+	}
+}
+
+func TestDebugHookNilByDefault(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.WriteHeader(200)
+		flusher := w.(http.Flusher)
+		fmt.Fprintf(w, "data: %s\n\n", `{"choices":[{"delta":{"content":"ok"},"finish_reason":null}]}`)
+		flusher.Flush()
+		fmt.Fprint(w, "data: [DONE]\n\n")
+		flusher.Flush()
+	}))
+	defer server.Close()
+
+	client := NewClient("test-key", server.URL, "test-model", "openai")
+	// DebugHook is nil by default - should not panic
+	events := make(chan StreamEvent, 100)
+	go client.StreamChat(context.Background(), []Message{
+		{Role: "user", Content: "hi"},
+	}, nil, events)
+
+	for range events {
+	}
+	// If we get here without panic, the test passes
+}
+
 func min(a, b int) int {
 	if a < b {
 		return a
