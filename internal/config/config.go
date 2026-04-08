@@ -2,6 +2,7 @@ package config
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"os/user"
@@ -96,6 +97,39 @@ type Profile struct {
 	Model    string `json:"model"`
 }
 
+type builtinProfileSpec struct {
+	Provider  string
+	BaseURL   string
+	Model     string
+	APIKeyEnv []string
+}
+
+var builtinProfiles = map[string]builtinProfileSpec{
+	"ollama": {
+		Provider: "openai",
+		BaseURL:  "http://localhost:11434/v1",
+		Model:    "llama3.2",
+	},
+	"openrouter": {
+		Provider:  "openai",
+		BaseURL:   "https://openrouter.ai/api/v1",
+		Model:     "anthropic/claude-sonnet-4",
+		APIKeyEnv: []string{"OPENROUTER_API_KEY"},
+	},
+	"zai-openai": {
+		Provider:  "openai",
+		BaseURL:   "https://api.z.ai/api/coding/paas/v4",
+		Model:     "GLM-4.7",
+		APIKeyEnv: []string{"ZAI_API_KEY"},
+	},
+	"zai-anthropic": {
+		Provider:  "anthropic",
+		BaseURL:   "https://api.z.ai/api/anthropic",
+		Model:     "GLM-4.7",
+		APIKeyEnv: []string{"ZAI_API_KEY"},
+	},
+}
+
 // ProfilesDir returns the directory where profiles are stored.
 // It's a variable so tests can override it.
 var ProfilesDir = func() string {
@@ -139,16 +173,23 @@ func LoadProfile(name string) (*Profile, error) {
 
 // ListProfiles returns all saved profile names
 func ListProfiles() []string {
+	namesMap := make(map[string]struct{}, len(builtinProfiles))
+	for name := range builtinProfiles {
+		namesMap[name] = struct{}{}
+	}
+
 	entries, err := os.ReadDir(ProfilesDir())
-	if err != nil {
-		return nil
+	if err == nil {
+		for _, e := range entries {
+			if filepath.Ext(e.Name()) == ".json" {
+				namesMap[strings.TrimSuffix(e.Name(), ".json")] = struct{}{}
+			}
+		}
 	}
 
 	var names []string
-	for _, e := range entries {
-		if filepath.Ext(e.Name()) == ".json" {
-			names = append(names, strings.TrimSuffix(e.Name(), ".json"))
-		}
+	for name := range namesMap {
+		names = append(names, name)
 	}
 	sort.Strings(names)
 	return names
@@ -174,4 +215,66 @@ func ApplyProfile(cfg *Config, p *Profile) {
 	if p.Model != "" {
 		cfg.Model = p.Model
 	}
+}
+
+// ProfileAllowsEmptyAPIKey reports whether the selected transport can start
+// without credentials. Today that means local Ollama-compatible endpoints.
+func ProfileAllowsEmptyAPIKey(cfg Config) bool {
+	if cfg.Provider != "openai" {
+		return false
+	}
+
+	baseURL := strings.TrimSpace(strings.ToLower(cfg.BaseURL))
+	return strings.HasPrefix(baseURL, "http://localhost:11434/") ||
+		strings.HasPrefix(baseURL, "http://127.0.0.1:11434/")
+}
+
+// ResolveProfile loads a saved profile or falls back to built-in provider presets.
+func ResolveProfile(name string) (*Profile, error) {
+	if p, err := loadSavedProfile(name); err == nil {
+		return p, nil
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return nil, err
+	}
+
+	if p, ok := builtinProfile(name); ok {
+		return p, nil
+	}
+
+	return nil, fmt.Errorf("read profile %q: %w", name, os.ErrNotExist)
+}
+
+func loadSavedProfile(name string) (*Profile, error) {
+	path := filepath.Join(ProfilesDir(), name+".json")
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, fmt.Errorf("read profile %q: %w", name, err)
+	}
+
+	var p Profile
+	if err := json.Unmarshal(data, &p); err != nil {
+		return nil, fmt.Errorf("parse profile %q: %w", name, err)
+	}
+	return &p, nil
+}
+
+func builtinProfile(name string) (*Profile, bool) {
+	spec, ok := builtinProfiles[name]
+	if !ok {
+		return nil, false
+	}
+
+	p := &Profile{
+		Name:     name,
+		Provider: spec.Provider,
+		BaseURL:  spec.BaseURL,
+		Model:    spec.Model,
+	}
+	for _, envName := range spec.APIKeyEnv {
+		if value := strings.TrimSpace(os.Getenv(envName)); value != "" {
+			p.APIKey = value
+			break
+		}
+	}
+	return p, true
 }

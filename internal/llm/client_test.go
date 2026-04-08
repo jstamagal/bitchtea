@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"testing"
 )
@@ -318,6 +319,108 @@ func TestDebugHookNilByDefault(t *testing.T) {
 	for range events {
 	}
 	// If we get here without panic, the test passes
+}
+
+func TestStreamChatOpenRouterHeaders(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if got := r.Header.Get("HTTP-Referer"); got != "https://github.com/jstamagal/bitchtea" {
+			t.Fatalf("unexpected HTTP-Referer header: %q", got)
+		}
+		if got := r.Header.Get("X-Title"); got != "bitchtea" {
+			t.Fatalf("unexpected X-Title header: %q", got)
+		}
+		if got := r.Header.Get("X-OpenRouter-Title"); got != "bitchtea" {
+			t.Fatalf("unexpected X-OpenRouter-Title header: %q", got)
+		}
+		if got := r.Header.Get("Authorization"); got != "Bearer test-key" {
+			t.Fatalf("unexpected auth header: %q", got)
+		}
+
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.WriteHeader(200)
+		flusher := w.(http.Flusher)
+		fmt.Fprintf(w, "data: %s\n\n", `{"choices":[{"delta":{"content":"ok"},"finish_reason":null}]}`)
+		flusher.Flush()
+		fmt.Fprint(w, "data: [DONE]\n\n")
+		flusher.Flush()
+	}))
+	defer server.Close()
+
+	serverURL := serverURLParts(t, server.URL)
+	client := NewClient("test-key", "https://openrouter.ai/api/v1", "test-model", "openai")
+	client.HTTP = &http.Client{
+		Transport: rewriteHostTransport{
+			targetScheme: serverURL.scheme,
+			targetHost:   serverURL.host,
+			base:         http.DefaultTransport,
+		},
+	}
+
+	events := make(chan StreamEvent, 100)
+	go client.StreamChat(context.Background(), []Message{{Role: "user", Content: "hi"}}, nil, events)
+
+	for ev := range events {
+		if ev.Type == "error" {
+			t.Fatalf("unexpected error: %v", ev.Error)
+		}
+	}
+}
+
+func TestStreamChatOpenAIAllowsMissingAuthorization(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if got := r.Header.Get("Authorization"); got != "" {
+			t.Fatalf("expected no Authorization header, got %q", got)
+		}
+
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.WriteHeader(200)
+		flusher := w.(http.Flusher)
+		fmt.Fprintf(w, "data: %s\n\n", `{"choices":[{"delta":{"content":"ok"},"finish_reason":null}]}`)
+		flusher.Flush()
+		fmt.Fprint(w, "data: [DONE]\n\n")
+		flusher.Flush()
+	}))
+	defer server.Close()
+
+	client := NewClient("", server.URL, "test-model", "openai")
+	events := make(chan StreamEvent, 100)
+	go client.StreamChat(context.Background(), []Message{{Role: "user", Content: "hi"}}, nil, events)
+
+	for ev := range events {
+		if ev.Type == "error" {
+			t.Fatalf("unexpected error: %v", ev.Error)
+		}
+	}
+}
+
+type parsedURLParts struct {
+	scheme string
+	host   string
+}
+
+func serverURLParts(t *testing.T, raw string) parsedURLParts {
+	t.Helper()
+	if raw == "" {
+		return parsedURLParts{}
+	}
+	u, err := url.Parse(raw)
+	if err != nil {
+		t.Fatalf("parse url %q: %v", raw, err)
+	}
+	return parsedURLParts{scheme: u.Scheme, host: u.Host}
+}
+
+type rewriteHostTransport struct {
+	targetScheme string
+	targetHost   string
+	base         http.RoundTripper
+}
+
+func (t rewriteHostTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	clone := req.Clone(req.Context())
+	clone.URL.Scheme = t.targetScheme
+	clone.URL.Host = t.targetHost
+	return t.base.RoundTrip(clone)
 }
 
 func min(a, b int) int {

@@ -65,7 +65,17 @@ func TestProfileSaveLoadDelete(t *testing.T) {
 
 	// List
 	names := ListProfiles()
-	if len(names) != 1 || names[0] != "test-zai" {
+	if len(names) != 5 {
+		t.Fatalf("expected built-ins plus saved profile, got %v", names)
+	}
+	found := false
+	for _, name := range names {
+		if name == "test-zai" {
+			found = true
+			break
+		}
+	}
+	if !found {
 		t.Fatalf("list: %v", names)
 	}
 
@@ -90,8 +100,8 @@ func TestProfileSaveLoadDelete(t *testing.T) {
 		t.Fatalf("delete: %v", err)
 	}
 	names = ListProfiles()
-	if len(names) != 0 {
-		t.Fatalf("expected 0 profiles after delete, got %v", names)
+	if len(names) != 4 {
+		t.Fatalf("expected only built-in profiles after delete, got %v", names)
 	}
 }
 
@@ -104,6 +114,64 @@ func TestLoadProfileNotFound(t *testing.T) {
 	_, err := LoadProfile("nonexistent")
 	if err == nil {
 		t.Fatal("expected error for nonexistent profile")
+	}
+}
+
+func TestResolveBuiltinProfile(t *testing.T) {
+	t.Setenv("OPENROUTER_API_KEY", "openrouter-key")
+
+	p, err := ResolveProfile("openrouter")
+	if err != nil {
+		t.Fatalf("resolve builtin profile: %v", err)
+	}
+	if p.Provider != "openai" {
+		t.Fatalf("expected openai provider, got %q", p.Provider)
+	}
+	if p.BaseURL != "https://openrouter.ai/api/v1" {
+		t.Fatalf("unexpected base URL: %q", p.BaseURL)
+	}
+	if p.APIKey != "openrouter-key" {
+		t.Fatalf("expected env-backed API key, got %q", p.APIKey)
+	}
+	if p.Model == "" {
+		t.Fatal("builtin profile should set a default model")
+	}
+}
+
+func TestListProfilesIncludesBuiltins(t *testing.T) {
+	dir := t.TempDir()
+	origDir := ProfilesDir
+	ProfilesDir = func() string { return dir }
+	defer func() { ProfilesDir = origDir }()
+
+	if err := SaveProfile(Profile{Name: "custom"}); err != nil {
+		t.Fatalf("save custom profile: %v", err)
+	}
+
+	names := ListProfiles()
+	for _, want := range []string{"custom", "ollama", "openrouter", "zai-anthropic", "zai-openai"} {
+		found := false
+		for _, got := range names {
+			if got == want {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Fatalf("expected profile list to contain %q, got %v", want, names)
+		}
+	}
+}
+
+func TestProfileAllowsEmptyAPIKey(t *testing.T) {
+	if !ProfileAllowsEmptyAPIKey(Config{Provider: "openai", BaseURL: "http://localhost:11434/v1"}) {
+		t.Fatal("ollama-compatible localhost endpoint should allow empty API key")
+	}
+	if ProfileAllowsEmptyAPIKey(Config{Provider: "anthropic", BaseURL: "http://localhost:11434/v1"}) {
+		t.Fatal("anthropic transport should still require an API key")
+	}
+	if ProfileAllowsEmptyAPIKey(Config{Provider: "openai", BaseURL: "https://api.openai.com/v1"}) {
+		t.Fatal("hosted openai endpoints should still require an API key")
 	}
 }
 
