@@ -16,6 +16,7 @@ import (
 
 	"github.com/jstamagal/bitchtea/internal/agent"
 	"github.com/jstamagal/bitchtea/internal/config"
+	"github.com/jstamagal/bitchtea/internal/llm"
 	"github.com/jstamagal/bitchtea/internal/session"
 	"github.com/jstamagal/bitchtea/internal/sound"
 )
@@ -72,6 +73,9 @@ type Model struct {
 
 	// Auto-next tracking
 	autoNextPending bool
+
+	// Debug mode - verbose API logging
+	debugMode bool
 }
 
 // NewModel creates the initial model
@@ -765,6 +769,7 @@ func (m Model) handleCommand(input string) (tea.Model, tea.Cmd) {
 				"  /auto-next          Toggle auto-next-steps\n" +
 				"  /auto-idea          Toggle auto-next-idea\n" +
 				"  /theme <name>       Switch color theme\n" +
+				"  /debug on|off       Toggle verbose API logging\n" +
 				"  /sound              Toggle completion bell\n" +
 				"  /quit               Exit\n" +
 				"\n" +
@@ -899,6 +904,37 @@ func (m Model) handleCommand(input string) (tea.Model, tea.Cmd) {
 			status = "ON"
 		}
 		m.sysMsg(fmt.Sprintf("Auto-next-idea: %s", status))
+		return m, nil
+
+	case "/debug":
+		if len(parts) < 2 {
+			status := "OFF"
+			if m.debugMode {
+				status = "ON"
+			}
+			m.sysMsg(fmt.Sprintf("Debug mode: %s. Usage: /debug on|off", status))
+			return m, nil
+		}
+		switch strings.ToLower(parts[1]) {
+		case "on":
+			m.debugMode = true
+			m.agent.SetDebugHook(func(info llm.DebugInfo) {
+				m.addMessage(ChatMessage{
+					Time: time.Now(),
+					Type: MsgSystem,
+					Content: fmt.Sprintf("[DEBUG] %s %s\nRequest Headers: %v\nRequest Body: %s\nResponse Status: %d",
+						info.Method, info.URL, info.RequestHeaders, info.RequestBody, info.StatusCode),
+				})
+				m.refreshViewport()
+			})
+			m.sysMsg("Debug mode: ON")
+		case "off":
+			m.debugMode = false
+			m.agent.SetDebugHook(nil)
+			m.sysMsg("Debug mode: OFF")
+		default:
+			m.errMsg("Usage: /debug on|off")
+		}
 		return m, nil
 
 	case "/sound":
