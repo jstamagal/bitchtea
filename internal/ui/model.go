@@ -686,18 +686,32 @@ func (m Model) View() string {
 
 	// Status bar
 	stateStr := "idle"
+	agentActive := false
 	switch m.agentState {
 	case agent.StateThinking:
 		stateStr = m.spinner.View() + " thinking..."
+		agentActive = true
 	case agent.StateToolCall:
 		stateStr = m.spinner.View() + " running tools..."
+		agentActive = true
 	}
 
 	elapsed := m.agent.Elapsed().Truncate(time.Second)
 	tokens := m.agent.EstimateTokens()
 	tokenStr := formatTokens(tokens)
 
-	statusLeft := BottomBarStyle.Render(fmt.Sprintf(" [%s] %s ", m.config.AgentNick, stateStr))
+	// When agent is active (thinking/tool call), use hardcoded inverted style:
+	// black background with white text, regardless of theme.
+	barStyle := BottomBarStyle
+	if agentActive {
+		barStyle = lipgloss.NewStyle().
+			Bold(true).
+			Foreground(lipgloss.Color("15")). // bright white
+			Background(lipgloss.Color("0")).   // black
+			Padding(0, 1)
+	}
+
+	statusLeft := barStyle.Render(fmt.Sprintf(" [%s] %s ", m.config.AgentNick, stateStr))
 
 	// Tool stats + tokens + elapsed
 	var statsItems []string
@@ -710,12 +724,12 @@ func (m Model) View() string {
 	}
 	statsStr += fmt.Sprintf("~%s tok | %s", tokenStr, elapsed)
 
-	statusRight := BottomBarStyle.Render(fmt.Sprintf(" %s ", statsStr))
+	statusRight := barStyle.Render(fmt.Sprintf(" %s ", statsStr))
 	statusPad := m.width - lipgloss.Width(statusLeft) - lipgloss.Width(statusRight)
 	if statusPad < 0 {
 		statusPad = 0
 	}
-	statusBar := statusLeft + BottomBarStyle.Render(strings.Repeat(" ", statusPad)) + statusRight
+	statusBar := statusLeft + barStyle.Render(strings.Repeat(" ", statusPad)) + statusRight
 
 	// Input
 	inputView := m.input.View()
