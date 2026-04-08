@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"strings"
 )
 
@@ -147,9 +148,9 @@ func (c *Client) streamChatOpenAI(ctx context.Context, messages []Message, tools
 		if err != nil {
 			return false, fmt.Errorf("request: %w", err)
 		}
-		req.Header.Set("Content-Type", "application/json")
-		req.Header.Set("Authorization", "Bearer "+c.APIKey)
-		req.Header.Set("Accept", "text/event-stream")
+		for key, value := range c.openAIHeaders() {
+			req.Header.Set(key, value)
+		}
 
 		resp, err = c.HTTP.Do(req)
 		if err != nil {
@@ -190,10 +191,7 @@ func (c *Client) streamChatOpenAI(ctx context.Context, messages []Message, tools
 
 	// Debug logging
 	if c.DebugHook != nil {
-		headers := make(map[string]string)
-		headers["Content-Type"] = "application/json"
-		headers["Authorization"] = "Bearer [REDACTED]"
-		headers["Accept"] = "text/event-stream"
+		headers := c.debugOpenAIHeaders()
 		c.DebugHook(DebugInfo{
 			Method:         "POST",
 			URL:            c.BaseURL + "/chat/completions",
@@ -312,4 +310,38 @@ func NewClient(apiKey, baseURL, model, provider string) *Client {
 		Provider: provider,
 		HTTP:     &http.Client{},
 	}
+}
+
+func (c *Client) openAIHeaders() map[string]string {
+	headers := map[string]string{
+		"Content-Type": "application/json",
+		"Accept":       "text/event-stream",
+	}
+	if strings.TrimSpace(c.APIKey) != "" {
+		headers["Authorization"] = "Bearer " + c.APIKey
+	}
+	if isOpenRouterBaseURL(c.BaseURL) {
+		headers["HTTP-Referer"] = "https://github.com/jstamagal/bitchtea"
+		headers["X-Title"] = "bitchtea"
+		headers["X-OpenRouter-Title"] = "bitchtea"
+	}
+	return headers
+}
+
+func (c *Client) debugOpenAIHeaders() map[string]string {
+	headers := c.openAIHeaders()
+	if _, ok := headers["Authorization"]; ok {
+		headers["Authorization"] = "Bearer [REDACTED]"
+	}
+	return headers
+}
+
+func isOpenRouterBaseURL(raw string) bool {
+	u, err := url.Parse(raw)
+	if err != nil {
+		return false
+	}
+
+	host := strings.ToLower(u.Hostname())
+	return host == "openrouter.ai" || strings.HasSuffix(host, ".openrouter.ai")
 }

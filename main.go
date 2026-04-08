@@ -36,7 +36,7 @@ func main() {
 
 	// Load profile if specified
 	if opts.profileName != "" {
-		p, err := config.LoadProfile(opts.profileName)
+		p, err := config.ResolveProfile(opts.profileName)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "bitchtea: %v\n", err)
 			os.Exit(1)
@@ -45,9 +45,10 @@ func main() {
 		fmt.Fprintf(os.Stderr, "Loaded profile: %s (provider=%s model=%s)\n", opts.profileName, p.Provider, p.Model)
 	}
 
-	if cfg.APIKey == "" {
+	if cfg.APIKey == "" && !config.ProfileAllowsEmptyAPIKey(cfg) {
 		fmt.Fprintln(os.Stderr, "bitchtea: no API key found")
-		fmt.Fprintln(os.Stderr, "  Set OPENAI_API_KEY or ANTHROPIC_API_KEY environment variable")
+		fmt.Fprintln(os.Stderr, "  Set OPENAI_API_KEY, ANTHROPIC_API_KEY, OPENROUTER_API_KEY, or ZAI_API_KEY")
+		fmt.Fprintln(os.Stderr, "  Or load the local ollama profile if you really mean no auth")
 		fmt.Fprintln(os.Stderr, "  Or are you too cool for authentication?")
 		os.Exit(1)
 	}
@@ -257,7 +258,7 @@ Usage: bitchtea [flags]
 
 Flags:
   -m, --model <name>     Model to use (default: gpt-4o)
-  -p, --profile <name>   Load a saved connection profile
+  -p, --profile <name>   Load a saved or built-in profile (ollama, openrouter, zai-openai, zai-anthropic)
   -r, --resume [path]    Resume session (latest if no path given)
   -H, --headless         Run once without the TUI
   --prompt <text>        Prompt to send in headless mode
@@ -269,6 +270,8 @@ Environment:
   OPENAI_API_KEY         OpenAI API key
   OPENAI_BASE_URL        OpenAI-compatible base URL
   ANTHROPIC_API_KEY      Anthropic API key
+  OPENROUTER_API_KEY     OpenRouter API key for the openrouter profile
+  ZAI_API_KEY            Z.ai API key for the zai-* profiles
   BITCHTEA_MODEL         Default model
   BITCHTEA_PROVIDER      Provider name (openai, anthropic)
 

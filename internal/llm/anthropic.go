@@ -174,9 +174,9 @@ func (c *Client) StreamChatAnthropic(ctx context.Context, messages []Message, to
 		if err != nil {
 			return false, fmt.Errorf("request: %w", err)
 		}
-		req.Header.Set("Content-Type", "application/json")
-		req.Header.Set("x-api-key", c.APIKey)
-		req.Header.Set("anthropic-version", "2023-06-01")
+		for key, value := range c.anthropicHeaders() {
+			req.Header.Set(key, value)
+		}
 
 		resp, err = c.HTTP.Do(req)
 		if err != nil {
@@ -217,10 +217,7 @@ func (c *Client) StreamChatAnthropic(ctx context.Context, messages []Message, to
 
 	// Debug logging
 	if c.DebugHook != nil {
-		headers := make(map[string]string)
-		headers["Content-Type"] = "application/json"
-		headers["x-api-key"] = "[REDACTED]"
-		headers["anthropic-version"] = "2023-06-01"
+		headers := c.debugAnthropicHeaders()
 		c.DebugHook(DebugInfo{
 			Method:         "POST",
 			URL:            apiURL,
@@ -356,6 +353,29 @@ func (c *Client) StreamChatAnthropic(ctx context.Context, messages []Message, to
 	if err := scanner.Err(); err != nil {
 		events <- StreamEvent{Type: "error", Error: fmt.Errorf("stream: %w", err)}
 	}
+}
+
+func (c *Client) anthropicHeaders() map[string]string {
+	headers := map[string]string{
+		"Content-Type":      "application/json",
+		"anthropic-version": "2023-06-01",
+	}
+	if strings.TrimSpace(c.APIKey) != "" {
+		headers["x-api-key"] = c.APIKey
+		headers["Authorization"] = "Bearer " + c.APIKey
+	}
+	return headers
+}
+
+func (c *Client) debugAnthropicHeaders() map[string]string {
+	headers := c.anthropicHeaders()
+	if _, ok := headers["x-api-key"]; ok {
+		headers["x-api-key"] = "[REDACTED]"
+	}
+	if _, ok := headers["Authorization"]; ok {
+		headers["Authorization"] = "Bearer [REDACTED]"
+	}
+	return headers
 }
 
 // ensureAlternating ensures messages alternate between user and assistant.

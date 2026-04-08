@@ -808,10 +808,10 @@ func (m Model) handleCommand(input string) (tea.Model, tea.Cmd) {
 			Type: MsgSystem,
 			Content: "Commands:\n" +
 				"  /model <name>       Switch LLM model\n" +
-				"  /provider <name>    Set provider (openai, anthropic)\n" +
+				"  /provider <name>    Set provider transport (openai, anthropic)\n" +
 				"  /baseurl <url>      Set API base URL\n" +
 				"  /apikey <key>       Set API key\n" +
-				"  /profile [cmd]      save/load/delete named profiles\n" +
+				"  /profile [cmd]      save/load/delete profiles (built-ins: ollama, openrouter, zai-openai, zai-anthropic)\n" +
 				"  /compact            Compact conversation context\n" +
 				"  /clear              Clear chat display\n" +
 				"  /diff               Show git diff\n" +
@@ -1197,14 +1197,9 @@ func (m Model) handleCommand(input string) (tea.Model, tea.Cmd) {
 
 	case "/profile":
 		if len(parts) < 2 {
-			// List profiles
 			names := config.ListProfiles()
-			if len(names) == 0 {
-				m.sysMsg("No saved profiles.\nUsage: /profile save <name> | /profile load <name> | /profile delete <name>")
-			} else {
-				m.sysMsg("Profiles: " + strings.Join(names, ", ") +
-					"\nUsage: /profile save <name> | /profile load <name> | /profile delete <name>")
-			}
+			m.sysMsg("Profiles: " + strings.Join(names, ", ") +
+				"\nUsage: /profile save <name> | /profile load <name> | /profile delete <name>")
 			return m, nil
 		}
 
@@ -1235,7 +1230,7 @@ func (m Model) handleCommand(input string) (tea.Model, tea.Cmd) {
 				return m, nil
 			}
 			name := parts[2]
-			p, err := config.LoadProfile(name)
+			p, err := config.ResolveProfile(name)
 			if err != nil {
 				m.errMsg(fmt.Sprintf("Load failed: %v", err))
 				return m, nil
@@ -1266,7 +1261,7 @@ func (m Model) handleCommand(input string) (tea.Model, tea.Cmd) {
 
 		default:
 			// Treat as shorthand for /profile load <name>
-			p, err := config.LoadProfile(action)
+			p, err := config.ResolveProfile(action)
 			if err != nil {
 				m.errMsg(fmt.Sprintf("Unknown profile action or profile not found: %s", action))
 				return m, nil

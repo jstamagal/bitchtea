@@ -54,6 +54,17 @@ bitchtea
 
 `bitchtea` auto-detects the configured provider, opens the TUI, and starts streaming once you send a prompt.
 
+Built-in provider profiles are available too:
+
+```bash
+bitchtea --profile ollama
+bitchtea --profile openrouter
+bitchtea --profile zai-openai
+bitchtea --profile zai-anthropic
+```
+
+`ollama` targets `http://localhost:11434/v1` with no API key. `openrouter` reads `OPENROUTER_API_KEY`. The `zai-*` profiles read `ZAI_API_KEY`, with `zai-openai` pointed at the Coding Plan endpoint `https://api.z.ai/api/coding/paas/v4`.
+
 ## Usage
 
 ```text
@@ -61,7 +72,7 @@ bitchtea [flags]
 
 Flags:
   -m, --model <name>     Model to use
-  -p, --profile <name>   Load a saved connection profile
+  -p, --profile <name>   Load a saved or built-in profile
   -r, --resume [path]    Resume a session (latest if no path)
   --auto-next-steps      Keep the agent working after each turn
   --auto-next-idea       Brainstorm improvements after auto-next completes
@@ -74,6 +85,8 @@ Environment:
 OPENAI_API_KEY         OpenAI API key
 OPENAI_BASE_URL        OpenAI-compatible base URL
 ANTHROPIC_API_KEY      Anthropic API key
+OPENROUTER_API_KEY     OpenRouter API key for the openrouter profile
+ZAI_API_KEY            Z.ai API key for the zai-* profiles
 BITCHTEA_MODEL         Default model override
 BITCHTEA_PROVIDER      Force provider (openai, anthropic)
 ```
@@ -94,7 +107,7 @@ BITCHTEA_PROVIDER      Force provider (openai, anthropic)
 | `/provider <name>` | Switch provider |
 | `/baseurl <url>` | Set API base URL |
 | `/apikey <key>` | Set API key |
-| `/profile save\|load\|delete <name>` | Manage connection profiles |
+| `/profile save\|load\|delete <name>` | Manage saved profiles and load built-ins like `ollama`, `openrouter`, `zai-openai`, and `zai-anthropic` |
 | `/compact` | Compact conversation context |
 | `/clear` | Clear chat display |
 | `/diff` | Show git diff |
