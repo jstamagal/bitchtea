@@ -760,6 +760,7 @@ func (m Model) handleCommand(input string) (tea.Model, tea.Cmd) {
 				"  /diff               Show git diff\n" +
 				"  /undo               Undo last git change\n" +
 				"  /commit [msg]       Git commit\n" +
+				"  /copy [n]           Copy last or nth assistant response\n" +
 				"  /status             Git status\n" +
 				"  /tokens             Token usage estimate\n" +
 				"  /memory             Show MEMORY.md contents\n" +
@@ -878,6 +879,24 @@ func (m Model) handleCommand(input string) (tea.Model, tea.Cmd) {
 		runGit(m.config.WorkDir, "add", "-A")
 		output := runGit(m.config.WorkDir, "commit", "-m", msg)
 		m.sysMsg("Committed: " + output)
+		return m, nil
+
+	case "/copy":
+		selection := 0
+		if len(parts) > 1 {
+			n, err := parseCopyIndex(parts[1])
+			if err != nil {
+				m.errMsg(err.Error())
+				return m, nil
+			}
+			selection = n
+		}
+		target, copied, err := m.copyAssistantMessage(selection)
+		if err != nil {
+			m.errMsg(err.Error())
+			return m, nil
+		}
+		m.sysMsg(fmt.Sprintf("Copied %s via %s.", target, copied))
 		return m, nil
 
 	case "/tokens":
