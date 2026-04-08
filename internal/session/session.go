@@ -17,6 +17,7 @@ type Entry struct {
 	Timestamp  time.Time      `json:"ts"`
 	Role       string         `json:"role"` // user, assistant, system, tool
 	Content    string         `json:"content"`
+	Bootstrap  bool           `json:"bootstrap,omitempty"`
 	ToolName   string         `json:"tool_name,omitempty"`
 	ToolArgs   string         `json:"tool_args,omitempty"`
 	ToolCallID string         `json:"tool_call_id,omitempty"`
@@ -244,12 +245,32 @@ func Latest(dir string) string {
 
 // EntryFromMessage converts an in-memory LLM message into a session entry.
 func EntryFromMessage(msg llm.Message) Entry {
+	return EntryFromMessageWithBootstrap(msg, false)
+}
+
+// EntryFromMessageWithBootstrap converts an in-memory LLM message into a
+// session entry and marks whether it came from startup/bootstrap injection.
+func EntryFromMessageWithBootstrap(msg llm.Message, bootstrap bool) Entry {
 	return Entry{
+		Bootstrap:  bootstrap,
 		Role:       msg.Role,
 		Content:    msg.Content,
 		ToolCallID: msg.ToolCallID,
 		ToolCalls:  append([]llm.ToolCall(nil), msg.ToolCalls...),
 	}
+}
+
+// DisplayEntries filters out internal bootstrap-only messages from the
+// user-visible transcript while leaving replay history untouched.
+func DisplayEntries(entries []Entry) []Entry {
+	display := make([]Entry, 0, len(entries))
+	for _, e := range entries {
+		if e.Bootstrap {
+			continue
+		}
+		display = append(display, e)
+	}
+	return display
 }
 
 // MessagesFromEntries reconstructs LLM message history from session entries.

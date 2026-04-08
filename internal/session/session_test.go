@@ -1,6 +1,7 @@
 package session
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
@@ -335,6 +336,46 @@ func TestMessageRoundTripWithToolMetadata(t *testing.T) {
 	}
 	if roundTrip[1].ToolCallID != "call_123" {
 		t.Fatalf("expected tool call id to survive round trip, got %q", roundTrip[1].ToolCallID)
+	}
+}
+
+func TestEntryBootstrapRoundTrip(t *testing.T) {
+	entry := EntryFromMessageWithBootstrap(llm.Message{
+		Role:    "assistant",
+		Content: "internal ack",
+	}, true)
+
+	data, err := json.Marshal(entry)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+
+	var decoded Entry
+	if err := json.Unmarshal(data, &decoded); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+
+	if !decoded.Bootstrap {
+		t.Fatal("expected bootstrap flag to survive json round trip")
+	}
+	if decoded.Content != "internal ack" {
+		t.Fatalf("expected content to survive round trip, got %q", decoded.Content)
+	}
+}
+
+func TestDisplayEntriesFiltersBootstrapEntries(t *testing.T) {
+	display := DisplayEntries([]Entry{
+		{Role: "system", Content: "prompt", Bootstrap: true},
+		{Role: "user", Content: "hello"},
+		{Role: "assistant", Content: "world"},
+		{Role: "assistant", Content: "hidden ack", Bootstrap: true},
+	})
+
+	if len(display) != 2 {
+		t.Fatalf("expected 2 display entries, got %d", len(display))
+	}
+	if display[0].Role != "user" || display[1].Role != "assistant" {
+		t.Fatalf("unexpected display entries: %+v", display)
 	}
 }
 

@@ -43,6 +43,8 @@ type Agent struct {
 	config   *config.Config
 	messages []llm.Message
 
+	bootstrapMsgCount int
+
 	// Stats
 	TurnCount   int
 	ToolCalls   map[string]int // tool name -> call count
@@ -103,6 +105,8 @@ func NewAgentWithStreamer(cfg *config.Config, streamer llm.ChatStreamer) *Agent 
 			Content: "Noted. I'll use this context going forward.",
 		})
 	}
+
+	a.bootstrapMsgCount = len(a.messages)
 
 	return a
 }
@@ -377,6 +381,12 @@ func (a *Agent) Messages() []llm.Message {
 	return a.messages
 }
 
+// BootstrapMessageCount returns how many startup-injected messages should be
+// hidden from the normal transcript when persisted.
+func (a *Agent) BootstrapMessageCount() int {
+	return a.bootstrapMsgCount
+}
+
 // RestoreMessages replaces the current message history with a prior session.
 // It resets session-local stats so that counters and timing start fresh.
 func (a *Agent) RestoreMessages(messages []llm.Message) {
@@ -389,6 +399,7 @@ func (a *Agent) RestoreMessages(messages []llm.Message) {
 	}
 
 	// Reset session-local stats so resume starts with clean counters
+	a.bootstrapMsgCount = 0
 	a.TurnCount = 0
 	a.ToolCalls = make(map[string]int)
 	a.CostTracker = llm.NewCostTracker()

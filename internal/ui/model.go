@@ -138,7 +138,7 @@ func (m *Model) ResumeSession(sess *session.Session) {
 		}
 	}
 
-	for _, e := range sess.Entries {
+	for _, e := range session.DisplayEntries(sess.Entries) {
 		var msgType MsgType
 		nick := ""
 		switch e.Role {
@@ -446,7 +446,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.session != nil {
 			msgs := m.agent.Messages()
 			for i := m.lastSavedMsgIdx; i < len(msgs); i++ {
-				_ = m.session.Append(session.EntryFromMessage(msgs[i]))
+				_ = m.session.Append(session.EntryFromMessageWithBootstrap(
+					msgs[i],
+					i < m.agent.BootstrapMessageCount(),
+				))
 			}
 			m.lastSavedMsgIdx = len(msgs)
 		}

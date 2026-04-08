@@ -138,6 +138,36 @@ func TestResumeSessionRestoresAgentMessagesAndToolNick(t *testing.T) {
 	}
 }
 
+func TestResumeSessionHidesBootstrapEntriesFromDisplay(t *testing.T) {
+	cfg := config.DefaultConfig()
+	cfg.WorkDir = t.TempDir()
+	cfg.SessionDir = t.TempDir()
+
+	model := NewModel(&cfg)
+	sess := &session.Session{
+		Path: "resume.jsonl",
+		Entries: []session.Entry{
+			{Role: "system", Content: "system prompt", Bootstrap: true},
+			{Role: "user", Content: "bootstrap context", Bootstrap: true},
+			{Role: "assistant", Content: "bootstrap ack", Bootstrap: true},
+			{Role: "user", Content: "real user turn"},
+			{Role: "assistant", Content: "real reply"},
+		},
+	}
+
+	model.ResumeSession(sess)
+
+	if got := len(model.agent.Messages()); got != len(sess.Entries) {
+		t.Fatalf("expected %d restored agent messages, got %d", len(sess.Entries), got)
+	}
+	if got := len(model.messages); got != 2 {
+		t.Fatalf("expected 2 displayed messages, got %d", got)
+	}
+	if model.messages[0].Content != "real user turn" {
+		t.Fatalf("expected first displayed message to be real user turn, got %q", model.messages[0].Content)
+	}
+}
+
 func TestThemeCommandInvalidTheme(t *testing.T) {
 	defer SetTheme("bitchx")
 
