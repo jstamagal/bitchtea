@@ -600,6 +600,17 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 func (m *Model) handleAgentEvent(ev agent.Event) (tea.Model, tea.Cmd) {
 	switch ev.Type {
 	case "text":
+		// If the thinking placeholder is still showing, replace it with a
+		// real streaming agent message before writing the first token.
+		if len(m.messages) > 0 && m.messages[len(m.messages)-1].Type == MsgThink {
+			m.messages[len(m.messages)-1] = ChatMessage{
+				Time:    m.messages[len(m.messages)-1].Time,
+				Type:    MsgAgent,
+				Nick:    m.config.AgentNick,
+				Content: "",
+				Context: m.focus.Active(),
+			}
+		}
 		m.streamBuffer.WriteString(ev.Text)
 		// Update the last agent message in-place for streaming effect
 		m.updateStreamingMessage()
@@ -648,14 +659,15 @@ func (m *Model) handleAgentEvent(ev agent.Event) (tea.Model, tea.Cmd) {
 	case "state":
 		m.agentState = ev.State
 		if ev.State == agent.StateThinking {
-			// Start a new streaming message
+			// Show a styled thinking placeholder in the scroll buffer.
+			// It will be replaced with MsgAgent once the first token arrives.
 			m.streamBuffer.Reset()
 			m.addMessage(ChatMessage{
 				Time:    time.Now(),
-				Type:    MsgAgent,
-				Nick:    m.config.AgentNick,
-				Content: "",
+				Type:    MsgThink,
+				Content: "thinking...",
 			})
+			m.refreshViewport()
 		}
 
 	case "error":
