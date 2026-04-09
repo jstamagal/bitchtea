@@ -42,7 +42,9 @@ func main() {
 			os.Exit(1)
 		}
 		config.ApplyProfile(&cfg, p)
-		fmt.Fprintf(os.Stderr, "Loaded profile: %s (provider=%s model=%s)\n", opts.profileName, p.Provider, p.Model)
+		// Re-parse args so explicit flags override profile defaults
+		_, _ = parseCLIArgs(os.Args[1:], &cfg)
+		fmt.Fprintf(os.Stderr, "Loaded profile: %s (provider=%s model=%s)\n", opts.profileName, cfg.Provider, cfg.Model)
 	}
 
 	if cfg.APIKey == "" && !config.ProfileAllowsEmptyAPIKey(cfg) {
