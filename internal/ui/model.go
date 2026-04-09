@@ -16,6 +16,7 @@ import (
 
 	"github.com/jstamagal/bitchtea/internal/agent"
 	"github.com/jstamagal/bitchtea/internal/config"
+	"github.com/jstamagal/bitchtea/internal/llm"
 	"github.com/jstamagal/bitchtea/internal/session"
 	"github.com/jstamagal/bitchtea/internal/sound"
 )
@@ -643,10 +644,14 @@ func (m *Model) handleAgentEvent(ev agent.Event) (tea.Model, tea.Cmd) {
 		}
 
 	case "error":
+		errText := fmt.Sprintf("Error: %v", ev.Error)
+		if hint := llm.ErrorHint(ev.Error); hint != "" {
+			errText += "\n  hint: " + hint
+		}
 		m.addMessage(ChatMessage{
 			Time:    time.Now(),
 			Type:    MsgError,
-			Content: fmt.Sprintf("Error: %v", ev.Error),
+			Content: errText,
 		})
 		m.refreshViewport()
 
