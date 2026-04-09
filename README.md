@@ -54,6 +54,15 @@ bitchtea
 
 `bitchtea` auto-detects the configured provider, opens the TUI, and starts streaming once you send a prompt.
 
+For non-interactive runs:
+
+```bash
+bitchtea --headless --prompt "summarize this repo"
+git diff --stat | bitchtea --headless --prompt "review these changes"
+```
+
+`--headless` runs a single prompt without starting the TUI. It requires `--prompt`, piped stdin, or both. If both are present, bitchtea concatenates them before sending the request.
+
 Built-in provider profiles are available too:
 
 ```bash
@@ -74,6 +83,8 @@ Flags:
   -m, --model <name>     Model to use
   -p, --profile <name>   Load a saved or built-in profile
   -r, --resume [path]    Resume a session (latest if no path)
+  -H, --headless         Run once without the TUI
+  --prompt <text>        Prompt to send in headless mode
   --auto-next-steps      Keep the agent working after each turn
   --auto-next-idea       Brainstorm improvements after auto-next completes
   -h, --help             Show help
@@ -101,31 +112,31 @@ BITCHTEA_PROVIDER      Force provider (openai, anthropic)
 
 ## Commands
 
-| Command | What it does |
-|---|---|
-| `/model <name>` | Switch model |
-| `/provider <name>` | Switch provider |
-| `/baseurl <url>` | Set API base URL |
-| `/apikey <key>` | Set API key |
-| `/profile save\|load\|delete <name>` | Manage saved profiles and load built-ins like `ollama`, `openrouter`, `zai-openai`, and `zai-anthropic` |
-| `/compact` | Compact conversation context |
-| `/clear` | Clear chat display |
-| `/diff` | Show git diff |
-| `/status` | Git status |
-| `/undo` | Revert unstaged changes |
-| `/commit [msg]` | Git commit |
-| `/copy` | Copy the last assistant message |
-| `/tokens` | Show token usage estimate |
-| `/memory` | Show `MEMORY.md` from the current workspace |
-| `/sessions` | List saved sessions |
-| `/tree` | Show session tree |
-| `/fork` | Fork the current session |
-| `/auto-next` | Toggle auto-next-steps |
-| `/auto-idea` | Toggle auto-next-idea |
-| `/sound` | Toggle completion bell |
-| `/mp3 [rescan\|play\|pause\|next\|prev]` | Toggle the MP3 panel and control playback from `~/.bitchtea/mp3` |
-| `/help` | Show help |
-| `/quit` | Exit |
+| Command | Behavior | Risk profile |
+|---|---|---|
+| `/model <name>` | Switch model | Safe |
+| `/provider <name>` | Switch provider | Safe |
+| `/baseurl <url>` | Set API base URL | Safe |
+| `/apikey <key>` | Set API key | Safe |
+| `/profile save\|load\|delete <name>` | Manage saved profiles and load built-ins like `ollama`, `openrouter`, `zai-openai`, and `zai-anthropic` | Safe |
+| `/compact` | Compact conversation context | Moderate: rewrites in-memory context |
+| `/clear` | Clear chat display | Safe |
+| `/diff` | Show git diff | Safe |
+| `/status` | Show git status | Safe |
+| `/undo` | Preview tracked-file revert; use `/undo confirm` to restore all unstaged tracked files or `/undo <file>` to restore one tracked file | Destructive after preview |
+| `/commit [msg]` | Preview git state with no message, or commit tracked changes only with `git add -u` when a message is provided | Persistent: writes a git commit |
+| `/copy` | Copy the last assistant message | Safe |
+| `/tokens` | Show token usage estimate | Safe |
+| `/memory` | Show `MEMORY.md` from the current workspace | Safe |
+| `/sessions` | List saved sessions | Safe |
+| `/tree` | Show session tree | Safe |
+| `/fork` | Fork the current session | Safe |
+| `/auto-next` | Toggle auto-next-steps | Moderate: changes turn behavior |
+| `/auto-idea` | Toggle auto-next-idea | Moderate: changes turn behavior |
+| `/sound` | Toggle completion bell | Safe |
+| `/mp3 [rescan\|play\|pause\|next\|prev]` | Toggle the MP3 panel and control playback from `~/.bitchtea/mp3` | Safe |
+| `/help` | Show help | Safe |
+| `/quit` | Exit | Safe |
 
 ## Keybindings
 
