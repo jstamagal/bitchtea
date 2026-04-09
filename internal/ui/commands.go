@@ -600,6 +600,15 @@ func handleProfileCommand(m Model, _ string, parts []string) (Model, tea.Cmd) {
 
 func applyProfileToModel(m *Model, name string, p *config.Profile, verbose bool) {
 	config.ApplyProfile(m.config, p)
+	m.config.Profile = name
+
+	if verbose {
+		m.sysMsg(fmt.Sprintf("*** Profile loaded: %s (provider=%s model=%s)", name, p.Provider, p.Model))
+	} else {
+		m.sysMsg(fmt.Sprintf("*** Profile loaded: %s\n  provider=%s model=%s\n  baseurl=%s\n  apikey=%s",
+			name, p.Provider, p.Model, p.BaseURL, p.APIKey))
+	}
+
 	m.agent.SetModel(p.Model)
 	m.agent.SetBaseURL(p.BaseURL)
 	m.agent.SetAPIKey(p.APIKey)
