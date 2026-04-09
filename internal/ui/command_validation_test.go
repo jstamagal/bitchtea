@@ -328,6 +328,170 @@ func nowForTests() time.Time {
 	return time.Date(2026, 4, 8, 13, 37, 0, 0, time.UTC)
 }
 
+// --- IRC routing commands (Phase 1b) ---
+
+func TestJoinCommand(t *testing.T) {
+	t.Run("switches focus to new channel", func(t *testing.T) {
+		m := newTestModel(t)
+		result, _ := m.handleCommand("/join #ops")
+		model := result.(Model)
+		if model.focus.ActiveLabel() != "#ops" {
+			t.Errorf("focus = %q, want #ops", model.focus.ActiveLabel())
+		}
+		msg := lastMsg(result)
+		if msg.Type != MsgSystem || !strings.Contains(msg.Content, "#ops") {
+			t.Errorf("unexpected message: type=%v content=%q", msg.Type, msg.Content)
+		}
+	})
+
+	t.Run("strips leading hash from argument", func(t *testing.T) {
+		m := newTestModel(t)
+		result, _ := m.handleCommand("/join general")
+		model := result.(Model)
+		if model.focus.ActiveLabel() != "#general" {
+			t.Errorf("focus = %q, want #general", model.focus.ActiveLabel())
+		}
+	})
+
+	t.Run("no arg shows error", func(t *testing.T) {
+		m := newTestModel(t)
+		result, _ := m.handleCommand("/join")
+		msg := lastMsg(result)
+		if msg.Type != MsgError || !strings.Contains(msg.Content, "Usage: /join") {
+			t.Errorf("expected usage error, got type=%v content=%q", msg.Type, msg.Content)
+		}
+	})
+
+	t.Run("focus unchanged on error", func(t *testing.T) {
+		m := newTestModel(t)
+		m.handleCommand("/join")
+		if m.focus.ActiveLabel() != "#main" {
+			t.Errorf("focus mutated on error: %q", m.focus.ActiveLabel())
+		}
+	})
+}
+
+func TestPartCommand(t *testing.T) {
+	t.Run("parts named channel", func(t *testing.T) {
+		m := newTestModel(t)
+		m.focus.SetFocus(Channel("ops"))
+		result, _ := m.handleCommand("/part #ops")
+		model := result.(Model)
+		// #ops removed; focus should fall back to #main
+		if model.focus.ActiveLabel() != "#main" {
+			t.Errorf("focus = %q, want #main", model.focus.ActiveLabel())
+		}
+		msg := lastMsg(result)
+		if msg.Type != MsgSystem || !strings.Contains(msg.Content, "#ops") {
+			t.Errorf("unexpected message: type=%v content=%q", msg.Type, msg.Content)
+		}
+	})
+
+	t.Run("parts current context when no arg", func(t *testing.T) {
+		m := newTestModel(t)
+		m.focus.SetFocus(Channel("ops"))
+		result, _ := m.handleCommand("/part")
+		model := result.(Model)
+		if model.focus.ActiveLabel() != "#main" {
+			t.Errorf("focus = %q, want #main", model.focus.ActiveLabel())
+		}
+	})
+
+	t.Run("refuses to part last context", func(t *testing.T) {
+		m := newTestModel(t)
+		result, _ := m.handleCommand("/part")
+		msg := lastMsg(result)
+		if msg.Type != MsgError || !strings.Contains(msg.Content, "last context") {
+			t.Errorf("expected last-context error, got type=%v content=%q", msg.Type, msg.Content)
+		}
+	})
+
+	t.Run("error when channel not known", func(t *testing.T) {
+		m := newTestModel(t)
+		m.focus.SetFocus(Channel("ops")) // ensure two contexts exist
+		result, _ := m.handleCommand("/part #nonexistent")
+		msg := lastMsg(result)
+		if msg.Type != MsgError {
+			t.Errorf("expected error, got type=%v content=%q", msg.Type, msg.Content)
+		}
+	})
+}
+
+func TestQueryCommand(t *testing.T) {
+	t.Run("switches focus to direct context", func(t *testing.T) {
+		m := newTestModel(t)
+		result, _ := m.handleCommand("/query coding-buddy")
+		model := result.(Model)
+		if model.focus.ActiveLabel() != "coding-buddy" {
+			t.Errorf("focus = %q, want coding-buddy", model.focus.ActiveLabel())
+		}
+		if model.focus.Active().Kind != KindDirect {
+			t.Errorf("context kind = %v, want KindDirect", model.focus.Active().Kind)
+		}
+	})
+
+	t.Run("no arg shows error", func(t *testing.T) {
+		m := newTestModel(t)
+		result, _ := m.handleCommand("/query")
+		msg := lastMsg(result)
+		if msg.Type != MsgError || !strings.Contains(msg.Content, "Usage: /query") {
+			t.Errorf("expected usage error, got type=%v content=%q", msg.Type, msg.Content)
+		}
+	})
+
+	t.Run("focus unchanged on error", func(t *testing.T) {
+		m := newTestModel(t)
+		m.handleCommand("/query")
+		if m.focus.ActiveLabel() != "#main" {
+			t.Errorf("focus mutated: %q", m.focus.ActiveLabel())
+		}
+	})
+}
+
+func TestMsgCommand(t *testing.T) {
+	t.Run("does not change focus", func(t *testing.T) {
+		m := newTestModel(t)
+		before := m.focus.ActiveLabel()
+		m.handleCommand("/msg coding-buddy hello there")
+		if m.focus.ActiveLabel() != before {
+			t.Errorf("focus changed from %q to %q", before, m.focus.ActiveLabel())
+		}
+	})
+
+	t.Run("adds user message with arrow prefix", func(t *testing.T) {
+		m := newTestModel(t)
+		result, _ := m.handleCommand("/msg coding-buddy hello there")
+		msg := lastMsg(result)
+		if msg.Type != MsgUser {
+			t.Errorf("expected MsgUser, got %v", msg.Type)
+		}
+		if !strings.Contains(msg.Content, "→coding-buddy:") {
+			t.Errorf("expected arrow prefix, got %q", msg.Content)
+		}
+		if !strings.Contains(msg.Content, "hello there") {
+			t.Errorf("expected text in message, got %q", msg.Content)
+		}
+	})
+
+	t.Run("no arg shows error", func(t *testing.T) {
+		m := newTestModel(t)
+		result, _ := m.handleCommand("/msg")
+		msg := lastMsg(result)
+		if msg.Type != MsgError || !strings.Contains(msg.Content, "Usage: /msg") {
+			t.Errorf("expected usage error, got type=%v content=%q", msg.Type, msg.Content)
+		}
+	})
+
+	t.Run("nick only shows error", func(t *testing.T) {
+		m := newTestModel(t)
+		result, _ := m.handleCommand("/msg coding-buddy")
+		msg := lastMsg(result)
+		if msg.Type != MsgError || !strings.Contains(msg.Content, "Usage: /msg") {
+			t.Errorf("expected usage error, got type=%v content=%q", msg.Type, msg.Content)
+		}
+	})
+}
+
 func TestDebugStatusShowsCurrent(t *testing.T) {
 	m := newTestModel(t)
 

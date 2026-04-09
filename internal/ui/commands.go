@@ -49,6 +49,11 @@ var slashCommandRegistry = registerSlashCommands(
 	slashCommandSpec{names: []string{"/apikey"}, handler: handleAPIKeyCommand},
 	slashCommandSpec{names: []string{"/provider"}, handler: handleProviderCommand},
 	slashCommandSpec{names: []string{"/profile"}, handler: handleProfileCommand},
+	// IRC routing commands (Phase 1b)
+	slashCommandSpec{names: []string{"/join"}, handler: handleJoinCommand},
+	slashCommandSpec{names: []string{"/part"}, handler: handlePartCommand},
+	slashCommandSpec{names: []string{"/query"}, handler: handleQueryCommand},
+	slashCommandSpec{names: []string{"/msg"}, handler: handleMsgCommand},
 )
 
 func registerSlashCommands(specs ...slashCommandSpec) map[string]slashCommandHandler {
@@ -67,6 +72,10 @@ func lookupSlashCommand(name string) (slashCommandHandler, bool) {
 }
 
 const helpCommandText = "Commands:\n" +
+	"  /join <#channel>    Switch focus to channel (creates if new)\n" +
+	"  /part [#channel]    Leave context (default: current)\n" +
+	"  /query <nick>       Route Enter persistently to nick\n" +
+	"  /msg <nick> <text>  One-shot send to nick, no focus change\n" +
 	"  /model <name>       Switch LLM model\n" +
 	"  /provider <name>    Set provider transport (openai, anthropic)\n" +
 	"  /baseurl <url>      Set API base URL\n" +
@@ -596,6 +605,77 @@ func handleProfileCommand(m Model, _ string, parts []string) (Model, tea.Cmd) {
 		applyProfileToModel(&m, action, p, false)
 	}
 	return m, nil
+}
+
+// --- IRC routing commands (Phase 1b) ---
+
+func handleJoinCommand(m Model, _ string, parts []string) (Model, tea.Cmd) {
+	if len(parts) < 2 {
+		m.errMsg("Usage: /join <#channel>")
+		return m, nil
+	}
+	ctx := Channel(parts[1])
+	m.focus.SetFocus(ctx)
+	m.sysMsg(fmt.Sprintf("*** Now in %s", ctx.Label()))
+	return m, nil
+}
+
+func handlePartCommand(m Model, _ string, parts []string) (Model, tea.Cmd) {
+	var ctx IRCContext
+	if len(parts) >= 2 {
+		ctx = Channel(parts[1])
+	} else {
+		ctx = m.focus.Active()
+	}
+	label := ctx.Label()
+	if !m.focus.Remove(ctx) {
+		if len(m.focus.All()) <= 1 {
+			m.errMsg("Can't part the last context.")
+		} else {
+			m.errMsg(fmt.Sprintf("Not in %s.", label))
+		}
+		return m, nil
+	}
+	m.sysMsg(fmt.Sprintf("*** Parted %s — now in %s", label, m.focus.ActiveLabel()))
+	return m, nil
+}
+
+func handleQueryCommand(m Model, _ string, parts []string) (Model, tea.Cmd) {
+	if len(parts) < 2 {
+		m.errMsg("Usage: /query <nick>")
+		return m, nil
+	}
+	ctx := Direct(parts[1])
+	m.focus.SetFocus(ctx)
+	m.sysMsg(fmt.Sprintf("*** Routing Enter to %s", ctx.Label()))
+	return m, nil
+}
+
+func handleMsgCommand(m Model, input string, parts []string) (Model, tea.Cmd) {
+	if len(parts) < 3 {
+		m.errMsg("Usage: /msg <nick> <text>")
+		return m, nil
+	}
+	nick := parts[1]
+	prefix := parts[0] + " " + parts[1] + " "
+	text := strings.TrimSpace(strings.TrimPrefix(input, prefix))
+	if text == "" {
+		m.errMsg("Usage: /msg <nick> <text>")
+		return m, nil
+	}
+	if m.streaming {
+		m.queued = append(m.queued, fmt.Sprintf("[to:%s] %s", nick, text))
+		m.sysMsg(fmt.Sprintf("Queued /msg to %s (agent busy).", nick))
+		return m, nil
+	}
+	m.addMessage(ChatMessage{
+		Time:    time.Now(),
+		Type:    MsgUser,
+		Nick:    m.config.UserNick,
+		Content: fmt.Sprintf("→%s: %s", nick, text),
+	})
+	m.refreshViewport()
+	return m, m.sendToAgent(fmt.Sprintf("[to:%s] %s", nick, text))
 }
 
 func applyProfileToModel(m *Model, name string, p *config.Profile, verbose bool) {

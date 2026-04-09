@@ -381,7 +381,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.history = append(m.history, input)
 			m.historyIdx = len(m.history)
 
-			// Handle slash commands
+			// Slash commands always work regardless of focus.
 			if strings.HasPrefix(input, "/") {
 				return m.handleCommand(input)
 			}
@@ -398,16 +398,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m, nil
 			}
 
-			// Send to agent
-			m.addMessage(ChatMessage{
-				Time:    time.Now(),
-				Type:    MsgUser,
-				Nick:    m.config.UserNick,
-				Content: input,
-			})
-			m.refreshViewport()
-
-			return m, m.sendToAgent(input)
+			// Route Enter to the current focus.
+			return m.routeMessage(input)
 
 		case "ctrl+p":
 			// History up
@@ -666,6 +658,31 @@ func waitForAgentEvent(ch chan agent.Event) tea.Cmd {
 		}
 		return agentEventMsg{event: ev}
 	}
+}
+
+// routeMessage sends input to the agent based on the current focus context.
+// For Direct contexts (/query <nick>), the agent receives a "[to:nick] text"
+// prefix so persona-aware prompts can route responses appropriately.
+// Slash commands are handled before this is called, so they always work.
+func (m Model) routeMessage(input string) (tea.Model, tea.Cmd) {
+	active := m.focus.Active()
+
+	displayContent := input
+	agentInput := input
+
+	if active.Kind == KindDirect {
+		displayContent = fmt.Sprintf("→%s: %s", active.Target, input)
+		agentInput = fmt.Sprintf("[to:%s] %s", active.Target, input)
+	}
+
+	m.addMessage(ChatMessage{
+		Time:    time.Now(),
+		Type:    MsgUser,
+		Nick:    m.config.UserNick,
+		Content: displayContent,
+	})
+	m.refreshViewport()
+	return m, m.sendToAgent(agentInput)
 }
 
 func (m *Model) sendToAgent(input string) tea.Cmd {
