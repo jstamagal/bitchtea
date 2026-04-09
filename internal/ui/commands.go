@@ -54,6 +54,7 @@ var slashCommandRegistry = registerSlashCommands(
 	slashCommandSpec{names: []string{"/part"}, handler: handlePartCommand},
 	slashCommandSpec{names: []string{"/query"}, handler: handleQueryCommand},
 	slashCommandSpec{names: []string{"/channels", "/ch"}, handler: handleChannelsCommand},
+	slashCommandSpec{names: []string{"/msg"}, handler: handleMsgCommand},
 )
 
 func registerSlashCommands(specs ...slashCommandSpec) map[string]slashCommandHandler {
@@ -72,6 +73,10 @@ func lookupSlashCommand(name string) (slashCommandHandler, bool) {
 }
 
 const helpCommandText = "Commands:\n" +
+	"  /join <#channel>    Switch focus to channel (creates if new)\n" +
+	"  /part [#channel]    Leave context (default: current)\n" +
+	"  /query <nick>       Route Enter persistently to nick\n" +
+	"  /msg <nick> <text>  One-shot send to nick, no focus change\n" +
 	"  /model <name>       Switch LLM model\n" +
 	"  /provider <name>    Set provider transport (openai, anthropic)\n" +
 	"  /baseurl <url>      Set API base URL\n" +
@@ -725,6 +730,33 @@ func handleChannelsCommand(m Model, _ string, _ []string) (Model, tea.Cmd) {
 	})
 	m.refreshViewport()
 	return m, nil
+}
+
+func handleMsgCommand(m Model, input string, parts []string) (Model, tea.Cmd) {
+	if len(parts) < 3 {
+		m.errMsg("Usage: /msg <nick> <text>")
+		return m, nil
+	}
+	nick := parts[1]
+	prefix := parts[0] + " " + parts[1] + " "
+	text := strings.TrimSpace(strings.TrimPrefix(input, prefix))
+	if text == "" {
+		m.errMsg("Usage: /msg <nick> <text>")
+		return m, nil
+	}
+	if m.streaming {
+		m.queued = append(m.queued, fmt.Sprintf("[to:%s] %s", nick, text))
+		m.sysMsg(fmt.Sprintf("Queued /msg to %s (agent busy).", nick))
+		return m, nil
+	}
+	m.addMessage(ChatMessage{
+		Time:    time.Now(),
+		Type:    MsgUser,
+		Nick:    m.config.UserNick,
+		Content: fmt.Sprintf("→%s: %s", nick, text),
+	})
+	m.refreshViewport()
+	return m, m.sendToAgent(fmt.Sprintf("[to:%s] %s", nick, text))
 }
 
 func applyProfileToModel(m *Model, name string, p *config.Profile, verbose bool) {

@@ -389,7 +389,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.history = append(m.history, input)
 			m.historyIdx = len(m.history)
 
-			// Handle slash commands
+			// Slash commands always work regardless of focus.
 			if strings.HasPrefix(input, "/") {
 				return m.handleCommand(input)
 			}
