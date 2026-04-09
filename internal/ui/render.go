@@ -9,9 +9,12 @@ import (
 )
 
 var (
-	markdownRenderers   = make(map[int]*glamour.TermRenderer)
-	markdownRenderersMu sync.Mutex
+	markdownRenderers      = make(map[int]*glamour.TermRenderer)
+	markdownRendererWidths []int
+	markdownRenderersMu    sync.Mutex
 )
+
+const maxMarkdownRenderers = 8
 
 // RenderMarkdown renders markdown content for terminal display.
 // Falls back to raw text if rendering fails.
@@ -50,6 +53,7 @@ func markdownRendererForWidth(width int) *glamour.TermRenderer {
 	defer markdownRenderersMu.Unlock()
 
 	if renderer, ok := markdownRenderers[width]; ok {
+		touchMarkdownRendererWidth(width)
 		return renderer
 	}
 
@@ -59,11 +63,35 @@ func markdownRendererForWidth(width int) *glamour.TermRenderer {
 	)
 	if err != nil {
 		markdownRenderers[width] = nil
+		touchMarkdownRendererWidth(width)
+		evictMarkdownRendererWidths()
 		return nil
 	}
 
 	markdownRenderers[width] = renderer
+	touchMarkdownRendererWidth(width)
+	evictMarkdownRendererWidths()
 	return renderer
+}
+
+func touchMarkdownRendererWidth(width int) {
+	for i, cachedWidth := range markdownRendererWidths {
+		if cachedWidth != width {
+			continue
+		}
+		copy(markdownRendererWidths[i:], markdownRendererWidths[i+1:])
+		markdownRendererWidths = markdownRendererWidths[:len(markdownRendererWidths)-1]
+		break
+	}
+	markdownRendererWidths = append(markdownRendererWidths, width)
+}
+
+func evictMarkdownRendererWidths() {
+	for len(markdownRendererWidths) > maxMarkdownRenderers {
+		evicted := markdownRendererWidths[0]
+		markdownRendererWidths = markdownRendererWidths[1:]
+		delete(markdownRenderers, evicted)
+	}
 }
 
 // looksLikeMarkdown does a cheap check for markdown-ish content

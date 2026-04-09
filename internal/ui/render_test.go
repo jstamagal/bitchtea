@@ -3,7 +3,16 @@ package ui
 import (
 	"strings"
 	"testing"
+
+	"github.com/charmbracelet/glamour"
 )
+
+func resetMarkdownRendererCache() {
+	markdownRenderersMu.Lock()
+	defer markdownRenderersMu.Unlock()
+	markdownRenderers = make(map[int]*glamour.TermRenderer)
+	markdownRendererWidths = nil
+}
 
 func TestLooksLikeMarkdown(t *testing.T) {
 	tests := []struct {
@@ -80,25 +89,88 @@ func TestRenderMarkdownEmpty(t *testing.T) {
 func TestRenderMarkdownFallsBackWhenRendererUnavailable(t *testing.T) {
 	input := "## Heading"
 	width := 777
+	resetMarkdownRendererCache()
 
 	markdownRenderersMu.Lock()
-	old, existed := markdownRenderers[width]
 	markdownRenderers[width] = nil
+	markdownRendererWidths = []int{width}
 	markdownRenderersMu.Unlock()
 
 	t.Cleanup(func() {
-		markdownRenderersMu.Lock()
-		defer markdownRenderersMu.Unlock()
-		if existed {
-			markdownRenderers[width] = old
-			return
-		}
-		delete(markdownRenderers, width)
+		resetMarkdownRendererCache()
 	})
 
 	result := RenderMarkdown(input, width)
 	if result != input {
 		t.Fatalf("expected raw fallback, got %q", result)
+	}
+}
+
+func TestMarkdownRendererCacheEvictsOldWidths(t *testing.T) {
+	resetMarkdownRendererCache()
+
+	for width := 40; width < 40+maxMarkdownRenderers; width++ {
+		if renderer := markdownRendererForWidth(width); renderer == nil {
+			t.Fatalf("expected renderer for width %d", width)
+		}
+	}
+
+	markdownRenderersMu.Lock()
+	if got := len(markdownRenderers); got != maxMarkdownRenderers {
+		markdownRenderersMu.Unlock()
+		t.Fatalf("expected %d cached renderers, got %d", maxMarkdownRenderers, got)
+	}
+	if got := len(markdownRendererWidths); got != maxMarkdownRenderers {
+		markdownRenderersMu.Unlock()
+		t.Fatalf("expected %d cached widths, got %d", maxMarkdownRenderers, got)
+	}
+	markdownRenderersMu.Unlock()
+
+	if renderer := markdownRendererForWidth(999); renderer == nil {
+		t.Fatal("expected renderer for new width")
+	}
+
+	markdownRenderersMu.Lock()
+	defer markdownRenderersMu.Unlock()
+
+	if got := len(markdownRenderers); got != maxMarkdownRenderers {
+		t.Fatalf("expected bounded cache size %d, got %d", maxMarkdownRenderers, got)
+	}
+	if got := len(markdownRendererWidths); got != maxMarkdownRenderers {
+		t.Fatalf("expected bounded width list size %d, got %d", maxMarkdownRenderers, got)
+	}
+	if _, ok := markdownRenderers[40]; ok {
+		t.Fatalf("expected oldest width to be evicted")
+	}
+	if _, ok := markdownRenderers[999]; !ok {
+		t.Fatalf("expected newest width to be cached")
+	}
+}
+
+func TestMarkdownRendererCacheRefreshesRecentlyUsedWidth(t *testing.T) {
+	resetMarkdownRendererCache()
+
+	for width := 50; width < 50+maxMarkdownRenderers; width++ {
+		if renderer := markdownRendererForWidth(width); renderer == nil {
+			t.Fatalf("expected renderer for width %d", width)
+		}
+	}
+
+	if renderer := markdownRendererForWidth(50); renderer == nil {
+		t.Fatal("expected renderer for reused width")
+	}
+	if renderer := markdownRendererForWidth(1000); renderer == nil {
+		t.Fatal("expected renderer for new width")
+	}
+
+	markdownRenderersMu.Lock()
+	defer markdownRenderersMu.Unlock()
+
+	if _, ok := markdownRenderers[50]; !ok {
+		t.Fatalf("expected recently used width to stay cached")
+	}
+	if _, ok := markdownRenderers[51]; ok {
+		t.Fatalf("expected least recently used width to be evicted")
 	}
 }
 
