@@ -1,10 +1,6 @@
 package ui
 
-import (
-	"sort"
-
-	"github.com/charmbracelet/lipgloss"
-)
+import "github.com/charmbracelet/lipgloss"
 
 // Theme holds colors for the TUI
 var Theme = struct {
@@ -24,7 +20,7 @@ var Theme = struct {
 	ThinkingBarFg lipgloss.Color
 	ThinkingBarBg lipgloss.Color
 }{
-	Name:    "bitchx",
+	Name:    "BitchX",
 	Cyan:    lipgloss.Color("14"),
 	Green:   lipgloss.Color("10"),
 	Magenta: lipgloss.Color("13"),
@@ -38,76 +34,6 @@ var Theme = struct {
 
 	ThinkingBarFg: lipgloss.Color("15"),
 	ThinkingBarBg: lipgloss.Color("0"),
-}
-
-// Built-in themes
-var themes = map[string]struct {
-	Name    string
-	Cyan    lipgloss.Color
-	Green   lipgloss.Color
-	Magenta lipgloss.Color
-	Yellow  lipgloss.Color
-	Red     lipgloss.Color
-	Blue    lipgloss.Color
-	White   lipgloss.Color
-	Gray    lipgloss.Color
-	DarkBg  lipgloss.Color
-	BarBg   lipgloss.Color
-
-	ThinkingBarFg lipgloss.Color
-	ThinkingBarBg lipgloss.Color
-}{
-	"bitchx": {
-		Name:          "BitchX",
-		Cyan:          lipgloss.Color("14"),
-		Green:         lipgloss.Color("10"),
-		Magenta:       lipgloss.Color("13"),
-		Yellow:        lipgloss.Color("11"),
-		Red:           lipgloss.Color("9"),
-		Blue:          lipgloss.Color("12"),
-		White:         lipgloss.Color("15"),
-		Gray:          lipgloss.Color("8"),
-		DarkBg:        lipgloss.Color("0"),
-		BarBg:         lipgloss.Color("4"),
-		ThinkingBarFg: lipgloss.Color("15"),
-		ThinkingBarBg: lipgloss.Color("0"),
-	},
-}
-
-// ListThemes returns all available theme names
-func ListThemes() []string {
-	names := make([]string, 0, len(themes))
-	for name := range themes {
-		names = append(names, name)
-	}
-	sort.Strings(names)
-	return names
-}
-
-// SetTheme sets the active theme and rebuilds styles
-func SetTheme(name string) bool {
-	t, ok := themes[name]
-	if !ok {
-		return false
-	}
-	Theme = struct {
-		Name    string
-		Cyan    lipgloss.Color
-		Green   lipgloss.Color
-		Magenta lipgloss.Color
-		Yellow  lipgloss.Color
-		Red     lipgloss.Color
-		Blue    lipgloss.Color
-		White   lipgloss.Color
-		Gray    lipgloss.Color
-		DarkBg  lipgloss.Color
-		BarBg   lipgloss.Color
-
-		ThinkingBarFg lipgloss.Color
-		ThinkingBarBg lipgloss.Color
-	}(t)
-	rebuildStyles()
-	return true
 }
 
 // CurrentThemeName returns the name of the active theme

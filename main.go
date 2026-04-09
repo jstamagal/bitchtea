@@ -289,7 +289,6 @@ Commands (inside the TUI):
   /fork                  Fork session
   /auto-next             Toggle auto-next-steps
   /auto-idea             Toggle auto-next-idea
-  /theme <name>          Switch color theme
   /sound                 Toggle completion bell
   /mp3 [cmd]             Toggle MP3 panel and player
   /help                  Show help
