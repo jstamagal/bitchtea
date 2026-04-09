@@ -26,6 +26,7 @@ type slashCommandSpec struct {
 var slashCommandRegistry = registerSlashCommands(
 	slashCommandSpec{names: []string{"/quit", "/q", "/exit"}, handler: handleQuitCommand},
 	slashCommandSpec{names: []string{"/help", "/h"}, handler: handleHelpCommand},
+	slashCommandSpec{names: []string{"/set"}, handler: handleSetCommand},
 	slashCommandSpec{names: []string{"/model"}, handler: handleModelCommand},
 	slashCommandSpec{names: []string{"/clear"}, handler: handleClearCommand},
 	slashCommandSpec{names: []string{"/compact"}, handler: handleCompactCommand},
@@ -83,6 +84,7 @@ const helpCommandText = "Commands:\n" +
 	"  /provider <name>    Set provider transport (openai, anthropic)\n" +
 	"  /baseurl <url>      Set API base URL\n" +
 	"  /apikey <key>       Set API key\n" +
+	"  /set <key> [value]  Show or change a setting (provider, model, baseurl, apikey, profile, sound, auto-next, auto-idea, nick)\n" +
 	"  /profile [cmd]      save/load/delete profiles (built-ins: ollama, openrouter, huggingface, xai, copilot, etc.)\n" +
 	"  /join <#channel>    Join a channel context (persisted until /part)\n" +
 	"  /part [target]      Leave current or named context\n" +
@@ -124,6 +126,81 @@ func handleHelpCommand(m Model, _ string, _ []string) (Model, tea.Cmd) {
 	})
 	m.refreshViewport()
 	return m, nil
+}
+
+func handleSetCommand(m Model, input string, parts []string) (Model, tea.Cmd) {
+	if len(parts) == 1 {
+		var sb strings.Builder
+		sb.WriteString("Settings:\n")
+		for _, key := range config.SetKeys() {
+			value, _ := config.GetSetting(m.config, key)
+			sb.WriteString(fmt.Sprintf("  %s = %s\n", key, value))
+		}
+		m.sysMsg(strings.TrimRight(sb.String(), "\n"))
+		return m, nil
+	}
+
+	key := strings.ToLower(parts[1])
+	if len(parts) == 2 {
+		value, ok := config.GetSetting(m.config, key)
+		if !ok {
+			m.errMsg(fmt.Sprintf("Unknown setting %q. Valid keys: %s", key, strings.Join(config.SetKeys(), ", ")))
+			return m, nil
+		}
+		m.sysMsg(fmt.Sprintf("%s = %s", key, value))
+		return m, nil
+	}
+
+	value := strings.TrimSpace(strings.TrimPrefix(input, parts[0]+" "+parts[1]))
+	switch key {
+	case "provider":
+		return handleProviderCommand(m, "/provider "+value, []string{"/provider", value})
+	case "model":
+		return handleModelCommand(m, "/model "+value, []string{"/model", value})
+	case "baseurl":
+		return handleBaseURLCommand(m, "/baseurl "+value, []string{"/baseurl", value})
+	case "apikey":
+		return handleAPIKeyCommand(m, "/apikey "+value, []string{"/apikey", value})
+	}
+
+	if !config.ApplySet(m.config, key, value) {
+		m.errMsg(fmt.Sprintf("Unknown setting %q. Valid keys: %s", key, strings.Join(config.SetKeys(), ", ")))
+		return m, nil
+	}
+
+	switch key {
+	case "profile":
+		if m.config.Profile == "" {
+			m.errMsg(profileLookupMessage(value))
+			return m, nil
+		}
+		m.agent.SetProvider(m.config.Provider)
+		m.agent.SetModel(m.config.Model)
+		m.agent.SetBaseURL(m.config.BaseURL)
+		m.agent.SetAPIKey(m.config.APIKey)
+	case "nick":
+		// Config-only setting; no agent sync required.
+	case "sound", "auto-next", "auto-idea":
+		// Config-only settings; no agent sync required.
+	default:
+		m.errMsg(fmt.Sprintf("Unknown setting %q. Valid keys: %s", key, strings.Join(config.SetKeys(), ", ")))
+		return m, nil
+	}
+
+	display, _ := config.GetSetting(m.config, key)
+	m.sysMsg(fmt.Sprintf("%s set to: %s", settingLabel(key), display))
+	return m, nil
+}
+
+func settingLabel(key string) string {
+	parts := strings.Split(key, "-")
+	for i, part := range parts {
+		if part == "" {
+			continue
+		}
+		parts[i] = strings.ToUpper(part[:1]) + part[1:]
+	}
+	return strings.Join(parts, " ")
 }
 
 func handleModelCommand(m Model, _ string, parts []string) (Model, tea.Cmd) {

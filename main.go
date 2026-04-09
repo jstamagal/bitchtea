@@ -32,6 +32,9 @@ func main() {
 	cfg := config.DefaultConfig()
 	config.DetectProvider(&cfg)
 
+	rcLines := config.ParseRC()
+	rcCommands := config.ApplyRCSetCommands(&cfg, rcLines)
+
 	opts, err := parseCLIArgs(os.Args[1:], &cfg)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "bitchtea: %v\n", err)
@@ -94,6 +97,9 @@ func main() {
 	m := ui.NewModel(&cfg)
 	if sess != nil {
 		m.ResumeSession(sess)
+	}
+	for _, line := range rcCommands {
+		m.ExecuteStartupCommand(line)
 	}
 
 	// Set up signal channel for graceful shutdown

@@ -114,6 +114,9 @@ type Model struct {
 
 	// Debug mode - verbose API logging
 	debugMode bool
+
+	// Suppresses visible/logged command output during silent startup execution.
+	suppressMessages bool
 }
 
 // NewModel creates the initial model
@@ -229,6 +232,24 @@ func (m *Model) ResumeSession(sess *session.Session) {
 			Content: content,
 		})
 	}
+}
+
+// ExecuteStartupCommand runs a slash command derived from bitchtearc without
+// emitting visible startup chatter.
+func (m *Model) ExecuteStartupCommand(line string) {
+	line = strings.TrimSpace(line)
+	if line == "" {
+		return
+	}
+	if !strings.HasPrefix(line, "/") {
+		line = "/" + line
+	}
+
+	m.suppressMessages = true
+	updated, _ := m.handleCommand(line)
+	next := updated.(Model)
+	next.suppressMessages = false
+	*m = next
 }
 
 func (m Model) Init() tea.Cmd {
@@ -735,6 +756,9 @@ func (m *Model) sendToAgent(input string) tea.Cmd {
 }
 
 func (m *Model) addMessage(msg ChatMessage) {
+	if m.suppressMessages {
+		return
+	}
 	msg.Context = m.focus.Active()
 	m.messages = append(m.messages, msg)
 	_ = m.transcript.LogMessage(msg)
