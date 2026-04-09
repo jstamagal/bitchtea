@@ -286,9 +286,13 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case splashMsg:
 		// Show the splash screen
+		providerName := m.config.Provider
+		if m.config.Profile != "" {
+			providerName = m.config.Profile
+		}
 		m.addMessage(ChatMessage{Time: time.Now(), Type: MsgRaw, Content: SplashArt()})
 		m.addMessage(ChatMessage{Time: time.Now(), Type: MsgRaw, Content: SplashTagline})
-		m.addMessage(ChatMessage{Time: time.Now(), Type: MsgRaw, Content: fmt.Sprintf(ConnectMsg, m.config.Provider, m.config.Model, m.config.WorkDir)})
+		m.addMessage(ChatMessage{Time: time.Now(), Type: MsgRaw, Content: fmt.Sprintf(ConnectMsg, providerName, m.config.Model, m.config.WorkDir)})
 
 		// Show loaded context files
 		ctxFiles := agent.DiscoverContextFiles(m.config.WorkDir)

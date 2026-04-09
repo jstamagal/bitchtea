@@ -18,6 +18,7 @@ type Config struct {
 	BaseURL  string
 	Model    string
 	Provider string
+	Profile  string // The name of the loaded profile, if any
 
 	// Agent behavior
 	AutoNextSteps bool
