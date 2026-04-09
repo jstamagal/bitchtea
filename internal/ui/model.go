@@ -95,6 +95,7 @@ type Model struct {
 	streaming          bool
 	streamBuffer       *strings.Builder // accumulates current agent response (pointer to avoid copy panic)
 	focus              *FocusManager
+	membership         *MembershipManager
 	backgroundActivity []BackgroundActivity
 	backgroundUnread   int
 

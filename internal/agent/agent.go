@@ -549,6 +549,16 @@ func (a *Agent) BootstrapMessageCount() int {
 	return a.bootstrapMsgCount
 }
 
+// InjectNote adds a synthetic context note to the conversation history without
+// running the agent loop. Used for catch-up on channel invite so the agent
+// is aware of the invited persona and the prior conversation.
+func (a *Agent) InjectNote(note string) {
+	a.messages = append(a.messages,
+		llm.Message{Role: "user", Content: note},
+		llm.Message{Role: "assistant", Content: "Understood."},
+	)
+}
+
 // RestoreMessages replaces the current message history with a prior session.
 // It resets session-local stats so that counters and timing start fresh.
 func (a *Agent) RestoreMessages(messages []llm.Message) {
