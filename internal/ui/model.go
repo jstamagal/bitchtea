@@ -747,7 +747,11 @@ func (m Model) View() string {
 	if len(m.queued) > 0 {
 		queuedStr = fmt.Sprintf(" [queued:%d]", len(m.queued))
 	}
-	topLeft := TopBarStyle.Render(fmt.Sprintf(" bitchtea — %s/%s [%s]%s%s ", m.config.Provider, m.config.Model, m.focus.ActiveLabel(), flags, queuedStr))
+	topBarProvider := m.config.Provider
+	if m.config.Profile != "" {
+		topBarProvider = m.config.Profile
+	}
+	topLeft := TopBarStyle.Render(fmt.Sprintf(" bitchtea — %s/%s [%s]%s%s ", topBarProvider, m.config.Model, m.focus.ActiveLabel(), flags, queuedStr))
 	topRight := TopBarStyle.Render(fmt.Sprintf(" %s ", time.Now().Format("3:04pm")))
 	topPad := m.width - lipgloss.Width(topLeft) - lipgloss.Width(topRight)
 	if topPad < 0 {
