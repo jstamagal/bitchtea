@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestDiscoverContextFiles(t *testing.T) {
@@ -53,6 +54,30 @@ func TestLoadSaveMemory(t *testing.T) {
 	mem = LoadMemory(dir)
 	if !strings.Contains(mem, "discovered pattern X") {
 		t.Fatalf("memory content: %q", mem)
+	}
+}
+
+func TestAppendDailyMemory(t *testing.T) {
+	workDir := filepath.Join(t.TempDir(), "repo")
+	sessionDir := filepath.Join(t.TempDir(), "sessions")
+	when := time.Date(2026, 4, 8, 13, 14, 15, 0, time.UTC)
+
+	if err := AppendDailyMemory(sessionDir, workDir, when, "- Keep the IRC metaphor\n- Restore channel focus on restart"); err != nil {
+		t.Fatalf("append daily memory: %v", err)
+	}
+
+	path := DailyMemoryPath(sessionDir, workDir, when)
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read daily memory: %v", err)
+	}
+
+	content := string(data)
+	if !strings.Contains(content, "## 2026-04-08T13:14:15Z pre-compaction flush") {
+		t.Fatalf("missing flush heading: %q", content)
+	}
+	if !strings.Contains(content, "Keep the IRC metaphor") {
+		t.Fatalf("missing durable memory content: %q", content)
 	}
 }
 

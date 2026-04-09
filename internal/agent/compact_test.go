@@ -3,8 +3,10 @@ package agent
 import (
 	"context"
 	"errors"
+	"os"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/jstamagal/bitchtea/internal/config"
 	"github.com/jstamagal/bitchtea/internal/llm"
@@ -31,6 +33,10 @@ func summaryStreamer(summary string) *fakeStreamer {
 	return &fakeStreamer{
 		responses: []func(chan<- llm.StreamEvent){
 			func(events chan<- llm.StreamEvent) {
+				events <- llm.StreamEvent{Type: "text", Text: "NONE"}
+				events <- llm.StreamEvent{Type: "done"}
+			},
+			func(events chan<- llm.StreamEvent) {
 				events <- llm.StreamEvent{Type: "text", Text: summary}
 				events <- llm.StreamEvent{Type: "done"}
 			},
@@ -38,10 +44,11 @@ func summaryStreamer(summary string) *fakeStreamer {
 	}
 }
 
-func newTestAgent(streamer *fakeStreamer) *Agent {
+func newTestAgent(t *testing.T, streamer *fakeStreamer) *Agent {
+	t.Helper()
 	cfg := config.DefaultConfig()
-	cfg.WorkDir = "/tmp" // unused but required
-	cfg.SessionDir = "/tmp"
+	cfg.WorkDir = t.TempDir()
+	cfg.SessionDir = t.TempDir()
 	a := NewAgentWithStreamer(&cfg, streamer)
 	return a
 }
@@ -50,7 +57,7 @@ func newTestAgent(streamer *fakeStreamer) *Agent {
 
 func TestCompactNoOpWhenFewerThanSixMessages(t *testing.T) {
 	streamer := summaryStreamer("should never appear")
-	agent := newTestAgent(streamer)
+	agent := newTestAgent(t, streamer)
 
 	// 5 messages: system + 4 others → fewer than 6, compact should no-op.
 	agent.messages = makeMessages(5)
@@ -73,7 +80,7 @@ func TestCompactNoOpWhenFewerThanSixMessages(t *testing.T) {
 func TestCompactNoOpExactlySixMessages(t *testing.T) {
 	// Boundary: exactly 6 messages should still compact (6 >= 6).
 	streamer := summaryStreamer("summary")
-	agent := newTestAgent(streamer)
+	agent := newTestAgent(t, streamer)
 	agent.messages = makeMessages(6)
 
 	if err := agent.Compact(context.Background()); err != nil {
@@ -81,15 +88,15 @@ func TestCompactNoOpExactlySixMessages(t *testing.T) {
 	}
 
 	// With 6 messages, compaction fires: system + summary + ack + last 4 = 7.
-	if streamer.calls != 1 {
-		t.Fatalf("expected 1 streamer call, got %d", streamer.calls)
+	if streamer.calls != 2 {
+		t.Fatalf("expected 2 streamer calls, got %d", streamer.calls)
 	}
 }
 
 func TestCompactRetainsSystemPromptAndLastFour(t *testing.T) {
 	const summaryText = "This is the conversation summary."
 	streamer := summaryStreamer(summaryText)
-	agent := newTestAgent(streamer)
+	agent := newTestAgent(t, streamer)
 
 	msgs := makeMessages(10) // system + 9 others
 	agent.messages = msgs
@@ -137,7 +144,7 @@ func TestCompactRetainsSystemPromptAndLastFour(t *testing.T) {
 func TestCompactSummaryInsertedProperly(t *testing.T) {
 	const summaryText = "User asked about Go testing patterns. We discussed table-driven tests."
 	streamer := summaryStreamer(summaryText)
-	agent := newTestAgent(streamer)
+	agent := newTestAgent(t, streamer)
 	agent.messages = makeMessages(8)
 
 	if err := agent.Compact(context.Background()); err != nil {
@@ -157,9 +164,55 @@ func TestCompactSummaryInsertedProperly(t *testing.T) {
 	}
 }
 
+func TestCompactFlushesDailyMemoryBeforeSummaryRewrite(t *testing.T) {
+	workDir := t.TempDir()
+	sessionDir := t.TempDir()
+
+	cfg := config.DefaultConfig()
+	cfg.WorkDir = workDir
+	cfg.SessionDir = sessionDir
+
+	streamer := &fakeStreamer{
+		responses: []func(chan<- llm.StreamEvent){
+			func(events chan<- llm.StreamEvent) {
+				events <- llm.StreamEvent{Type: "text", Text: "- Keep IRC routing semantics\n- Persist channel summaries daily"}
+				events <- llm.StreamEvent{Type: "done"}
+			},
+			func(events chan<- llm.StreamEvent) {
+				events <- llm.StreamEvent{Type: "text", Text: "Conversation compacted cleanly."}
+				events <- llm.StreamEvent{Type: "done"}
+			},
+		},
+	}
+
+	agent := NewAgentWithStreamer(&cfg, streamer)
+	agent.messages = makeMessages(8)
+
+	if err := agent.Compact(context.Background()); err != nil {
+		t.Fatalf("Compact returned error: %v", err)
+	}
+
+	if streamer.calls != 2 {
+		t.Fatalf("expected 2 streamer calls, got %d", streamer.calls)
+	}
+
+	path := DailyMemoryPath(sessionDir, workDir, time.Now())
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read daily memory file: %v", err)
+	}
+	content := string(data)
+	if !strings.Contains(content, "Keep IRC routing semantics") {
+		t.Fatalf("expected durable memory flush content, got %q", content)
+	}
+	if !strings.Contains(agent.messages[1].Content, "Conversation compacted cleanly.") {
+		t.Fatalf("expected compacted summary in message history, got %q", agent.messages[1].Content)
+	}
+}
+
 func TestCompactPreservesToolMetadata(t *testing.T) {
 	streamer := summaryStreamer("tool context preserved")
-	agent := newTestAgent(streamer)
+	agent := newTestAgent(t, streamer)
 
 	// Build 10 messages where the last 4 include tool metadata.
 	msgs := makeMessages(10)
