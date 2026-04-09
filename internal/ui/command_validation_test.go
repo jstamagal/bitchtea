@@ -3,6 +3,7 @@ package ui
 import (
 	"strings"
 	"testing"
+	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 
@@ -259,6 +260,72 @@ func TestDebugModeToggle(t *testing.T) {
 	if model.debugMode {
 		t.Error("debug mode should be off after /debug off")
 	}
+}
+
+func TestActivityCommand(t *testing.T) {
+	t.Run("shows queued activity and marks it read", func(t *testing.T) {
+		m := newTestModel(t)
+		m.NotifyBackgroundActivity(BackgroundActivity{
+			Time:    nowForTests(),
+			Context: "#ops",
+			Sender:  "coding-buddy",
+			Summary: "wants you to inspect the crash log",
+		})
+
+		result, _ := m.handleCommand("/activity")
+		model := result.(Model)
+		msg := lastMsg(result)
+
+		if msg.Type != MsgSystem {
+			t.Fatalf("expected system message, got %v", msg.Type)
+		}
+		for _, want := range []string{"Background activity:", "#ops", "coding-buddy", "inspect the crash log"} {
+			if !strings.Contains(msg.Content, want) {
+				t.Fatalf("expected %q in activity output, got %q", want, msg.Content)
+			}
+		}
+		if model.backgroundUnread != 0 {
+			t.Fatalf("expected activity to be marked read, got %d unread", model.backgroundUnread)
+		}
+		if len(model.backgroundActivity) != 1 {
+			t.Fatalf("expected queued activity to remain available, got %d entries", len(model.backgroundActivity))
+		}
+	})
+
+	t.Run("clear empties queue", func(t *testing.T) {
+		m := newTestModel(t)
+		m.NotifyBackgroundActivity(BackgroundActivity{Context: "#ops", Sender: "daemon", Summary: "heartbeat failed"})
+
+		result, _ := m.handleCommand("/activity clear")
+		model := result.(Model)
+		msg := lastMsg(result)
+
+		if !strings.Contains(msg.Content, "Cleared 1 background activity notice(s).") {
+			t.Fatalf("unexpected clear message: %q", msg.Content)
+		}
+		if len(model.backgroundActivity) != 0 {
+			t.Fatalf("expected queue to be cleared, got %d entries", len(model.backgroundActivity))
+		}
+		if model.backgroundUnread != 0 {
+			t.Fatalf("expected unread count reset, got %d", model.backgroundUnread)
+		}
+	})
+
+	t.Run("invalid args error", func(t *testing.T) {
+		m := newTestModel(t)
+		result, _ := m.handleCommand("/activity nope")
+		msg := lastMsg(result)
+		if msg.Type != MsgError {
+			t.Fatalf("expected error message, got %v", msg.Type)
+		}
+		if !strings.Contains(msg.Content, "Usage: /activity [clear]") {
+			t.Fatalf("unexpected error: %q", msg.Content)
+		}
+	})
+}
+
+func nowForTests() time.Time {
+	return time.Date(2026, 4, 8, 13, 37, 0, 0, time.UTC)
 }
 
 func TestDebugStatusShowsCurrent(t *testing.T) {
