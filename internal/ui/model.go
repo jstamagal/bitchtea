@@ -801,8 +801,8 @@ func (m Model) handleCommand(input string) (tea.Model, tea.Cmd) {
 				"  /compact            Compact conversation context\n" +
 				"  /clear              Clear chat display\n" +
 				"  /diff               Show git diff\n" +
-				"  /undo               Undo last git change\n" +
-				"  /commit [msg]       Git commit\n" +
+				"  /undo [confirm|file] Preview revert, confirm all, or revert one file\n" +
+				"  /commit [msg]       Preview git state or commit tracked changes only\n" +
 				"  /copy [n]           Copy last or nth assistant response\n" +
 				"  /status             Git status\n" +
 				"  /tokens             Token usage estimate\n" +
@@ -896,31 +896,59 @@ func (m Model) handleCommand(input string) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case "/undo":
-		// git checkout -- . (revert all unstaged changes)
-		output := runGit(m.config.WorkDir, "checkout", "--", ".")
-		m.sysMsg("Reverted all unstaged changes. " + output)
+		switch {
+		case len(parts) == 1:
+			preview := gitUndoPreview(m.config.WorkDir)
+			m.addMessage(ChatMessage{
+				Time:    time.Now(),
+				Type:    MsgRaw,
+				Content: "\033[1;36m--- /undo preview ---\033[0m\n" + preview,
+			})
+			m.refreshViewport()
+		case len(parts) == 2 && parts[1] == "confirm":
+			output := runGit(m.config.WorkDir, "restore", "--worktree", "--", ".")
+			if output == "" {
+				output = "Reverted all unstaged tracked changes."
+			} else {
+				output = "Reverted all unstaged tracked changes.\n" + output
+			}
+			m.sysMsg(output)
+		default:
+			target := strings.TrimSpace(strings.TrimPrefix(input, cmd))
+			output := runGit(m.config.WorkDir, "restore", "--worktree", "--", target)
+			if output == "" {
+				output = fmt.Sprintf("Reverted unstaged changes for %s.", target)
+			} else {
+				output = fmt.Sprintf("Reverted unstaged changes for %s.\n%s", target, output)
+			}
+			m.sysMsg(output)
+		}
 		return m, nil
 
 	case "/commit":
-		var msg string
-		if len(parts) > 1 {
-			msg = strings.Join(parts[1:], " ")
-		} else {
-			// Auto-generate commit message
-			diff := runGit(m.config.WorkDir, "diff", "--cached", "--stat")
-			if diff == "" {
-				// Stage everything first
-				runGit(m.config.WorkDir, "add", "-A")
-				diff = runGit(m.config.WorkDir, "diff", "--cached", "--stat")
-			}
-			if diff == "" {
-				m.sysMsg("Nothing to commit.")
-				return m, nil
-			}
-			msg = "bitchtea: auto-commit"
+		if len(parts) == 1 {
+			preview := gitCommitPreview(m.config.WorkDir)
+			m.addMessage(ChatMessage{
+				Time:    time.Now(),
+				Type:    MsgRaw,
+				Content: "\033[1;36m--- /commit preview ---\033[0m\n" + preview,
+			})
+			m.refreshViewport()
+			return m, nil
 		}
-		runGit(m.config.WorkDir, "add", "-A")
+
+		msg := strings.TrimSpace(strings.TrimPrefix(input, cmd))
+		if msg == "" {
+			m.errMsg("Usage: /commit <message>")
+			return m, nil
+		}
+
+		runGit(m.config.WorkDir, "add", "-u")
 		output := runGit(m.config.WorkDir, "commit", "-m", msg)
+		if strings.Contains(output, "nothing to commit") || strings.Contains(output, "no changes added to commit") {
+			m.sysMsg("Nothing to commit. Only tracked changes are staged by /commit.")
+			return m, nil
+		}
 		m.sysMsg("Committed: " + output)
 		return m, nil
 
@@ -1302,10 +1330,73 @@ func (m *Model) handleMP3Key(msg tea.KeyMsg) (bool, tea.Cmd) {
 
 // runGit runs a git command and returns its output
 func runGit(workDir string, args ...string) string {
+	return strings.TrimSpace(runGitRaw(workDir, args...))
+}
+
+func runGitRaw(workDir string, args ...string) string {
 	cmd := exec.Command("git", args...)
 	cmd.Dir = workDir
 	out, _ := cmd.CombinedOutput()
-	return strings.TrimSpace(string(out))
+	return strings.TrimRight(string(out), "\n")
+}
+
+func gitUndoPreview(workDir string) string {
+	diff := runGit(workDir, "diff", "--stat", "--")
+	if diff == "" {
+		return "No unstaged tracked changes to revert.\nUsage: /undo confirm to revert all, or /undo <file> to revert one file."
+	}
+	return diff + "\nUsage: /undo confirm to revert all, or /undo <file> to revert one file."
+}
+
+func gitCommitPreview(workDir string) string {
+	status := runGitRaw(workDir, "status", "--short")
+	if status == "" {
+		return "Nothing to commit. Working tree clean."
+	}
+
+	var staged []string
+	var unstaged []string
+	var untracked []string
+
+	for _, line := range strings.Split(status, "\n") {
+		if strings.TrimSpace(line) == "" {
+			continue
+		}
+		path := strings.TrimSpace(line[2:])
+		switch {
+		case strings.HasPrefix(line, "??"):
+			untracked = append(untracked, path)
+		default:
+			if len(line) >= 1 && line[0] != ' ' {
+				staged = append(staged, path)
+			}
+			if len(line) >= 2 && line[1] != ' ' {
+				unstaged = append(unstaged, path)
+			}
+		}
+	}
+
+	var b strings.Builder
+	b.WriteString("Tracked changes only will be committed.\n")
+	writeGitPreviewSection(&b, "Staged", staged)
+	writeGitPreviewSection(&b, "Unstaged", unstaged)
+	writeGitPreviewSection(&b, "Untracked", untracked)
+	b.WriteString("Run /commit <message> to stage tracked changes with git add -u and commit.")
+	return b.String()
+}
+
+func writeGitPreviewSection(b *strings.Builder, heading string, items []string) {
+	b.WriteString(heading)
+	b.WriteString(":\n")
+	if len(items) == 0 {
+		b.WriteString("  (none)\n")
+		return
+	}
+	for _, item := range items {
+		b.WriteString("  ")
+		b.WriteString(item)
+		b.WriteByte('\n')
+	}
 }
 
 // formatTokens formats a token count nicely
