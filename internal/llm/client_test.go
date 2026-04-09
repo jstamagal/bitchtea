@@ -9,6 +9,7 @@ import (
 	"net/url"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestStreamChatText(t *testing.T) {
@@ -390,6 +391,124 @@ func TestStreamChatOpenAIAllowsMissingAuthorization(t *testing.T) {
 		if ev.Type == "error" {
 			t.Fatalf("unexpected error: %v", ev.Error)
 		}
+	}
+}
+
+func TestNewClientConfiguresHTTPTimeouts(t *testing.T) {
+	client := NewClient("test-key", "https://api.openai.com/v1", "test-model", "openai")
+	timeoutCfg := defaultHTTPClientTimeouts()
+
+	if client.HTTP == nil {
+		t.Fatal("expected HTTP client to be configured")
+	}
+	if client.HTTP.Timeout != timeoutCfg.requestTimeout {
+		t.Fatalf("expected request timeout %v, got %v", timeoutCfg.requestTimeout, client.HTTP.Timeout)
+	}
+
+	transport, ok := client.HTTP.Transport.(*http.Transport)
+	if !ok {
+		t.Fatalf("expected *http.Transport, got %T", client.HTTP.Transport)
+	}
+	if transport.ResponseHeaderTimeout != timeoutCfg.responseHeaderTimeout {
+		t.Fatalf("expected response header timeout %v, got %v", timeoutCfg.responseHeaderTimeout, transport.ResponseHeaderTimeout)
+	}
+	if transport.TLSHandshakeTimeout != timeoutCfg.tlsHandshakeTimeout {
+		t.Fatalf("expected TLS handshake timeout %v, got %v", timeoutCfg.tlsHandshakeTimeout, transport.TLSHandshakeTimeout)
+	}
+	if transport.IdleConnTimeout != timeoutCfg.idleConnTimeout {
+		t.Fatalf("expected idle connection timeout %v, got %v", timeoutCfg.idleConnTimeout, transport.IdleConnTimeout)
+	}
+	if transport.ExpectContinueTimeout != timeoutCfg.expectContinueTimeout {
+		t.Fatalf("expected expect-continue timeout %v, got %v", timeoutCfg.expectContinueTimeout, transport.ExpectContinueTimeout)
+	}
+	if transport.MaxIdleConns != timeoutCfg.maxIdleConns {
+		t.Fatalf("expected max idle conns %d, got %d", timeoutCfg.maxIdleConns, transport.MaxIdleConns)
+	}
+	if transport.MaxIdleConnsPerHost != timeoutCfg.maxIdleConnsPerHost {
+		t.Fatalf("expected max idle conns per host %d, got %d", timeoutCfg.maxIdleConnsPerHost, transport.MaxIdleConnsPerHost)
+	}
+}
+
+func TestStreamChatResponseHeaderTimeout(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		time.Sleep(200 * time.Millisecond)
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.WriteHeader(200)
+	}))
+	defer server.Close()
+
+	client := NewClient("test-key", server.URL, "test-model", "openai")
+	client.HTTP = newHTTPClient(httpClientTimeouts{
+		dialTimeout:           50 * time.Millisecond,
+		keepAlive:             30 * time.Second,
+		tlsHandshakeTimeout:   50 * time.Millisecond,
+		responseHeaderTimeout: 50 * time.Millisecond,
+		expectContinueTimeout: 10 * time.Millisecond,
+		idleConnTimeout:       time.Second,
+		requestTimeout:        time.Second,
+		maxIdleConns:          10,
+		maxIdleConnsPerHost:   2,
+	})
+
+	events := make(chan StreamEvent, 100)
+	start := time.Now()
+	go client.StreamChat(context.Background(), []Message{{Role: "user", Content: "hi"}}, nil, events)
+
+	var gotError error
+	for ev := range events {
+		if ev.Type == "error" {
+			gotError = ev.Error
+		}
+	}
+
+	if gotError == nil {
+		t.Fatal("expected timeout error")
+	}
+	if time.Since(start) >= time.Second {
+		t.Fatalf("expected fast failure on hung response headers, got %v", time.Since(start))
+	}
+	if !strings.Contains(gotError.Error(), "timeout") {
+		t.Fatalf("expected timeout-related error, got %v", gotError)
+	}
+}
+
+func TestStreamChatRequestTimeoutWhileStreaming(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.WriteHeader(200)
+		w.(http.Flusher).Flush()
+		time.Sleep(200 * time.Millisecond)
+	}))
+	defer server.Close()
+
+	client := NewClient("test-key", server.URL, "test-model", "openai")
+	client.HTTP = newHTTPClient(httpClientTimeouts{
+		dialTimeout:           50 * time.Millisecond,
+		keepAlive:             30 * time.Second,
+		tlsHandshakeTimeout:   50 * time.Millisecond,
+		responseHeaderTimeout: 50 * time.Millisecond,
+		expectContinueTimeout: 10 * time.Millisecond,
+		idleConnTimeout:       time.Second,
+		requestTimeout:        75 * time.Millisecond,
+		maxIdleConns:          10,
+		maxIdleConnsPerHost:   2,
+	})
+
+	events := make(chan StreamEvent, 100)
+	go client.StreamChat(context.Background(), []Message{{Role: "user", Content: "hi"}}, nil, events)
+
+	var gotError error
+	for ev := range events {
+		if ev.Type == "error" {
+			gotError = ev.Error
+		}
+	}
+
+	if gotError == nil {
+		t.Fatal("expected request timeout error")
+	}
+	if !strings.Contains(gotError.Error(), "timeout") && !strings.Contains(gotError.Error(), "deadline exceeded") {
+		t.Fatalf("expected timeout-related error, got %v", gotError)
 	}
 }
 
