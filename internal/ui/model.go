@@ -138,6 +138,7 @@ func NewModel(cfg *config.Config) Model {
 
 	ag := agent.NewAgent(cfg)
 	fm := LoadFocusManager(cfg.SessionDir)
+	mm := LoadMembershipManager(cfg.SessionDir)
 
 	// Create session
 	sess, err := session.New(cfg.SessionDir)
@@ -167,6 +168,7 @@ func NewModel(cfg *config.Config) Model {
 		historyIdx:   -1,
 		streamBuffer: &strings.Builder{},
 		focus:        fm,
+		membership:   mm,
 		session:      sess,
 		transcript:   transcript,
 	}

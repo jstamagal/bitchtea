@@ -55,6 +55,8 @@ var slashCommandRegistry = registerSlashCommands(
 	slashCommandSpec{names: []string{"/query"}, handler: handleQueryCommand},
 	slashCommandSpec{names: []string{"/channels", "/ch"}, handler: handleChannelsCommand},
 	slashCommandSpec{names: []string{"/msg"}, handler: handleMsgCommand},
+	slashCommandSpec{names: []string{"/invite"}, handler: handleInviteCommand},
+	slashCommandSpec{names: []string{"/kick"}, handler: handleKickCommand},
 )
 
 func registerSlashCommands(specs ...slashCommandSpec) map[string]slashCommandHandler {
@@ -710,7 +712,7 @@ func handleQueryCommand(m Model, _ string, parts []string) (Model, tea.Cmd) {
 	return m, nil
 }
 
-// handleChannelsCommand lists all open contexts.
+// handleChannelsCommand lists all open contexts with their members.
 func handleChannelsCommand(m Model, _ string, _ []string) (Model, tea.Cmd) {
 	all := m.focus.All()
 	active := m.focus.Active()
@@ -721,7 +723,13 @@ func handleChannelsCommand(m Model, _ string, _ []string) (Model, tea.Cmd) {
 		if ctx == active {
 			marker = "* "
 		}
-		sb.WriteString(marker + ctx.Label() + "\n")
+		sb.WriteString(marker + ctx.Label())
+		if key, ok := channelKeyFromCtx(ctx); ok {
+			if members := m.membership.Members(key); len(members) > 0 {
+				sb.WriteString(" [" + strings.Join(members, ", ") + "]")
+			}
+		}
+		sb.WriteString("\n")
 	}
 	m.addMessage(ChatMessage{
 		Time:    time.Now(),

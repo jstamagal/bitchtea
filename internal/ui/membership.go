@@ -21,17 +21,21 @@ func NewMembershipManager() *MembershipManager {
 	}
 }
 
-// Invite adds persona to channel. Idempotent.
-func (m *MembershipManager) Invite(channelKey, persona string) {
+// Invite adds persona to channel. Returns true if newly added, false if already present.
+func (m *MembershipManager) Invite(channelKey, persona string) bool {
 	channelKey = normalizeMembershipKey(channelKey)
 	persona = strings.TrimSpace(persona)
 	if channelKey == "" || persona == "" {
-		return
+		return false
 	}
 	if m.channels[channelKey] == nil {
 		m.channels[channelKey] = make(map[string]struct{})
 	}
+	if _, exists := m.channels[channelKey][persona]; exists {
+		return false
+	}
 	m.channels[channelKey][persona] = struct{}{}
+	return true
 }
 
 // Part removes persona from channel. Returns true if they were present.
