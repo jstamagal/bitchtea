@@ -71,7 +71,7 @@ const helpCommandText = "Commands:\n" +
 	"  /provider <name>    Set provider transport (openai, anthropic)\n" +
 	"  /baseurl <url>      Set API base URL\n" +
 	"  /apikey <key>       Set API key\n" +
-	"  /profile [cmd]      save/load/delete profiles (built-ins: ollama, openrouter, zai-openai, zai-anthropic)\n" +
+	"  /profile [cmd]      save/load/delete profiles (built-ins: ollama, openrouter, huggingface, xai, copilot, etc.)\n" +
 	"  /compact            Compact conversation context\n" +
 	"  /clear              Clear chat display\n" +
 	"  /diff               Show git diff\n" +

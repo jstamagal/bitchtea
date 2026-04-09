@@ -65,7 +65,7 @@ func TestProfileSaveLoadDelete(t *testing.T) {
 
 	// List
 	names := ListProfiles()
-	if len(names) != 5 {
+	if len(names) != 16 {
 		t.Fatalf("expected built-ins plus saved profile, got %v", names)
 	}
 	found := false
@@ -100,7 +100,7 @@ func TestProfileSaveLoadDelete(t *testing.T) {
 		t.Fatalf("delete: %v", err)
 	}
 	names = ListProfiles()
-	if len(names) != 4 {
+	if len(names) != 15 {
 		t.Fatalf("expected only built-in profiles after delete, got %v", names)
 	}
 }
@@ -149,7 +149,7 @@ func TestListProfilesIncludesBuiltins(t *testing.T) {
 	}
 
 	names := ListProfiles()
-	for _, want := range []string{"custom", "ollama", "openrouter", "zai-anthropic", "zai-openai"} {
+	for _, want := range []string{"aihubmix", "avian", "copilot", "cortecs", "custom", "huggingface", "ionet", "nebius", "ollama", "openrouter", "synthetic", "venice", "vercel", "xai", "zai-anthropic", "zai-openai"} {
 		found := false
 		for _, got := range names {
 			if got == want {
