@@ -93,7 +93,7 @@ type Model struct {
 	ready              bool
 	streaming          bool
 	streamBuffer       *strings.Builder // accumulates current agent response (pointer to avoid copy panic)
-	activeContext      string
+	focus              *FocusManager
 	backgroundActivity []BackgroundActivity
 	backgroundUnread   int
 
@@ -155,13 +155,13 @@ func NewModel(cfg *config.Config) Model {
 		spinner:       sp,
 		toolPanel:     NewToolPanel(),
 		mp3:           newMP3Controller(),
-		messages:      []ChatMessage{},
-		history:       []string{},
-		historyIdx:    -1,
-		streamBuffer:  &strings.Builder{},
-		activeContext: normalizeContextLabel(""),
-		session:       sess,
-		transcript:    transcript,
+		messages:     []ChatMessage{},
+		history:      []string{},
+		historyIdx:   -1,
+		streamBuffer: &strings.Builder{},
+		focus:        NewFocusManager(),
+		session:      sess,
+		transcript:   transcript,
 	}
 }
 
@@ -742,7 +742,7 @@ func (m Model) View() string {
 	if len(m.queued) > 0 {
 		queuedStr = fmt.Sprintf(" [queued:%d]", len(m.queued))
 	}
-	topLeft := TopBarStyle.Render(fmt.Sprintf(" bitchtea — %s/%s [%s]%s%s ", m.config.Provider, m.config.Model, m.activeContext, flags, queuedStr))
+	topLeft := TopBarStyle.Render(fmt.Sprintf(" bitchtea — %s/%s [%s]%s%s ", m.config.Provider, m.config.Model, m.focus.ActiveLabel(), flags, queuedStr))
 	topRight := TopBarStyle.Render(fmt.Sprintf(" %s ", time.Now().Format("3:04pm")))
 	topPad := m.width - lipgloss.Width(topLeft) - lipgloss.Width(topRight)
 	if topPad < 0 {
@@ -823,8 +823,10 @@ func (m Model) View() string {
 		inputView
 }
 
+// SetActiveContext switches focus to the named channel. Exists for compatibility
+// with callers that only know a string label; prefer focus.SetFocus directly.
 func (m *Model) SetActiveContext(label string) {
-	m.activeContext = normalizeContextLabel(label)
+	m.focus.SetFocus(Channel(label))
 }
 
 func (m *Model) NotifyBackgroundActivity(activity BackgroundActivity) {
