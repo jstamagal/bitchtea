@@ -341,13 +341,17 @@ func (a *Agent) Compact(ctx context.Context) error {
 		return err
 	}
 
+	end := len(a.messages) - 4
+	if err := a.flushCompactedMessagesToDailyMemory(ctx, a.messages[1:end]); err != nil {
+		return err
+	}
+
 	// Build a summary request
 	var sb strings.Builder
 	sb.WriteString("Summarize the following conversation concisely, preserving all important ")
 	sb.WriteString("technical details, decisions made, files modified, and current state:\n\n")
 
 	// Everything except system prompt and last 4 messages
-	end := len(a.messages) - 4
 	for _, m := range a.messages[1:end] {
 		sb.WriteString(fmt.Sprintf("[%s]: %s\n", m.Role, truncateStr(m.Content, 500)))
 	}
@@ -379,6 +383,43 @@ func (a *Agent) Compact(ctx context.Context) error {
 	a.messages = append(a.messages, keep...)
 
 	return nil
+}
+
+func (a *Agent) flushCompactedMessagesToDailyMemory(ctx context.Context, messages []llm.Message) error {
+	if len(messages) == 0 {
+		return nil
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+
+	var sb strings.Builder
+	sb.WriteString("Extract durable memory from this conversation slice before it is compacted.\n")
+	sb.WriteString("Return concise markdown bullets covering only lasting facts: user preferences, decisions, completed work, relevant files, and open follow-ups.\n")
+	sb.WriteString("Skip transient chatter and tool noise. If nothing deserves durable memory, reply with exactly NONE.\n\n")
+	for _, m := range messages {
+		sb.WriteString(fmt.Sprintf("[%s]: %s\n", m.Role, truncateStr(m.Content, 700)))
+	}
+
+	streamEvents := make(chan llm.StreamEvent, 100)
+	go a.streamer.StreamChat(ctx, []llm.Message{{Role: "user", Content: sb.String()}}, nil, streamEvents)
+
+	var summary strings.Builder
+	for ev := range streamEvents {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		if ev.Type == "text" {
+			summary.WriteString(ev.Text)
+		}
+	}
+
+	text := strings.TrimSpace(summary.String())
+	if text == "" || strings.EqualFold(text, "none") {
+		return nil
+	}
+
+	return AppendDailyMemory(a.config.SessionDir, a.config.WorkDir, time.Now(), text)
 }
 
 // AutoNextPrompt returns the auto-next-steps prompt
