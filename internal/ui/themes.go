@@ -33,7 +33,7 @@ var Theme = struct {
 	BarBg:   lipgloss.Color("4"),
 
 	ThinkingBarFg: lipgloss.Color("15"),
-	ThinkingBarBg: lipgloss.Color("0"),
+	ThinkingBarBg: lipgloss.Color("4"),
 }
 
 // CurrentThemeName returns the name of the active theme

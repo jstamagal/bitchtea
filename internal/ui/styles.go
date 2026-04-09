@@ -84,7 +84,7 @@ var (
 	ThinkingBarStyle = lipgloss.NewStyle().
 				Bold(true).
 				Foreground(ColorWhite).
-				Background(ColorDarkBg).
+				Background(lipgloss.Color("4")).
 				Padding(0, 1)
 )
 
