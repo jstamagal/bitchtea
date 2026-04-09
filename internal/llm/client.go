@@ -7,9 +7,11 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/url"
 	"strings"
+	"time"
 )
 
 // DebugInfo holds request/response details for debug logging
@@ -105,6 +107,54 @@ type ChatRequest struct {
 
 type chatStreamOptions struct {
 	IncludeUsage bool `json:"include_usage"`
+}
+
+type httpClientTimeouts struct {
+	dialTimeout           time.Duration
+	keepAlive             time.Duration
+	tlsHandshakeTimeout   time.Duration
+	responseHeaderTimeout time.Duration
+	expectContinueTimeout time.Duration
+	idleConnTimeout       time.Duration
+	requestTimeout        time.Duration
+	maxIdleConns          int
+	maxIdleConnsPerHost   int
+}
+
+func defaultHTTPClientTimeouts() httpClientTimeouts {
+	return httpClientTimeouts{
+		dialTimeout:           10 * time.Second,
+		keepAlive:             30 * time.Second,
+		tlsHandshakeTimeout:   10 * time.Second,
+		responseHeaderTimeout: 45 * time.Second,
+		expectContinueTimeout: 1 * time.Second,
+		idleConnTimeout:       90 * time.Second,
+		requestTimeout:        30 * time.Minute,
+		maxIdleConns:          100,
+		maxIdleConnsPerHost:   10,
+	}
+}
+
+func newHTTPClient(cfg httpClientTimeouts) *http.Client {
+	transport := &http.Transport{
+		Proxy: http.ProxyFromEnvironment,
+		DialContext: (&net.Dialer{
+			Timeout:   cfg.dialTimeout,
+			KeepAlive: cfg.keepAlive,
+		}).DialContext,
+		ForceAttemptHTTP2:     true,
+		MaxIdleConns:          cfg.maxIdleConns,
+		MaxIdleConnsPerHost:   cfg.maxIdleConnsPerHost,
+		IdleConnTimeout:       cfg.idleConnTimeout,
+		TLSHandshakeTimeout:   cfg.tlsHandshakeTimeout,
+		ExpectContinueTimeout: cfg.expectContinueTimeout,
+		ResponseHeaderTimeout: cfg.responseHeaderTimeout,
+	}
+
+	return &http.Client{
+		Timeout:   cfg.requestTimeout,
+		Transport: transport,
+	}
 }
 
 // StreamChat sends a streaming chat completion request, dispatching to the
@@ -308,7 +358,7 @@ func NewClient(apiKey, baseURL, model, provider string) *Client {
 		BaseURL:  baseURL,
 		Model:    model,
 		Provider: provider,
-		HTTP:     &http.Client{},
+		HTTP:     newHTTPClient(defaultHTTPClientTimeouts()),
 	}
 }
 
