@@ -77,10 +77,11 @@ func TestThinkingBarStyleUsesThemeColors(t *testing.T) {
 	if string(Theme.ThinkingBarBg) == "" {
 		t.Error("ThinkingBarBg is empty")
 	}
-
-	// ThinkingBar colors should differ from BarBg (that's the whole point)
-	if Theme.ThinkingBarBg == Theme.BarBg {
-		t.Errorf("ThinkingBarBg (%s) should differ from BarBg (%s)", Theme.ThinkingBarBg, Theme.BarBg)
+	if Theme.ThinkingBarFg != Theme.White {
+		t.Errorf("ThinkingBarFg (%s) = %s, want %s", Theme.ThinkingBarFg, Theme.ThinkingBarFg, Theme.White)
+	}
+	if Theme.ThinkingBarBg != Theme.BarBg {
+		t.Errorf("ThinkingBarBg (%s) = %s, want %s", Theme.ThinkingBarBg, Theme.ThinkingBarBg, Theme.BarBg)
 	}
 }
 
