@@ -175,6 +175,66 @@ func TestProfileAllowsEmptyAPIKey(t *testing.T) {
 	}
 }
 
+func TestMigrateDataPaths(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	// Create old XDG dirs with a sentinel file
+	oldSessions := home + "/.local/share/bitchtea/sessions"
+	oldProfiles := home + "/.config/bitchtea/profiles"
+	os.MkdirAll(oldSessions, 0755)
+	os.MkdirAll(oldProfiles, 0755)
+	os.WriteFile(oldSessions+"/test.jsonl", []byte("old-session"), 0644)
+	os.WriteFile(oldProfiles+"/myprofile.json", []byte("{}"), 0644)
+
+	if err := MigrateDataPaths(); err != nil {
+		t.Fatalf("migration failed: %v", err)
+	}
+
+	// New paths should exist
+	newSessions := home + "/.bitchtea/sessions"
+	newProfiles := home + "/.bitchtea/profiles"
+	if _, err := os.Stat(newSessions + "/test.jsonl"); err != nil {
+		t.Fatalf("session file not migrated: %v", err)
+	}
+	if _, err := os.Stat(newProfiles + "/myprofile.json"); err != nil {
+		t.Fatalf("profile file not migrated: %v", err)
+	}
+
+	// Old paths should be gone
+	if _, err := os.Stat(oldSessions); !os.IsNotExist(err) {
+		t.Fatal("old sessions dir should have been moved")
+	}
+	if _, err := os.Stat(oldProfiles); !os.IsNotExist(err) {
+		t.Fatal("old profiles dir should have been moved")
+	}
+}
+
+func TestMigrateDataPathsSkipsIfNewExists(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	oldSessions := home + "/.local/share/bitchtea/sessions"
+	newSessions := home + "/.bitchtea/sessions"
+	os.MkdirAll(oldSessions, 0755)
+	os.MkdirAll(newSessions, 0755)
+	os.WriteFile(oldSessions+"/old.jsonl", []byte("old"), 0644)
+	os.WriteFile(newSessions+"/new.jsonl", []byte("new"), 0644)
+
+	if err := MigrateDataPaths(); err != nil {
+		t.Fatalf("migration failed: %v", err)
+	}
+
+	// Old should still exist (not clobbered)
+	if _, err := os.Stat(oldSessions + "/old.jsonl"); err != nil {
+		t.Fatal("old file should still exist when new dir already present")
+	}
+	// New should still have its own file
+	if _, err := os.Stat(newSessions + "/new.jsonl"); err != nil {
+		t.Fatal("new file should still exist")
+	}
+}
+
 func TestEnvOr(t *testing.T) {
 	os.Setenv("BITCHTEA_TEST_VAR", "custom")
 	defer os.Unsetenv("BITCHTEA_TEST_VAR")

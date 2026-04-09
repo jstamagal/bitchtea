@@ -71,7 +71,7 @@ The main loop is split across a few packages:
 
 ## Session Format
 
-Sessions live in `~/.local/share/bitchtea/sessions/` as JSONL. Each line is a `session.Entry` with:
+Sessions live in `~/.bitchtea/sessions/` as JSONL. Each line is a `session.Entry` with:
 
 - `ts`
 - `role`

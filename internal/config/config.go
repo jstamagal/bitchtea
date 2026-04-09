@@ -11,6 +11,12 @@ import (
 	"strings"
 )
 
+// BaseDir returns the root data directory: ~/.bitchtea/
+func BaseDir() string {
+	home, _ := os.UserHomeDir()
+	return filepath.Join(home, ".bitchtea")
+}
+
 // Config holds all runtime configuration
 type Config struct {
 	// API
@@ -62,8 +68,8 @@ func DefaultConfig() Config {
 		SoundType:         "bell",
 
 		WorkDir:    wd,
-		SessionDir: filepath.Join(home, ".local", "share", "bitchtea", "sessions"),
-		LogDir:     filepath.Join(home, ".local", "share", "bitchtea", "logs"),
+		SessionDir: filepath.Join(home, ".bitchtea", "sessions"),
+		LogDir:     filepath.Join(home, ".bitchtea", "logs"),
 	}
 }
 
@@ -219,8 +225,7 @@ var builtinProfiles = map[string]builtinProfileSpec{
 // ProfilesDir returns the directory where profiles are stored.
 // It's a variable so tests can override it.
 var ProfilesDir = func() string {
-	home, _ := os.UserHomeDir()
-	return filepath.Join(home, ".config", "bitchtea", "profiles")
+	return filepath.Join(BaseDir(), "profiles")
 }
 
 // SaveProfile writes a profile to disk
@@ -368,4 +373,55 @@ func builtinProfile(name string) (*Profile, bool) {
 		}
 	}
 	return p, true
+}
+
+// MigrateDataPaths moves data from the old XDG locations to ~/.bitchtea/ if
+// the old paths exist and the new ones do not. Errors are returned but
+// non-fatal — callers should log and continue.
+func MigrateDataPaths() error {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return fmt.Errorf("resolve home dir: %w", err)
+	}
+
+	base := filepath.Join(home, ".bitchtea")
+
+	moves := []struct {
+		oldPath string
+		newPath string
+	}{
+		{filepath.Join(home, ".local", "share", "bitchtea", "sessions"), filepath.Join(base, "sessions")},
+		{filepath.Join(home, ".local", "share", "bitchtea", "logs"), filepath.Join(base, "logs")},
+		{filepath.Join(home, ".local", "share", "bitchtea", "memory"), filepath.Join(base, "memory")},
+		{filepath.Join(home, ".config", "bitchtea", "profiles"), filepath.Join(base, "profiles")},
+	}
+
+	var errs []string
+	for _, m := range moves {
+		if err := migrateDir(m.oldPath, m.newPath); err != nil {
+			errs = append(errs, fmt.Sprintf("%s → %s: %v", m.oldPath, m.newPath, err))
+		}
+	}
+	if len(errs) > 0 {
+		return fmt.Errorf("migration errors: %s", strings.Join(errs, "; "))
+	}
+	return nil
+}
+
+// migrateDir moves oldPath to newPath if oldPath exists and newPath does not.
+func migrateDir(oldPath, newPath string) error {
+	if _, err := os.Stat(oldPath); os.IsNotExist(err) {
+		return nil // nothing to migrate
+	}
+	if _, err := os.Stat(newPath); err == nil {
+		return nil // destination already exists, don't clobber
+	}
+
+	if err := os.MkdirAll(filepath.Dir(newPath), 0755); err != nil {
+		return fmt.Errorf("create parent dir: %w", err)
+	}
+	if err := os.Rename(oldPath, newPath); err != nil {
+		return fmt.Errorf("rename: %w", err)
+	}
+	return nil
 }

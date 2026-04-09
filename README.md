@@ -155,7 +155,7 @@ BITCHTEA_PROVIDER      Force provider (openai, anthropic)
 
 ## Sessions And Context
 
-- Sessions are stored as JSONL under `~/.local/share/bitchtea/sessions/`.
+- Sessions are stored as JSONL under `~/.bitchtea/sessions/`.
 - Use `--resume` or `/sessions` to continue prior work.
 - Use `/fork` when you want to branch from the current conversation state.
 - `AGENTS.md` and `CLAUDE.md` are discovered upward from the working directory and injected as context.

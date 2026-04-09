@@ -25,6 +25,10 @@ type cliOptions struct {
 }
 
 func main() {
+	if err := config.MigrateDataPaths(); err != nil {
+		fmt.Fprintf(os.Stderr, "bitchtea: data migration warning: %v\n", err)
+	}
+
 	cfg := config.DefaultConfig()
 	config.DetectProvider(&cfg)
 
