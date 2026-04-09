@@ -9,8 +9,8 @@ require (
 	github.com/charmbracelet/bubbletea v1.3.4
 	github.com/charmbracelet/glamour v1.0.0
 	github.com/charmbracelet/lipgloss v1.1.1-0.20250404203927-76690c660834
+	github.com/charmbracelet/openai-go v0.0.0-20260319145158-d0740cc34266
 	github.com/hajimehoshi/go-mp3 v0.3.4
-	github.com/openai/openai-go/v3 v3.31.0
 	golang.org/x/term v0.41.0
 )
 
