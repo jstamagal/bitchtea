@@ -1,13 +1,12 @@
 package agent
 
 import (
-	"fmt"
-	"hash/fnv"
 	"os"
 	"path/filepath"
-	"regexp"
 	"strings"
 	"time"
+
+	memorypkg "github.com/jstamagal/bitchtea/internal/memory"
 )
 
 // DiscoverContextFiles walks up from workDir looking for AGENTS.md, CLAUDE.md,
@@ -42,72 +41,37 @@ func DiscoverContextFiles(workDir string) string {
 
 // LoadMemory reads MEMORY.md from workDir if it exists
 func LoadMemory(workDir string) string {
-	path := filepath.Join(workDir, "MEMORY.md")
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return ""
-	}
-	return string(data)
+	return memorypkg.Load(workDir)
 }
 
 // SaveMemory writes MEMORY.md to workDir
 func SaveMemory(workDir string, content string) error {
-	path := filepath.Join(workDir, "MEMORY.md")
-	return os.WriteFile(path, []byte(content), 0644)
+	return memorypkg.Save(workDir, content)
 }
-
-var nonAlphaNum = regexp.MustCompile(`[^a-z0-9]+`)
 
 // DailyMemoryPath returns the markdown file used for durable daily memory for
 // the current worktree scope.
 func DailyMemoryPath(sessionDir, workDir string, when time.Time) string {
-	return filepath.Join(
-		filepath.Dir(sessionDir),
-		"memory",
-		memoryScopeName(workDir),
-		when.Format("2006-01-02")+".md",
-	)
+	return memorypkg.DailyPath(sessionDir, workDir, when)
 }
 
 // AppendDailyMemory appends a dated durable-memory checkpoint for later recall.
 func AppendDailyMemory(sessionDir, workDir string, when time.Time, content string) error {
-	content = strings.TrimSpace(content)
-	if content == "" {
-		return nil
-	}
-
-	path := DailyMemoryPath(sessionDir, workDir, when)
-	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
-		return fmt.Errorf("create daily memory dir: %w", err)
-	}
-
-	f, err := os.OpenFile(path, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0644)
-	if err != nil {
-		return fmt.Errorf("open daily memory file: %w", err)
-	}
-	defer f.Close()
-
-	entry := fmt.Sprintf("## %s pre-compaction flush\n\n%s\n\n", when.Format(time.RFC3339), content)
-	if _, err := f.WriteString(entry); err != nil {
-		return fmt.Errorf("append daily memory: %w", err)
-	}
-
-	return nil
+	return memorypkg.AppendDaily(sessionDir, workDir, when, content)
 }
 
-func memoryScopeName(workDir string) string {
-	clean := filepath.Clean(workDir)
-	base := strings.ToLower(filepath.Base(clean))
-	base = nonAlphaNum.ReplaceAllString(base, "-")
-	base = strings.Trim(base, "-")
-	if base == "" || base == "." {
-		base = "root"
-	}
+// MemorySearchResult is a single recall hit from hot or durable markdown memory.
+type MemorySearchResult = memorypkg.SearchResult
 
-	hasher := fnv.New32a()
-	_, _ = hasher.Write([]byte(clean))
+// SearchMemory searches hot MEMORY.md and durable daily markdown memory for the
+// current worktree scope.
+func SearchMemory(sessionDir, workDir, query string, limit int) ([]MemorySearchResult, error) {
+	return memorypkg.Search(sessionDir, workDir, query, limit)
+}
 
-	return fmt.Sprintf("%s-%08x", base, hasher.Sum32())
+// RenderMemorySearchResults formats memory hits for the recall tool output.
+func RenderMemorySearchResults(query string, results []MemorySearchResult) string {
+	return memorypkg.RenderSearchResults(query, results)
 }
 
 // ExpandFileRefs replaces @file references in input with file contents.

@@ -12,16 +12,18 @@ import (
 	"time"
 
 	"github.com/jstamagal/bitchtea/internal/llm"
+	memorypkg "github.com/jstamagal/bitchtea/internal/memory"
 )
 
 // Registry holds all available tools and their definitions
 type Registry struct {
-	WorkDir string
+	WorkDir    string
+	SessionDir string
 }
 
 // NewRegistry creates a tool registry
-func NewRegistry(workDir string) *Registry {
-	return &Registry{WorkDir: workDir}
+func NewRegistry(workDir, sessionDir string) *Registry {
+	return &Registry{WorkDir: workDir, SessionDir: sessionDir}
 }
 
 // Definitions returns OpenAI-compatible tool definitions
@@ -110,6 +112,27 @@ func (r *Registry) Definitions() []llm.ToolDef {
 		{
 			Type: "function",
 			Function: llm.ToolFuncDef{
+				Name:        "search_memory",
+				Description: "Search the hot MEMORY.md file and durable daily markdown memory for past decisions, notes, and context relevant to the current worktree.",
+				Parameters: map[string]interface{}{
+					"type": "object",
+					"properties": map[string]interface{}{
+						"query": map[string]interface{}{
+							"type":        "string",
+							"description": "Keywords or a short natural-language query describing what to recall",
+						},
+						"limit": map[string]interface{}{
+							"type":        "integer",
+							"description": "Maximum number of memory matches to return (default: 5)",
+						},
+					},
+					"required": []string{"query"},
+				},
+			},
+		},
+		{
+			Type: "function",
+			Function: llm.ToolFuncDef{
 				Name:        "bash",
 				Description: "Execute a bash command. Returns stdout and stderr.",
 				Parameters: map[string]interface{}{
@@ -140,6 +163,8 @@ func (r *Registry) Execute(ctx context.Context, name string, argsJSON string) (s
 		return r.execWrite(argsJSON)
 	case "edit":
 		return r.execEdit(argsJSON)
+	case "search_memory":
+		return r.execSearchMemory(argsJSON)
 	case "bash":
 		return r.execBash(ctx, argsJSON)
 	default:
@@ -259,6 +284,23 @@ func (r *Registry) execEdit(argsJSON string) (string, error) {
 	}
 
 	return fmt.Sprintf("Applied %d edit(s) to %s", applied, args.Path), nil
+}
+
+func (r *Registry) execSearchMemory(argsJSON string) (string, error) {
+	var args struct {
+		Query string `json:"query"`
+		Limit int    `json:"limit"`
+	}
+	if err := json.Unmarshal([]byte(argsJSON), &args); err != nil {
+		return "", fmt.Errorf("parse args: %w", err)
+	}
+
+	results, err := memorypkg.Search(r.SessionDir, r.WorkDir, args.Query, args.Limit)
+	if err != nil {
+		return "", err
+	}
+
+	return memorypkg.RenderSearchResults(args.Query, results), nil
 }
 
 func (r *Registry) execBash(ctx context.Context, argsJSON string) (string, error) {

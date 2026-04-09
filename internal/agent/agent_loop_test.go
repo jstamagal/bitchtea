@@ -257,6 +257,19 @@ func TestNewAgentTracksBootstrapMessageCount(t *testing.T) {
 	}
 }
 
+func TestBuildSystemPromptMentionsSearchMemory(t *testing.T) {
+	cfg := config.DefaultConfig()
+	cfg.WorkDir = t.TempDir()
+
+	prompt := buildSystemPrompt(&cfg)
+	if !strings.Contains(prompt, "search_memory") {
+		t.Fatalf("expected search_memory in system prompt, got %q", prompt)
+	}
+	if !strings.Contains(prompt, "prior decisions") {
+		t.Fatalf("expected recall guidance in system prompt, got %q", prompt)
+	}
+}
+
 func TestMaybeQueueFollowUpIncludesLastAssistantSummary(t *testing.T) {
 	cfg := config.DefaultConfig()
 	cfg.WorkDir = t.TempDir()

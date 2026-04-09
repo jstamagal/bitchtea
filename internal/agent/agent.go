@@ -88,7 +88,7 @@ func NewAgentWithStreamer(cfg *config.Config, streamer llm.ChatStreamer) *Agent 
 	a := &Agent{
 		client:   client,
 		streamer: streamer,
-		tools:    tools.NewRegistry(cfg.WorkDir),
+		tools:    tools.NewRegistry(cfg.WorkDir, cfg.SessionDir),
 		config:   cfg,
 		messages: []llm.Message{
 			{Role: "system", Content: systemPrompt},
@@ -262,12 +262,13 @@ func (a *Agent) SendMessage(ctx context.Context, userMsg string, events chan<- E
 func buildSystemPrompt(cfg *config.Config) string {
 	var sb strings.Builder
 	sb.WriteString("You are bitchtea, an agentic coding assistant running in a terminal.\n")
-	sb.WriteString("You have access to tools: read, write, edit, bash.\n")
+	sb.WriteString("You have access to tools: read, write, edit, search_memory, bash.\n")
 	sb.WriteString("Working directory: " + cfg.WorkDir + "\n")
 	sb.WriteString("\nRules:\n")
 	sb.WriteString("- Use read to examine files before editing them\n")
 	sb.WriteString("- Use edit for precise changes with exact text matching\n")
 	sb.WriteString("- Use write for new files or complete rewrites\n")
+	sb.WriteString("- Use search_memory when the user asks about prior decisions, history, or anything you cannot justify from current context alone\n")
 	sb.WriteString("- Use bash for running commands, file operations like ls/find/grep\n")
 	sb.WriteString("- Be direct. No fluff. Get shit done.\n")
 	sb.WriteString("- When you're done with a task, say so clearly.\n")
