@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -12,7 +13,7 @@ func TestReadFile(t *testing.T) {
 	path := filepath.Join(dir, "test.txt")
 	os.WriteFile(path, []byte("line1\nline2\nline3\nline4\nline5\n"), 0644)
 
-	reg := NewRegistry(dir)
+	reg := NewRegistry(dir, t.TempDir())
 
 	// Read full file
 	result, err := reg.Execute(context.Background(), "read", `{"path":"test.txt"}`)
@@ -35,7 +36,7 @@ func TestReadFile(t *testing.T) {
 
 func TestWriteFile(t *testing.T) {
 	dir := t.TempDir()
-	reg := NewRegistry(dir)
+	reg := NewRegistry(dir, t.TempDir())
 
 	result, err := reg.Execute(context.Background(), "write", `{"path":"sub/dir/out.txt","content":"hello world"}`)
 	if err != nil {
@@ -56,7 +57,7 @@ func TestEditFile(t *testing.T) {
 	path := filepath.Join(dir, "edit.txt")
 	os.WriteFile(path, []byte("foo bar baz\nhello world\n"), 0644)
 
-	reg := NewRegistry(dir)
+	reg := NewRegistry(dir, t.TempDir())
 
 	result, err := reg.Execute(context.Background(), "edit", `{"path":"edit.txt","edits":[{"oldText":"hello world","newText":"goodbye world"}]}`)
 	if err != nil {
@@ -77,7 +78,7 @@ func TestEditFileNonUnique(t *testing.T) {
 	path := filepath.Join(dir, "dup.txt")
 	os.WriteFile(path, []byte("aaa\naaa\n"), 0644)
 
-	reg := NewRegistry(dir)
+	reg := NewRegistry(dir, t.TempDir())
 
 	_, err := reg.Execute(context.Background(), "edit", `{"path":"dup.txt","edits":[{"oldText":"aaa","newText":"bbb"}]}`)
 	if err == nil {
@@ -87,7 +88,7 @@ func TestEditFileNonUnique(t *testing.T) {
 
 func TestBash(t *testing.T) {
 	dir := t.TempDir()
-	reg := NewRegistry(dir)
+	reg := NewRegistry(dir, t.TempDir())
 
 	result, err := reg.Execute(context.Background(), "bash", `{"command":"echo hello && echo world"}`)
 	if err != nil {
@@ -100,7 +101,7 @@ func TestBash(t *testing.T) {
 
 func TestBashError(t *testing.T) {
 	dir := t.TempDir()
-	reg := NewRegistry(dir)
+	reg := NewRegistry(dir, t.TempDir())
 
 	result, err := reg.Execute(context.Background(), "bash", `{"command":"exit 42"}`)
 	if err != nil {
@@ -112,7 +113,7 @@ func TestBashError(t *testing.T) {
 }
 
 func TestUnknownTool(t *testing.T) {
-	reg := NewRegistry(t.TempDir())
+	reg := NewRegistry(t.TempDir(), t.TempDir())
 	_, err := reg.Execute(context.Background(), "nope", `{}`)
 	if err == nil {
 		t.Fatal("expected error for unknown tool")
@@ -120,19 +121,39 @@ func TestUnknownTool(t *testing.T) {
 }
 
 func TestDefinitions(t *testing.T) {
-	reg := NewRegistry(t.TempDir())
+	reg := NewRegistry(t.TempDir(), t.TempDir())
 	defs := reg.Definitions()
-	if len(defs) != 4 {
-		t.Fatalf("expected 4 tool definitions, got %d", len(defs))
+	if len(defs) != 5 {
+		t.Fatalf("expected 5 tool definitions, got %d", len(defs))
 	}
 
 	names := map[string]bool{}
 	for _, d := range defs {
 		names[d.Function.Name] = true
 	}
-	for _, expected := range []string{"read", "write", "edit", "bash"} {
+	for _, expected := range []string{"read", "write", "edit", "search_memory", "bash"} {
 		if !names[expected] {
 			t.Fatalf("missing tool definition: %s", expected)
 		}
+	}
+}
+
+func TestSearchMemoryTool(t *testing.T) {
+	workDir := t.TempDir()
+	sessionDir := filepath.Join(t.TempDir(), "sessions")
+	if err := os.WriteFile(filepath.Join(workDir, "MEMORY.md"), []byte("# Memory\n- Keep the IRC metaphor\n"), 0644); err != nil {
+		t.Fatalf("write MEMORY.md: %v", err)
+	}
+
+	reg := NewRegistry(workDir, sessionDir)
+	result, err := reg.Execute(context.Background(), "search_memory", `{"query":"IRC metaphor"}`)
+	if err != nil {
+		t.Fatalf("search_memory: %v", err)
+	}
+	if !strings.Contains(result, `Memory matches for "IRC metaphor":`) {
+		t.Fatalf("unexpected output: %q", result)
+	}
+	if !strings.Contains(result, "Source: MEMORY.md") {
+		t.Fatalf("expected MEMORY.md source, got %q", result)
 	}
 }
