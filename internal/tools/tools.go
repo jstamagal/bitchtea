@@ -19,11 +19,17 @@ import (
 type Registry struct {
 	WorkDir    string
 	SessionDir string
+	Scope      memorypkg.Scope
 }
 
 // NewRegistry creates a tool registry
 func NewRegistry(workDir, sessionDir string) *Registry {
 	return &Registry{WorkDir: workDir, SessionDir: sessionDir}
+}
+
+// SetScope updates the memory scope used for search_memory queries.
+func (r *Registry) SetScope(scope memorypkg.Scope) {
+	r.Scope = scope
 }
 
 // Definitions returns OpenAI-compatible tool definitions
@@ -295,7 +301,7 @@ func (r *Registry) execSearchMemory(argsJSON string) (string, error) {
 		return "", fmt.Errorf("parse args: %w", err)
 	}
 
-	results, err := memorypkg.Search(r.SessionDir, r.WorkDir, args.Query, args.Limit)
+	results, err := memorypkg.SearchInScope(r.SessionDir, r.WorkDir, r.Scope, args.Query, args.Limit)
 	if err != nil {
 		return "", err
 	}

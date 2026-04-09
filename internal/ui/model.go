@@ -136,6 +136,7 @@ func NewModel(cfg *config.Config) Model {
 	sp.Style = lipgloss.NewStyle().Foreground(ColorMagenta)
 
 	ag := agent.NewAgent(cfg)
+	fm := LoadFocusManager(cfg.SessionDir)
 
 	// Create session
 	sess, err := session.New(cfg.SessionDir)
@@ -149,6 +150,9 @@ func NewModel(cfg *config.Config) Model {
 		fmt.Fprintf(os.Stderr, "warning: transcript init failed: %v\n", err)
 	}
 
+	// Set initial memory scope from restored focus.
+	ag.SetScope(ircContextToMemoryScope(fm.Active()))
+
 	return Model{
 		config:       cfg,
 		agent:        ag,
@@ -161,7 +165,7 @@ func NewModel(cfg *config.Config) Model {
 		history:      []string{},
 		historyIdx:   -1,
 		streamBuffer: &strings.Builder{},
-		focus:        LoadFocusManager(cfg.SessionDir),
+		focus:        fm,
 		session:      sess,
 		transcript:   transcript,
 	}
@@ -684,11 +688,26 @@ func waitForAgentEvent(ch chan agent.Event) tea.Cmd {
 	}
 }
 
+func ircContextToMemoryScope(ctx IRCContext) agent.MemoryScope {
+	switch ctx.Kind {
+	case KindChannel:
+		return agent.ChannelMemoryScope(ctx.Channel, nil)
+	case KindSubchannel:
+		parent := agent.ChannelMemoryScope(ctx.Channel, nil)
+		return agent.ChannelMemoryScope(ctx.Sub, &parent)
+	case KindDirect:
+		return agent.QueryMemoryScope(ctx.Target, nil)
+	default:
+		return agent.RootMemoryScope()
+	}
+}
+
 func (m *Model) sendToAgent(input string) tea.Cmd {
 	if m.cancel != nil {
 		m.cancel()
 	}
 	m.turnContext = m.focus.Active()
+	m.agent.SetScope(ircContextToMemoryScope(m.turnContext))
 	ctx, cancel := context.WithCancel(context.Background())
 	m.cancel = cancel
 	m.streaming = true

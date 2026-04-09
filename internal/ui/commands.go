@@ -420,19 +420,43 @@ func handleThemeCommand(m Model, _ string, _ []string) (Model, tea.Cmd) {
 }
 
 func handleMemoryCommand(m Model, _ string, _ []string) (Model, tea.Cmd) {
+	// Show root MEMORY.md.
 	mem := agent.LoadMemory(m.config.WorkDir)
-	if mem == "" {
+	if mem != "" {
+		if len(mem) > 1000 {
+			mem = mem[:1000] + "\n... (truncated)"
+		}
+		m.addMessage(ChatMessage{
+			Time:    time.Now(),
+			Type:    MsgRaw,
+			Content: "\033[1;36m--- MEMORY.md ---\033[0m\n" + mem,
+		})
+	}
+
+	// Show scoped HOT.md when not in root context.
+	active := m.focus.Active()
+	scope := ircContextToMemoryScope(active)
+	if scope.Kind != agent.MemoryScopeRoot {
+		hot := agent.LoadScopedMemory(m.config.SessionDir, m.config.WorkDir, scope)
+		label := active.Label()
+		if hot == "" {
+			m.sysMsg(fmt.Sprintf("No HOT.md for %s yet.", label))
+		} else {
+			if len(hot) > 1000 {
+				hot = hot[:1000] + "\n... (truncated)"
+			}
+			m.addMessage(ChatMessage{
+				Time:    time.Now(),
+				Type:    MsgRaw,
+				Content: fmt.Sprintf("\033[1;36m--- HOT.md (%s) ---\033[0m\n", label) + hot,
+			})
+		}
+	}
+
+	if mem == "" && scope.Kind == agent.MemoryScopeRoot {
 		m.sysMsg("No MEMORY.md found in working directory.")
-		return m, nil
 	}
-	if len(mem) > 1000 {
-		mem = mem[:1000] + "\n... (truncated)"
-	}
-	m.addMessage(ChatMessage{
-		Time:    time.Now(),
-		Type:    MsgRaw,
-		Content: "\033[1;36m--- MEMORY.md ---\033[0m\n" + mem,
-	})
+
 	m.refreshViewport()
 	return m, nil
 }

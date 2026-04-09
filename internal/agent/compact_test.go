@@ -272,6 +272,91 @@ func TestCompactPreservesToolMetadata(t *testing.T) {
 	}
 }
 
+func TestCompactFlushesDailyMemoryToScopedPath(t *testing.T) {
+	workDir := t.TempDir()
+	sessionDir := t.TempDir()
+
+	cfg := config.DefaultConfig()
+	cfg.WorkDir = workDir
+	cfg.SessionDir = sessionDir
+
+	streamer := &fakeStreamer{
+		responses: []func(chan<- llm.StreamEvent){
+			func(events chan<- llm.StreamEvent) {
+				events <- llm.StreamEvent{Type: "text", Text: "- Channel-specific decision A"}
+				events <- llm.StreamEvent{Type: "done"}
+			},
+			func(events chan<- llm.StreamEvent) {
+				events <- llm.StreamEvent{Type: "text", Text: "Scoped compaction done."}
+				events <- llm.StreamEvent{Type: "done"}
+			},
+		},
+	}
+
+	ag := NewAgentWithStreamer(&cfg, streamer)
+
+	// Set a channel scope before compacting.
+	ag.SetScope(ChannelMemoryScope("engineering", nil))
+	ag.messages = makeMessages(8)
+
+	if err := ag.Compact(context.Background()); err != nil {
+		t.Fatalf("Compact returned error: %v", err)
+	}
+
+	// The daily memory should be written to the scoped path, not the root path.
+	rootDailyPath := DailyMemoryPath(sessionDir, workDir, time.Now())
+	_, rootErr := os.ReadFile(rootDailyPath)
+
+	scopedDailyPath := ScopedDailyMemoryPath(sessionDir, workDir, ChannelMemoryScope("engineering", nil), time.Now())
+	scopedData, scopedErr := os.ReadFile(scopedDailyPath)
+
+	if !os.IsNotExist(rootErr) {
+		t.Fatalf("expected root daily path to not exist, got: %v (rootErr=%v)", string(func() []byte {
+			d, _ := os.ReadFile(rootDailyPath); return d
+		}()), rootErr)
+	}
+	if scopedErr != nil {
+		t.Fatalf("expected scoped daily file to exist: %v", scopedErr)
+	}
+	if !strings.Contains(string(scopedData), "Channel-specific decision A") {
+		t.Fatalf("expected scoped daily content, got %q", string(scopedData))
+	}
+}
+
+func TestSetScopeInjectsHotMemoryOnce(t *testing.T) {
+	workDir := t.TempDir()
+	sessionDir := t.TempDir()
+
+	cfg := config.DefaultConfig()
+	cfg.WorkDir = workDir
+	cfg.SessionDir = sessionDir
+
+	scope := ChannelMemoryScope("devops", nil)
+
+	// Pre-populate scoped HOT.md.
+	if err := SaveScopedMemory(sessionDir, workDir, scope, "# DevOps\n- Use terraform for infra\n"); err != nil {
+		t.Fatalf("save scoped memory: %v", err)
+	}
+
+	ag := NewAgentWithStreamer(&cfg, &fakeStreamer{})
+	baseCount := len(ag.messages)
+
+	// First SetScope call should inject HOT.md.
+	ag.SetScope(scope)
+	if len(ag.messages) != baseCount+2 {
+		t.Fatalf("expected 2 injected messages after SetScope, got %d (base=%d)", len(ag.messages)-baseCount, baseCount)
+	}
+	if !strings.Contains(ag.messages[baseCount].Content, "terraform for infra") {
+		t.Fatalf("expected HOT.md content injected, got %q", ag.messages[baseCount].Content)
+	}
+
+	// Second SetScope call with same scope should NOT reinject.
+	ag.SetScope(scope)
+	if len(ag.messages) != baseCount+2 {
+		t.Fatalf("expected no re-injection on second SetScope, got %d messages", len(ag.messages))
+	}
+}
+
 type blockingStreamer struct {
 	calls int
 }

@@ -46,6 +46,10 @@ type Agent struct {
 
 	bootstrapMsgCount int
 
+	// Memory scope for the active IRC context.
+	scope         MemoryScope
+	injectedPaths map[string]bool // HOT paths already injected as context messages
+
 	// Stats
 	TurnCount   int
 	ToolCalls   map[string]int // tool name -> call count
@@ -86,16 +90,16 @@ func NewAgentWithStreamer(cfg *config.Config, streamer llm.ChatStreamer) *Agent 
 	systemPrompt := buildSystemPrompt(cfg)
 
 	a := &Agent{
-		client:   client,
-		streamer: streamer,
-		tools:    tools.NewRegistry(cfg.WorkDir, cfg.SessionDir),
-		config:   cfg,
-		messages: []llm.Message{
-			{Role: "system", Content: systemPrompt},
-		},
-		ToolCalls:   make(map[string]int),
-		StartTime:   time.Now(),
-		CostTracker: llm.NewCostTracker(),
+		client:        client,
+		streamer:      streamer,
+		tools:         tools.NewRegistry(cfg.WorkDir, cfg.SessionDir),
+		config:        cfg,
+		messages:      []llm.Message{{Role: "system", Content: systemPrompt}},
+		scope:         RootMemoryScope(),
+		injectedPaths: make(map[string]bool),
+		ToolCalls:     make(map[string]int),
+		StartTime:     time.Now(),
+		CostTracker:   llm.NewCostTracker(),
 	}
 
 	// Inject context files (AGENTS.md etc.)
@@ -111,7 +115,8 @@ func NewAgentWithStreamer(cfg *config.Config, streamer llm.ChatStreamer) *Agent 
 		})
 	}
 
-	// Inject memory
+	// Inject root MEMORY.md at bootstrap. Scoped HOT.md is injected lazily
+	// via SetScope when the first turn begins in a non-root context.
 	memory := LoadMemory(cfg.WorkDir)
 	if memory != "" {
 		a.messages = append(a.messages, llm.Message{
@@ -420,7 +425,7 @@ func (a *Agent) flushCompactedMessagesToDailyMemory(ctx context.Context, message
 		return nil
 	}
 
-	return AppendDailyMemory(a.config.SessionDir, a.config.WorkDir, time.Now(), text)
+	return AppendScopedDailyMemory(a.config.SessionDir, a.config.WorkDir, a.scope, time.Now(), text)
 }
 
 // AutoNextPrompt returns the auto-next-steps prompt
@@ -499,6 +504,38 @@ func (a *Agent) lastAssistantContent() string {
 		}
 	}
 	return ""
+}
+
+// SetScope updates the active memory scope. If the scoped HOT.md is non-empty
+// and has not been injected yet, it is added to the conversation as context.
+func (a *Agent) SetScope(scope MemoryScope) {
+	a.scope = scope
+	a.tools.SetScope(scope)
+
+	hot := LoadScopedMemory(a.config.SessionDir, a.config.WorkDir, scope)
+	if hot == "" {
+		return
+	}
+	path := ScopedHotMemoryPath(a.config.SessionDir, a.config.WorkDir, scope)
+	if a.injectedPaths[path] {
+		return
+	}
+	a.injectedPaths[path] = true
+	a.messages = append(a.messages,
+		llm.Message{Role: "user", Content: "Context memory for " + scopeLabel(scope) + ":\n\n" + hot},
+		llm.Message{Role: "assistant", Content: "Got it."},
+	)
+}
+
+func scopeLabel(scope MemoryScope) string {
+	switch scope.Kind {
+	case MemoryScopeChannel:
+		return "#" + scope.Name
+	case MemoryScopeQuery:
+		return scope.Name
+	default:
+		return "root"
+	}
 }
 
 // Messages returns the current message history (for session saving)
