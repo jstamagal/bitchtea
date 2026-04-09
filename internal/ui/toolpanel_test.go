@@ -168,22 +168,22 @@ func TestResumeSessionHidesBootstrapEntriesFromDisplay(t *testing.T) {
 	}
 }
 
-func TestThemeCommandInvalidTheme(t *testing.T) {
-	defer SetTheme("bitchx")
-
+func TestThemeCommandDisabled(t *testing.T) {
 	cfg := config.DefaultConfig()
 	cfg.WorkDir = t.TempDir()
 	cfg.SessionDir = t.TempDir()
 
 	model := NewModel(&cfg)
-	updated, _ := model.handleCommand("/theme nonexistent")
+	updated, _ := model.handleCommand("/theme nord")
 	got := updated.(Model)
 
-	// Should still be bitchx
 	if CurrentThemeName() != "BitchX" {
 		t.Fatalf("expected active theme BitchX, got %q", CurrentThemeName())
 	}
 	if len(got.messages) == 0 {
 		t.Fatal("expected theme command to emit an error message")
+	}
+	if !strings.Contains(got.messages[len(got.messages)-1].Content, "Theme switching is disabled") {
+		t.Fatalf("expected disabled theme message, got %q", got.messages[len(got.messages)-1].Content)
 	}
 }

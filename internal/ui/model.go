@@ -812,7 +812,6 @@ func (m Model) handleCommand(input string) (tea.Model, tea.Cmd) {
 				"  /fork               Fork session\n" +
 				"  /auto-next          Toggle auto-next-steps\n" +
 				"  /auto-idea          Toggle auto-next-idea\n" +
-				"  /theme <name>       Switch color theme\n" +
 				"  /debug on|off       Toggle verbose API logging\n" +
 				"  /sound              Toggle completion bell\n" +
 				"  /mp3 [cmd]          Toggle MP3 panel and player\n" +
@@ -1049,17 +1048,7 @@ func (m Model) handleCommand(input string) (tea.Model, tea.Cmd) {
 		return m, cmd
 
 	case "/theme":
-		if len(parts) < 2 {
-			m.sysMsg(fmt.Sprintf("Current theme: %s\nAvailable themes: %s",
-				CurrentThemeName(), strings.Join(ListThemes(), ", ")))
-		} else {
-			newTheme := parts[1]
-			if !SetTheme(newTheme) {
-				m.errMsg(fmt.Sprintf("Unknown theme: %s", newTheme))
-				return m, nil
-			}
-			m.sysMsg(fmt.Sprintf("Theme switched to: %s", CurrentThemeName()))
-		}
+		m.sysMsg(fmt.Sprintf("Theme switching is disabled. Built-in theme: %s.", CurrentThemeName()))
 		return m, nil
 
 	case "/memory":

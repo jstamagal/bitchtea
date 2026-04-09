@@ -97,7 +97,7 @@ BITCHTEA_PROVIDER      Force provider (openai, anthropic)
 - Streaming responses in a single scrolling terminal buffer while tool activity stays visible in the side panel.
 - Live steering: you can type while the agent is still working and your next message gets queued for the next turn.
 - Session persistence with resume and fork support.
-- Runtime switches for provider, model, profiles, theme, and sound without leaving the UI.
+- Runtime switches for provider, model, profiles, and sound without leaving the UI.
 
 ## Commands
 
@@ -122,7 +122,6 @@ BITCHTEA_PROVIDER      Force provider (openai, anthropic)
 | `/fork` | Fork the current session |
 | `/auto-next` | Toggle auto-next-steps |
 | `/auto-idea` | Toggle auto-next-idea |
-| `/theme <name>` | Switch theme |
 | `/sound` | Toggle completion bell |
 | `/mp3 [rescan\|play\|pause\|next\|prev]` | Toggle the MP3 panel and control playback from `~/.bitchtea/mp3` |
 | `/help` | Show help |
@@ -151,15 +150,9 @@ BITCHTEA_PROVIDER      Force provider (openai, anthropic)
 - `AGENTS.md` and `CLAUDE.md` are discovered upward from the working directory and injected as context.
 - `@file` references inline file contents into your prompt.
 
-## Themes
+## Theme
 
-Built-in themes:
-
-- `bitchx`
-- `nord`
-- `dracula`
-- `gruvbox`
-- `monokai`
+The TUI currently ships with one built-in BitchX-style theme. Theme switching is intentionally disabled until the styling system is redesigned.
 
 ## Building From Source
 
