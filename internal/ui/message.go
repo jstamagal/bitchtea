@@ -22,9 +22,10 @@ const (
 type ChatMessage struct {
 	Time    time.Time
 	Type    MsgType
-	Nick    string // sender nick (user/agent name)
-	Content string // may contain ANSI codes for raw messages
-	Width   int    // viewport width for markdown rendering (0 = use default)
+	Nick    string     // sender nick (user/agent name)
+	Content string     // may contain ANSI codes for raw messages
+	Width   int        // viewport width for markdown rendering (0 = use default)
+	Context IRCContext // IRC routing context this message belongs to
 }
 
 // Format renders a ChatMessage for display in the viewport

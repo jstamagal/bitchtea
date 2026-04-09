@@ -50,6 +50,10 @@ var slashCommandRegistry = registerSlashCommands(
 	slashCommandSpec{names: []string{"/apikey"}, handler: handleAPIKeyCommand},
 	slashCommandSpec{names: []string{"/provider"}, handler: handleProviderCommand},
 	slashCommandSpec{names: []string{"/profile"}, handler: handleProfileCommand},
+	slashCommandSpec{names: []string{"/join"}, handler: handleJoinCommand},
+	slashCommandSpec{names: []string{"/part"}, handler: handlePartCommand},
+	slashCommandSpec{names: []string{"/query"}, handler: handleQueryCommand},
+	slashCommandSpec{names: []string{"/channels", "/ch"}, handler: handleChannelsCommand},
 )
 
 func registerSlashCommands(specs ...slashCommandSpec) map[string]slashCommandHandler {
@@ -73,6 +77,10 @@ const helpCommandText = "Commands:\n" +
 	"  /baseurl <url>      Set API base URL\n" +
 	"  /apikey <key>       Set API key\n" +
 	"  /profile [cmd]      save/load/delete profiles (built-ins: ollama, openrouter, huggingface, xai, copilot, etc.)\n" +
+	"  /join <#channel>    Join a channel context (persisted until /part)\n" +
+	"  /part [target]      Leave current or named context\n" +
+	"  /query <persona>    Open a direct-message context to a persona\n" +
+	"  /channels           List open contexts\n" +
 	"  /compact            Compact conversation context\n" +
 	"  /clear              Clear chat display\n" +
 	"  /diff               Show git diff\n" +
@@ -604,6 +612,94 @@ func handleProfileCommand(m Model, _ string, parts []string) (Model, tea.Cmd) {
 		}
 		applyProfileToModel(&m, action, p, false)
 	}
+	return m, nil
+}
+
+// handleJoinCommand joins a channel context and persists the change.
+// Usage: /join #channel  or  /join channel
+func handleJoinCommand(m Model, _ string, parts []string) (Model, tea.Cmd) {
+	if len(parts) < 2 {
+		m.errMsg("Usage: /join <#channel>")
+		return m, nil
+	}
+	ctx := Channel(parts[1])
+	m.focus.SetFocus(ctx)
+	if err := m.focus.Save(m.config.SessionDir); err != nil {
+		m.errMsg(fmt.Sprintf("focus save: %v", err))
+		return m, nil
+	}
+	m.sysMsg(fmt.Sprintf("Joined %s", ctx.Label()))
+	return m, nil
+}
+
+// handlePartCommand leaves the current or a named context and persists.
+// Usage: /part  or  /part #channel  or  /part persona
+func handlePartCommand(m Model, _ string, parts []string) (Model, tea.Cmd) {
+	var target IRCContext
+	if len(parts) >= 2 {
+		name := parts[1]
+		if strings.HasPrefix(name, "#") {
+			target = Channel(name)
+		} else {
+			// Try direct first; caller can always be explicit with #
+			target = Direct(name)
+		}
+	} else {
+		target = m.focus.Active()
+	}
+
+	if !m.focus.Remove(target) {
+		if len(m.focus.All()) <= 1 {
+			m.errMsg("Can't part the last context.")
+		} else {
+			m.errMsg(fmt.Sprintf("Not in context %s.", target.Label()))
+		}
+		return m, nil
+	}
+	if err := m.focus.Save(m.config.SessionDir); err != nil {
+		m.errMsg(fmt.Sprintf("focus save: %v", err))
+		return m, nil
+	}
+	m.sysMsg(fmt.Sprintf("Parted %s — now in %s", target.Label(), m.focus.ActiveLabel()))
+	return m, nil
+}
+
+// handleQueryCommand opens a direct-message context to a persona and persists.
+// Usage: /query <persona>
+func handleQueryCommand(m Model, _ string, parts []string) (Model, tea.Cmd) {
+	if len(parts) < 2 {
+		m.errMsg("Usage: /query <persona>")
+		return m, nil
+	}
+	ctx := Direct(parts[1])
+	m.focus.SetFocus(ctx)
+	if err := m.focus.Save(m.config.SessionDir); err != nil {
+		m.errMsg(fmt.Sprintf("focus save: %v", err))
+		return m, nil
+	}
+	m.sysMsg(fmt.Sprintf("Query open: %s", ctx.Label()))
+	return m, nil
+}
+
+// handleChannelsCommand lists all open contexts.
+func handleChannelsCommand(m Model, _ string, _ []string) (Model, tea.Cmd) {
+	all := m.focus.All()
+	active := m.focus.Active()
+	var sb strings.Builder
+	sb.WriteString("Open contexts:\n")
+	for _, ctx := range all {
+		marker := "  "
+		if ctx == active {
+			marker = "* "
+		}
+		sb.WriteString(marker + ctx.Label() + "\n")
+	}
+	m.addMessage(ChatMessage{
+		Time:    time.Now(),
+		Type:    MsgSystem,
+		Content: strings.TrimRight(sb.String(), "\n"),
+	})
+	m.refreshViewport()
 	return m, nil
 }
 

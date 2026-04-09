@@ -322,6 +322,94 @@ func TestInfo(t *testing.T) {
 	}
 }
 
+func TestEntryContextRoundTrip(t *testing.T) {
+	dir := t.TempDir()
+	s, err := New(dir)
+	if err != nil {
+		t.Fatalf("new: %v", err)
+	}
+
+	if err := s.Append(Entry{Role: "user", Content: "hello", Context: "#main"}); err != nil {
+		t.Fatalf("append: %v", err)
+	}
+	if err := s.Append(Entry{Role: "assistant", Content: "hi", Context: "#main"}); err != nil {
+		t.Fatalf("append: %v", err)
+	}
+
+	loaded, err := Load(s.Path)
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	if loaded.Entries[0].Context != "#main" {
+		t.Errorf("expected context #main, got %q", loaded.Entries[0].Context)
+	}
+	if loaded.Entries[1].Context != "#main" {
+		t.Errorf("expected context #main, got %q", loaded.Entries[1].Context)
+	}
+}
+
+func TestSaveFocusAndLoadFocus_roundTrip(t *testing.T) {
+	dir := t.TempDir()
+
+	state := FocusState{
+		Contexts: []ContextRecord{
+			{Kind: "channel", Channel: "main"},
+			{Kind: "channel", Channel: "code"},
+			{Kind: "direct", Target: "coding-buddy"},
+		},
+		ActiveIndex: 2,
+	}
+
+	if err := SaveFocus(dir, state); err != nil {
+		t.Fatalf("save focus: %v", err)
+	}
+
+	got, err := LoadFocus(dir)
+	if err != nil {
+		t.Fatalf("load focus: %v", err)
+	}
+	if got.ActiveIndex != 2 {
+		t.Errorf("active index: got %d, want 2", got.ActiveIndex)
+	}
+	if len(got.Contexts) != 3 {
+		t.Fatalf("context count: got %d, want 3", len(got.Contexts))
+	}
+	if got.Contexts[2].Kind != "direct" || got.Contexts[2].Target != "coding-buddy" {
+		t.Errorf("direct context: got %+v", got.Contexts[2])
+	}
+}
+
+func TestLoadFocus_missingFileReturnsEmpty(t *testing.T) {
+	dir := t.TempDir()
+	state, err := LoadFocus(dir)
+	if err != nil {
+		t.Fatalf("expected no error for missing file, got: %v", err)
+	}
+	if len(state.Contexts) != 0 {
+		t.Errorf("expected empty state, got %+v", state)
+	}
+}
+
+func TestSaveFocus_subchannelRoundTrip(t *testing.T) {
+	dir := t.TempDir()
+	state := FocusState{
+		Contexts: []ContextRecord{
+			{Kind: "subchannel", Channel: "cornhub", Sub: "website"},
+		},
+		ActiveIndex: 0,
+	}
+	if err := SaveFocus(dir, state); err != nil {
+		t.Fatalf("save: %v", err)
+	}
+	got, err := LoadFocus(dir)
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	if got.Contexts[0].Sub != "website" || got.Contexts[0].Channel != "cornhub" {
+		t.Errorf("subchannel round trip: got %+v", got.Contexts[0])
+	}
+}
+
 func TestListNonexistentDir(t *testing.T) {
 	sessions, err := List("/tmp/nonexistent-bitchtea-test-dir")
 	if err != nil {

@@ -1,6 +1,10 @@
 package ui
 
-import "strings"
+import (
+	"strings"
+
+	"github.com/jstamagal/bitchtea/internal/session"
+)
 
 // ContextKind identifies what type of IRC-style routing destination a context is.
 type ContextKind uint8
@@ -139,4 +143,86 @@ func (f *FocusManager) All() []IRCContext {
 	out := make([]IRCContext, len(f.contexts))
 	copy(out, f.contexts)
 	return out
+}
+
+// ToState converts the FocusManager to a serializable FocusState for persistence.
+func (f *FocusManager) ToState() session.FocusState {
+	records := make([]session.ContextRecord, len(f.contexts))
+	for i, c := range f.contexts {
+		records[i] = contextToRecord(c)
+	}
+	return session.FocusState{
+		Contexts:    records,
+		ActiveIndex: f.active,
+	}
+}
+
+// RestoreState replaces the FocusManager's state from a persisted FocusState.
+// No-ops if the state is empty (first run with no saved focus file).
+func (f *FocusManager) RestoreState(state session.FocusState) {
+	if len(state.Contexts) == 0 {
+		return
+	}
+	contexts := make([]IRCContext, 0, len(state.Contexts))
+	for _, r := range state.Contexts {
+		if ctx, ok := recordToContext(r); ok {
+			contexts = append(contexts, ctx)
+		}
+	}
+	if len(contexts) == 0 {
+		return
+	}
+	f.contexts = contexts
+	f.active = state.ActiveIndex
+	if f.active >= len(f.contexts) {
+		f.active = len(f.contexts) - 1
+	}
+}
+
+// Save persists the focus state to the given session directory.
+func (f *FocusManager) Save(dir string) error {
+	return session.SaveFocus(dir, f.ToState())
+}
+
+// LoadFocusManager reads saved focus state from dir and returns a FocusManager
+// initialised from it. Falls back to a fresh FocusManager if no file exists.
+func LoadFocusManager(dir string) *FocusManager {
+	f := NewFocusManager()
+	state, err := session.LoadFocus(dir)
+	if err == nil && len(state.Contexts) > 0 {
+		f.RestoreState(state)
+	}
+	return f
+}
+
+func contextToRecord(c IRCContext) session.ContextRecord {
+	switch c.Kind {
+	case KindChannel:
+		return session.ContextRecord{Kind: "channel", Channel: c.Channel}
+	case KindSubchannel:
+		return session.ContextRecord{Kind: "subchannel", Channel: c.Channel, Sub: c.Sub}
+	case KindDirect:
+		return session.ContextRecord{Kind: "direct", Target: c.Target}
+	default:
+		return session.ContextRecord{Kind: "channel", Channel: "main"}
+	}
+}
+
+func recordToContext(r session.ContextRecord) (IRCContext, bool) {
+	switch r.Kind {
+	case "channel":
+		return Channel(r.Channel), true
+	case "subchannel":
+		if r.Channel == "" || r.Sub == "" {
+			return IRCContext{}, false
+		}
+		return Subchannel(r.Channel, r.Sub), true
+	case "direct":
+		if r.Target == "" {
+			return IRCContext{}, false
+		}
+		return Direct(r.Target), true
+	default:
+		return IRCContext{}, false
+	}
 }

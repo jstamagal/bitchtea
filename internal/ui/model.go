@@ -107,7 +107,8 @@ type Model struct {
 
 	// Session
 	session         *session.Session
-	lastSavedMsgIdx int // index into agent.Messages() of last saved entry
+	lastSavedMsgIdx int        // index into agent.Messages() of last saved entry
+	turnContext     IRCContext // active context when current/last turn was submitted
 	transcript      *TranscriptLogger
 
 	// Debug mode - verbose API logging
@@ -149,24 +150,26 @@ func NewModel(cfg *config.Config) Model {
 	}
 
 	return Model{
-		config:        cfg,
-		agent:         ag,
-		agentState:    agent.StateIdle,
-		input:         ta,
-		spinner:       sp,
-		toolPanel:     NewToolPanel(),
-		mp3:           newMP3Controller(),
+		config:       cfg,
+		agent:        ag,
+		agentState:   agent.StateIdle,
+		input:        ta,
+		spinner:      sp,
+		toolPanel:    NewToolPanel(),
+		mp3:          newMP3Controller(),
 		messages:     []ChatMessage{},
 		history:      []string{},
 		historyIdx:   -1,
 		streamBuffer: &strings.Builder{},
-		focus:        NewFocusManager(),
+		focus:        LoadFocusManager(cfg.SessionDir),
 		session:      sess,
 		transcript:   transcript,
 	}
 }
 
-// ResumeSession loads a previous session's messages into the chat display
+// ResumeSession loads a previous session's messages into the chat display.
+// Focus state is already restored in NewModel via LoadFocusManager; this call
+// records the session and replays the display messages only.
 func (m *Model) ResumeSession(sess *session.Session) {
 	m.session = sess
 	messages := session.MessagesFromEntries(sess.Entries)
@@ -509,16 +512,24 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.toolPanel.Elapsed = m.agent.Elapsed()
 		}
 
-		// Save new messages to session (incremental)
+		// Save new messages to session (incremental), stamping the turn context.
 		if m.session != nil {
 			msgs := m.agent.Messages()
+			ctxLabel := m.turnContext.Label()
 			for i := m.lastSavedMsgIdx; i < len(msgs); i++ {
-				_ = m.session.Append(session.EntryFromMessageWithBootstrap(
+				e := session.EntryFromMessageWithBootstrap(
 					msgs[i],
 					i < m.agent.BootstrapMessageCount(),
-				))
+				)
+				e.Context = ctxLabel
+				_ = m.session.Append(e)
 			}
 			m.lastSavedMsgIdx = len(msgs)
+		}
+
+		// Persist open contexts and current focus for restart restoration.
+		if err := m.focus.Save(m.config.SessionDir); err != nil {
+			m.errMsg(fmt.Sprintf("focus save failed: %v", err))
 		}
 
 		if err := session.SaveCheckpoint(m.config.SessionDir, session.Checkpoint{
@@ -677,6 +688,7 @@ func (m *Model) sendToAgent(input string) tea.Cmd {
 	if m.cancel != nil {
 		m.cancel()
 	}
+	m.turnContext = m.focus.Active()
 	ctx, cancel := context.WithCancel(context.Background())
 	m.cancel = cancel
 	m.streaming = true
@@ -689,6 +701,7 @@ func (m *Model) sendToAgent(input string) tea.Cmd {
 }
 
 func (m *Model) addMessage(msg ChatMessage) {
+	msg.Context = m.focus.Active()
 	m.messages = append(m.messages, msg)
 	_ = m.transcript.LogMessage(msg)
 }

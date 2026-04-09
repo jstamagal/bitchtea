@@ -17,6 +17,7 @@ type Entry struct {
 	Timestamp  time.Time      `json:"ts"`
 	Role       string         `json:"role"` // user, assistant, system, tool
 	Content    string         `json:"content"`
+	Context    string         `json:"context,omitempty"` // IRC routing context label (e.g. "#main", "buddy")
 	Bootstrap  bool           `json:"bootstrap,omitempty"`
 	ToolName   string         `json:"tool_name,omitempty"`
 	ToolArgs   string         `json:"tool_args,omitempty"`
@@ -40,6 +41,21 @@ type Checkpoint struct {
 	ToolCalls map[string]int `json:"tool_calls,omitempty"`
 	Model     string         `json:"model,omitempty"`
 	Timestamp time.Time      `json:"timestamp"`
+}
+
+// ContextRecord is a serializable representation of a single IRC routing context.
+type ContextRecord struct {
+	Kind    string `json:"kind"`              // "channel", "subchannel", "direct"
+	Channel string `json:"channel,omitempty"` // channel name (no '#')
+	Sub     string `json:"sub,omitempty"`     // subchannel qualifier
+	Target  string `json:"target,omitempty"`  // persona or nick for direct
+}
+
+// FocusState captures the ordered list of open contexts and which is active.
+// This is persisted to disk so the workspace is restored on restart.
+type FocusState struct {
+	Contexts    []ContextRecord `json:"contexts"`
+	ActiveIndex int             `json:"active"`
 }
 
 // New creates a new session
@@ -326,6 +342,40 @@ func MessagesFromEntries(entries []Entry) []llm.Message {
 		msgs = append(msgs, msg)
 	}
 	return msgs
+}
+
+// SaveFocus writes the focus state to .bitchtea_focus.json in dir.
+func SaveFocus(dir string, state FocusState) error {
+	if err := os.MkdirAll(dir, 0755); err != nil {
+		return fmt.Errorf("create session dir: %w", err)
+	}
+	data, err := json.MarshalIndent(state, "", "  ")
+	if err != nil {
+		return fmt.Errorf("marshal focus: %w", err)
+	}
+	path := filepath.Join(dir, ".bitchtea_focus.json")
+	if err := os.WriteFile(path, data, 0644); err != nil {
+		return fmt.Errorf("write focus: %w", err)
+	}
+	return nil
+}
+
+// LoadFocus reads focus state from .bitchtea_focus.json in dir.
+// Returns a zero-value FocusState (no error) when the file does not exist yet.
+func LoadFocus(dir string) (FocusState, error) {
+	path := filepath.Join(dir, ".bitchtea_focus.json")
+	data, err := os.ReadFile(path)
+	if os.IsNotExist(err) {
+		return FocusState{}, nil
+	}
+	if err != nil {
+		return FocusState{}, fmt.Errorf("read focus: %w", err)
+	}
+	var state FocusState
+	if err := json.Unmarshal(data, &state); err != nil {
+		return FocusState{}, fmt.Errorf("unmarshal focus: %w", err)
+	}
+	return state, nil
 }
 
 func splitLines(data []byte) [][]byte {
