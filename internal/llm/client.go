@@ -103,6 +103,13 @@ type ChatRequest struct {
 	Tools         []ToolDef          `json:"tools,omitempty"`
 	Stream        bool               `json:"stream"`
 	StreamOptions *chatStreamOptions `json:"stream_options,omitempty"`
+	// TODO(Phase6): Add Reasoning/Thinking field for OpenRouter extended-thinking
+	// support. OpenRouter passes reasoning params through to upstream models
+	// (e.g. DeepSeek R1, Claude 3.7 Sonnet). The field shape is:
+	//   Reasoning *OpenRouterReasoning `json:"reasoning,omitempty"`
+	// where OpenRouterReasoning is { Effort string / MaxTokens int }.
+	// Gating this on service identity ("openrouter") requires Phase 6's
+	// proper provider/service split first.
 }
 
 type chatStreamOptions struct {
@@ -175,6 +182,11 @@ func (c *Client) streamChatOpenAI(ctx context.Context, messages []Message, tools
 		Model:    c.Model,
 		Messages: messages,
 		Stream:   true,
+		// TODO(Phase6): stream_options.include_usage is a standard OpenAI
+		// extension but Ollama silently ignores it on older builds and some
+		// third-party OpenAI-compat servers may 400 on it. When Phase 6
+		// introduces service identity, gate this on the service NOT being
+		// "ollama" (or make it opt-in per-service in the profile).
 		StreamOptions: &chatStreamOptions{
 			IncludeUsage: true,
 		},
@@ -372,6 +384,11 @@ func (c *Client) openAIHeaders() map[string]string {
 	if strings.TrimSpace(c.APIKey) != "" {
 		headers["Authorization"] = "Bearer " + c.APIKey
 	}
+	// TODO(Phase6): OpenRouter is detected by URL sniffing here because
+	// c.Provider is always "openai" for all OpenAI-compat services (Ollama,
+	// OpenRouter, aihubmix, etc.). When fantasy/catwalk introduces a real
+	// service-identity field (e.g. "openrouter"), replace isOpenRouterBaseURL
+	// with a check on that field instead.
 	if isOpenRouterBaseURL(c.BaseURL) {
 		headers["HTTP-Referer"] = "https://github.com/jstamagal/bitchtea"
 		headers["X-Title"] = "bitchtea"

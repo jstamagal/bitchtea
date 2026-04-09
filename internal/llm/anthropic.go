@@ -145,6 +145,16 @@ func (c *Client) StreamChatAnthropic(ctx context.Context, messages []Message, to
 		})
 	}
 
+	// TODO(Phase6): Anthropic prompt caching is not implemented.
+	// To activate it, the system prompt and the first large user message
+	// (the AGENTS.md/context injection) should carry a
+	//   "cache_control": {"type": "ephemeral"}
+	// block. This requires changing anthropicRequest.System from a plain
+	// string to []anthropicTextBlock (each block can carry cache_control),
+	// and marking the bootstrap user messages in the message list similarly.
+	// Gating should check that the resolved service is native "anthropic" —
+	// proxies like OpenRouter pass the Anthropic wire format but may not
+	// honour cache_control, so this needs Phase 6's service-identity field.
 	reqBody := anthropicRequest{
 		Model:     c.Model,
 		MaxTokens: 8192,

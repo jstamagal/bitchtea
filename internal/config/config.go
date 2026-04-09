@@ -98,6 +98,25 @@ type Profile struct {
 	Model    string `json:"model"`
 }
 
+// TODO(Phase6): The Provider field in Profile (and Config) currently encodes
+// the wire format ("openai" or "anthropic"), not the actual upstream service.
+// As a result every Ollama/OpenRouter/aihubmix/etc. profile carries
+// Provider:"openai" even though they are distinct services with different
+// capabilities, quirks, and required headers.
+//
+// Known breakage caused by this:
+//   - OpenRouter reasoning params (extended thinking) cannot be gated on
+//     service identity; URL sniffing in llm/client.go is used as a workaround.
+//   - Ollama's stream_options.include_usage is silently ignored; cannot be
+//     suppressed without URL sniffing.
+//   - Anthropic prompt caching (cache_control blocks) cannot be activated
+//     for proxies that forward the Anthropic wire format (e.g. zai-anthropic)
+//     without knowing whether we're talking to native Anthropic or a proxy.
+//   - ProfileAllowsEmptyAPIKey uses URL-prefix matching to detect Ollama.
+//
+// Phase 6 fix: add a Service/Identity field (e.g. "ollama", "openrouter",
+// "anthropic", "openai") alongside Provider (wire format). All per-service
+// behaviour should gate on Service, not Provider.
 type builtinProfileSpec struct {
 	Provider  string
 	BaseURL   string
@@ -286,6 +305,11 @@ func ApplyProfile(cfg *Config, p *Profile) {
 
 // ProfileAllowsEmptyAPIKey reports whether the selected transport can start
 // without credentials. Today that means local Ollama-compatible endpoints.
+//
+// TODO(Phase6): This function sniffs the base URL to recognise Ollama because
+// cfg.Provider is always "openai" for every OpenAI-compat service. When
+// fantasy/catwalk introduces a proper service-identity field (e.g. "ollama"),
+// replace the URL-prefix check with: cfg.Service == "ollama".
 func ProfileAllowsEmptyAPIKey(cfg Config) bool {
 	if cfg.Provider != "openai" {
 		return false
