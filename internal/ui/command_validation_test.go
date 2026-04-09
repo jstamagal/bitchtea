@@ -12,11 +12,15 @@ import (
 
 func newTestModel(t *testing.T) Model {
 	t.Helper()
+	dataDir := t.TempDir()
 	cfg := &config.Config{
-		APIKey:   "sk-test-key-12345",
-		BaseURL:  "https://api.openai.com/v1",
-		Model:    "gpt-4o",
-		Provider: "openai",
+		APIKey:     "sk-test-key-12345",
+		BaseURL:    "https://api.openai.com/v1",
+		Model:      "gpt-4o",
+		Provider:   "openai",
+		WorkDir:    dataDir,
+		SessionDir: dataDir + "/sessions",
+		LogDir:     dataDir + "/logs",
 	}
 	return NewModel(cfg)
 }
@@ -34,6 +38,14 @@ func lastMsg(m tea.Model) ChatMessage {
 func allMsgs(m tea.Model) []ChatMessage {
 	model := m.(Model)
 	return model.messages
+}
+
+func allMsgText(m tea.Model) string {
+	var parts []string
+	for _, msg := range allMsgs(m) {
+		parts = append(parts, msg.Content)
+	}
+	return strings.Join(parts, "\n")
 }
 
 func TestProviderValidation(t *testing.T) {
@@ -55,15 +67,25 @@ func TestProviderValidation(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			m := newTestModel(t)
 			result, _ := m.handleCommand(tt.input)
-			msg := lastMsg(result)
-			if !strings.Contains(msg.Content, tt.wantContain) {
-				t.Errorf("expected message containing %q, got %q", tt.wantContain, msg.Content)
+			msgs := allMsgs(result)
+			found := false
+			hasError := false
+			for _, msg := range msgs {
+				if strings.Contains(msg.Content, tt.wantContain) {
+					found = true
+				}
+				if msg.Type == MsgError {
+					hasError = true
+				}
 			}
-			if tt.wantError && msg.Type != MsgError {
-				t.Errorf("expected MsgError, got %v", msg.Type)
+			if !found {
+				t.Errorf("expected message containing %q, got %#v", tt.wantContain, msgs)
 			}
-			if !tt.wantError && msg.Type == MsgError {
-				t.Errorf("unexpected error: %q", msg.Content)
+			if tt.wantError && !hasError {
+				t.Errorf("expected MsgError, got %#v", msgs)
+			}
+			if !tt.wantError && hasError {
+				t.Errorf("unexpected error in %#v", msgs)
 			}
 		})
 	}
@@ -88,15 +110,25 @@ func TestBaseURLValidation(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			m := newTestModel(t)
 			result, _ := m.handleCommand(tt.input)
-			msg := lastMsg(result)
-			if !strings.Contains(msg.Content, tt.wantContain) {
-				t.Errorf("expected message containing %q, got %q", tt.wantContain, msg.Content)
+			msgs := allMsgs(result)
+			found := false
+			hasError := false
+			for _, msg := range msgs {
+				if strings.Contains(msg.Content, tt.wantContain) {
+					found = true
+				}
+				if msg.Type == MsgError {
+					hasError = true
+				}
 			}
-			if tt.wantError && msg.Type != MsgError {
-				t.Errorf("expected MsgError, got %v", msg.Type)
+			if !found {
+				t.Errorf("expected message containing %q, got %#v", tt.wantContain, msgs)
 			}
-			if !tt.wantError && msg.Type == MsgError {
-				t.Errorf("unexpected error: %q", msg.Content)
+			if tt.wantError && !hasError {
+				t.Errorf("expected MsgError, got %#v", msgs)
+			}
+			if !tt.wantError && hasError {
+				t.Errorf("unexpected error in %#v", msgs)
 			}
 		})
 	}
@@ -198,6 +230,86 @@ func TestBaseURLDoesNotMutateOnInvalidInput(t *testing.T) {
 	}
 }
 
+func TestProviderChangeWarnsWhenBaseURLLooksOpenAICompatible(t *testing.T) {
+	m := newTestModel(t)
+	m.config.BaseURL = "http://127.0.0.1:3456"
+	m.agent.SetBaseURL(m.config.BaseURL)
+
+	result, _ := m.handleCommand("/provider anthropic")
+	msgs := allMsgs(result)
+	if len(msgs) < 2 {
+		t.Fatalf("expected provider change plus warning, got %d messages", len(msgs))
+	}
+	if !strings.Contains(msgs[0].Content, "requests -> http://127.0.0.1:3456/messages") {
+		t.Fatalf("expected endpoint preview, got %q", msgs[0].Content)
+	}
+	if !strings.Contains(msgs[len(msgs)-1].Content, "If this server is OpenAI-compatible, switch with /provider openai.") {
+		t.Fatalf("expected transport mismatch guidance, got %q", msgs[len(msgs)-1].Content)
+	}
+}
+
+func TestBaseURLChangeWarnsWhenProviderLikelyMismatched(t *testing.T) {
+	m := newTestModel(t)
+	m.config.Provider = "anthropic"
+	m.agent.SetProvider("anthropic")
+
+	result, _ := m.handleCommand("/baseurl http://127.0.0.1:3456")
+	msgs := allMsgs(result)
+	if len(msgs) < 2 {
+		t.Fatalf("expected baseurl change plus warning, got %d messages", len(msgs))
+	}
+	if !strings.Contains(msgs[0].Content, "requests -> http://127.0.0.1:3456/messages") {
+		t.Fatalf("expected endpoint preview, got %q", msgs[0].Content)
+	}
+	if !strings.Contains(msgs[len(msgs)-1].Content, "anthropic transport sends requests to /messages") {
+		t.Fatalf("expected anthropic transport warning, got %q", msgs[len(msgs)-1].Content)
+	}
+}
+
+func TestProfileNameThatMatchesProviderSuggestsProviderCommand(t *testing.T) {
+	m := newTestModel(t)
+
+	result, _ := m.handleCommand("/profile anthropic")
+	msg := lastMsg(result)
+	if msg.Type != MsgError {
+		t.Fatalf("expected error message, got %v", msg.Type)
+	}
+	if !strings.Contains(msg.Content, "Use /provider anthropic") {
+		t.Fatalf("expected provider guidance, got %q", msg.Content)
+	}
+}
+
+func TestProfileLoadNameThatMatchesProviderSuggestsProviderCommand(t *testing.T) {
+	m := newTestModel(t)
+
+	result, _ := m.handleCommand("/profile load openai")
+	msg := lastMsg(result)
+	if msg.Type != MsgError {
+		t.Fatalf("expected error message, got %v", msg.Type)
+	}
+	if !strings.Contains(msg.Content, "Use /provider openai") {
+		t.Fatalf("expected provider guidance, got %q", msg.Content)
+	}
+}
+
+func TestProfileLoadMasksAPIKeyAndAvoidsDuplicateMessages(t *testing.T) {
+	t.Setenv("OPENROUTER_API_KEY", "sk-or-v1-1234567890ABCD")
+
+	m := newTestModel(t)
+	result, _ := m.handleCommand("/profile load openrouter")
+	msgs := allMsgs(result)
+	if len(msgs) != 1 {
+		t.Fatalf("expected single profile load message, got %d", len(msgs))
+	}
+	msg := msgs[0]
+	if !strings.Contains(msg.Content, "apikey=sk-o...ABCD") {
+		t.Fatalf("expected masked api key, got %q", msg.Content)
+	}
+	if strings.Contains(msg.Content, "sk-or-v1-1234567890ABCD") {
+		t.Fatalf("expected full api key to stay hidden, got %q", msg.Content)
+	}
+}
+
 func TestAPIKeyDoesNotMutateOnInvalidInput(t *testing.T) {
 	m := newTestModel(t)
 	original := m.config.APIKey
@@ -205,6 +317,137 @@ func TestAPIKeyDoesNotMutateOnInvalidInput(t *testing.T) {
 	model := result.(Model)
 	if model.config.APIKey != original {
 		t.Errorf("apikey should not change on invalid input, got %q", model.config.APIKey)
+	}
+}
+
+func TestProfileCommandHintsWhenProviderNameIsUsed(t *testing.T) {
+	m := newTestModel(t)
+
+	result, _ := m.handleCommand("/profile anthropic")
+	msg := lastMsg(result)
+
+	if msg.Type != MsgError {
+		t.Fatalf("expected error message, got %v", msg.Type)
+	}
+	for _, want := range []string{"provider, not a profile", "/provider anthropic"} {
+		if !strings.Contains(msg.Content, want) {
+			t.Fatalf("expected %q in message, got %q", want, msg.Content)
+		}
+	}
+}
+
+func TestProfileDirectLoadMasksAPIKeyAndEmitsSingleMessage(t *testing.T) {
+	t.Setenv("OPENROUTER_API_KEY", "sk-or-v1-1234567890abcdef")
+
+	m := newTestModel(t)
+	result, _ := m.handleCommand("/profile openrouter")
+	model := result.(Model)
+
+	if got := len(model.messages); got != 1 {
+		t.Fatalf("expected single profile status message, got %d", got)
+	}
+
+	msg := lastMsg(result)
+	if msg.Type != MsgSystem {
+		t.Fatalf("expected system message, got %v", msg.Type)
+	}
+	if !strings.Contains(msg.Content, "Profile loaded: openrouter") {
+		t.Fatalf("expected profile loaded message, got %q", msg.Content)
+	}
+	if strings.Contains(msg.Content, "1234567890abcdef") {
+		t.Fatalf("expected API key to be masked, got %q", msg.Content)
+	}
+	if model.config.Profile != "openrouter" {
+		t.Fatalf("expected loaded profile to be recorded, got %q", model.config.Profile)
+	}
+}
+
+func TestManualConnectionChangeClearsLoadedProfile(t *testing.T) {
+	t.Setenv("OPENROUTER_API_KEY", "sk-or-v1-1234567890abcdef")
+
+	m := newTestModel(t)
+	result, _ := m.handleCommand("/profile openrouter")
+	model := result.(Model)
+	if model.config.Profile != "openrouter" {
+		t.Fatalf("expected openrouter profile, got %q", model.config.Profile)
+	}
+
+	result, _ = model.handleCommand("/provider anthropic")
+	model = result.(Model)
+	if model.config.Profile != "" {
+		t.Fatalf("expected manual provider change to clear profile, got %q", model.config.Profile)
+	}
+}
+
+func TestProviderMessageShowsEffectiveEndpoint(t *testing.T) {
+	m := newTestModel(t)
+
+	result, _ := m.handleCommand("/provider anthropic")
+	text := allMsgText(result)
+
+	if !strings.Contains(text, "/messages") {
+		t.Fatalf("expected anthropic endpoint hint, got %q", text)
+	}
+}
+
+func TestBaseURLMessageShowsEffectiveEndpoint(t *testing.T) {
+	m := newTestModel(t)
+
+	result, _ := m.handleCommand("/baseurl https://api.example.com/v1")
+	text := allMsgText(result)
+
+	if !strings.Contains(text, "https://api.example.com/v1/chat/completions") {
+		t.Fatalf("expected openai endpoint hint, got %q", text)
+	}
+}
+
+func TestProfileLoadVerboseMasksAPIKeyAndShowsEndpoint(t *testing.T) {
+	t.Setenv("OPENROUTER_API_KEY", "sk-or-v1-1234567890abcdef")
+
+	m := newTestModel(t)
+	result, _ := m.handleCommand("/profile load openrouter")
+	model := result.(Model)
+
+	if got := len(model.messages); got != 1 {
+		t.Fatalf("expected single profile status message, got %d", got)
+	}
+
+	msg := lastMsg(result)
+	for _, want := range []string{"endpoint=https://openrouter.ai/api/v1/chat/completions", "sk-o...cdef"} {
+		if !strings.Contains(msg.Content, want) {
+			t.Fatalf("expected %q in message, got %q", want, msg.Content)
+		}
+	}
+	if strings.Contains(msg.Content, "1234567890abcdef") {
+		t.Fatalf("expected API key to be masked, got %q", msg.Content)
+	}
+}
+
+func TestBaseURLWarnsWhenEndpointSuffixIsIncluded(t *testing.T) {
+	m := newTestModel(t)
+
+	result, _ := m.handleCommand("/baseurl https://api.example.com/v1/chat/completions")
+	msg := lastMsg(result)
+
+	for _, want := range []string{"warning ->", "omit /chat/completions"} {
+		if !strings.Contains(msg.Content, want) {
+			t.Fatalf("expected %q in message, got %q", want, msg.Content)
+		}
+	}
+}
+
+func TestProviderWarnsForSuspiciousOpenAIBaseURLUnderAnthropic(t *testing.T) {
+	m := newTestModel(t)
+
+	result, _ := m.handleCommand("/provider anthropic")
+	model := result.(Model)
+	result, _ = model.handleCommand("/baseurl https://api.openai.com/v1")
+	msg := lastMsg(result)
+
+	for _, want := range []string{"warning ->", "Anthropic transport with an OpenAI-style base URL looks suspicious"} {
+		if !strings.Contains(msg.Content, want) {
+			t.Fatalf("expected %q in message, got %q", want, msg.Content)
+		}
 	}
 }
 

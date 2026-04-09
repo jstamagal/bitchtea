@@ -3,6 +3,7 @@ package ui
 import (
 	"context"
 	"fmt"
+	neturl "net/url"
 	"strings"
 	"time"
 
@@ -130,6 +131,7 @@ func handleModelCommand(m Model, _ string, parts []string) (Model, tea.Cmd) {
 		})
 	}
 	m.agent.SetModel(newModel)
+	clearLoadedProfile(&m)
 	m.addMessage(ChatMessage{
 		Time:    time.Now(),
 		Type:    MsgSystem,
@@ -485,13 +487,18 @@ func handleBaseURLCommand(m Model, _ string, parts []string) (Model, tea.Cmd) {
 		return m, nil
 	}
 	url := parts[1]
-	if !strings.HasPrefix(url, "http://") && !strings.HasPrefix(url, "https://") {
+	parsed, err := neturl.Parse(url)
+	if err != nil || parsed.Host == "" || (parsed.Scheme != "http" && parsed.Scheme != "https") {
 		m.errMsg(fmt.Sprintf("Invalid URL %q. Must start with http:// or https://.", url))
 		return m, nil
 	}
 	m.agent.SetBaseURL(url)
 	m.config.BaseURL = url
-	m.sysMsg(fmt.Sprintf("*** Base URL set to: %s", url))
+	clearLoadedProfile(&m)
+	m.sysMsg(fmt.Sprintf("*** Base URL set to: %s\n  requests -> %s", url, transportEndpointPreview(m.config.Provider, url)))
+	if note := providerTransportHint(m.config.Provider, url); note != "" {
+		m.sysMsg(note)
+	}
 	return m, nil
 }
 
@@ -512,10 +519,8 @@ func handleAPIKeyCommand(m Model, _ string, parts []string) (Model, tea.Cmd) {
 	}
 	m.agent.SetAPIKey(key)
 	m.config.APIKey = key
-	masked := key
-	if len(masked) > 8 {
-		masked = masked[:4] + "..." + masked[len(masked)-4:]
-	}
+	clearLoadedProfile(&m)
+	masked := maskSecret(key)
 	m.sysMsg(fmt.Sprintf("*** API key set: %s", masked))
 	return m, nil
 }
@@ -532,7 +537,11 @@ func handleProviderCommand(m Model, _ string, parts []string) (Model, tea.Cmd) {
 	}
 	m.config.Provider = prov
 	m.agent.SetProvider(prov)
-	m.sysMsg(fmt.Sprintf("*** Provider set to: %s", prov))
+	clearLoadedProfile(&m)
+	m.sysMsg(fmt.Sprintf("*** Provider set to: %s\n  requests -> %s", prov, transportEndpointPreview(prov, m.config.BaseURL)))
+	if note := providerTransportHint(prov, m.config.BaseURL); note != "" {
+		m.sysMsg(note)
+	}
 	return m, nil
 }
 
@@ -572,7 +581,7 @@ func handleProfileCommand(m Model, _ string, parts []string) (Model, tea.Cmd) {
 		name := parts[2]
 		p, err := config.ResolveProfile(name)
 		if err != nil {
-			m.errMsg(fmt.Sprintf("Load failed: %v", err))
+			m.errMsg(profileLookupMessage(name))
 			return m, nil
 		}
 		applyProfileToModel(&m, name, p, true)
@@ -590,7 +599,7 @@ func handleProfileCommand(m Model, _ string, parts []string) (Model, tea.Cmd) {
 	default:
 		p, err := config.ResolveProfile(action)
 		if err != nil {
-			m.errMsg(fmt.Sprintf("Unknown profile action or profile not found: %s", action))
+			m.errMsg(profileLookupMessage(action))
 			return m, nil
 		}
 		applyProfileToModel(&m, action, p, false)
@@ -602,27 +611,89 @@ func applyProfileToModel(m *Model, name string, p *config.Profile, verbose bool)
 	config.ApplyProfile(m.config, p)
 	m.config.Profile = name
 
-	if verbose {
-		m.sysMsg(fmt.Sprintf("*** Profile loaded: %s (provider=%s model=%s)", name, p.Provider, p.Model))
-	} else {
-		m.sysMsg(fmt.Sprintf("*** Profile loaded: %s\n  provider=%s model=%s\n  baseurl=%s\n  apikey=%s",
-			name, p.Provider, p.Model, p.BaseURL, p.APIKey))
-	}
-
 	m.agent.SetModel(p.Model)
 	m.agent.SetBaseURL(p.BaseURL)
 	m.agent.SetAPIKey(p.APIKey)
 	m.agent.SetProvider(p.Provider)
 
-	if !verbose {
+	masked := maskSecret(p.APIKey)
+	if verbose {
+		m.sysMsg(fmt.Sprintf("*** Profile loaded: %s\n  provider=%s model=%s\n  baseurl=%s\n  endpoint=%s\n  apikey=%s",
+			name, p.Provider, p.Model, p.BaseURL, transportEndpointPreview(p.Provider, p.BaseURL), masked))
+	} else {
 		m.sysMsg(fmt.Sprintf("*** Profile loaded: %s (provider=%s model=%s)", name, p.Provider, p.Model))
-		return
+	}
+	if p.APIKey == "" {
+		m.sysMsg("This profile did not provide an API key. Set one with /apikey or the matching env var before connecting.")
+	}
+	if note := providerTransportHint(p.Provider, p.BaseURL); note != "" {
+		m.sysMsg(note)
+	}
+}
+
+func clearLoadedProfile(m *Model) {
+	m.config.Profile = ""
+}
+
+func maskSecret(value string) string {
+	if strings.TrimSpace(value) == "" {
+		return "<unset>"
+	}
+	if len(value) <= 8 {
+		return value
+	}
+	return value[:4] + "..." + value[len(value)-4:]
+}
+
+func profileLookupMessage(name string) string {
+	name = strings.TrimSpace(strings.ToLower(name))
+	if name == "openai" || name == "anthropic" {
+		return fmt.Sprintf("%s is a provider, not a profile. Use /provider %s or /profile to list profiles.", name, name)
+	}
+	return fmt.Sprintf("Unknown profile %q. Use /profile load <name> or /profile to list profiles.", name)
+}
+
+func transportEndpointPreview(provider, baseURL string) string {
+	baseURL = strings.TrimRight(strings.TrimSpace(baseURL), "/")
+	switch provider {
+	case "anthropic":
+		return baseURL + "/messages"
+	default:
+		return baseURL + "/chat/completions"
+	}
+}
+
+func providerTransportHint(provider, baseURL string) string {
+	lowerURL := strings.TrimRight(strings.TrimSpace(strings.ToLower(baseURL)), "/")
+	if lowerURL == "" {
+		return ""
 	}
 
-	masked := p.APIKey
-	if len(masked) > 8 {
-		masked = masked[:4] + "..." + masked[len(masked)-4:]
+	var warnings []string
+	switch {
+	case strings.HasSuffix(lowerURL, "/chat/completions"):
+		warnings = append(warnings, "warning -> base URL already includes /chat/completions; omit /chat/completions because bitchtea appends endpoint paths automatically.")
+	case strings.HasSuffix(lowerURL, "/messages"):
+		warnings = append(warnings, "warning -> base URL already includes /messages; omit /messages because bitchtea appends endpoint paths automatically.")
 	}
-	m.sysMsg(fmt.Sprintf("*** Profile loaded: %s\n  provider=%s model=%s\n  baseurl=%s\n  apikey=%s",
-		name, p.Provider, p.Model, p.BaseURL, masked))
+
+	looksLocal := strings.Contains(lowerURL, "localhost") || strings.Contains(lowerURL, "127.0.0.1")
+	looksAnthropic := strings.Contains(lowerURL, "anthropic")
+	looksGenericV1 := strings.Contains(lowerURL, "/v1")
+	looksOpenAIStyle := strings.Contains(lowerURL, "api.openai.com") || strings.Contains(lowerURL, "openrouter.ai") || strings.Contains(lowerURL, "/openai/")
+
+	switch strings.TrimSpace(strings.ToLower(provider)) {
+	case "anthropic":
+		if looksOpenAIStyle {
+			warnings = append(warnings, "warning -> Anthropic transport with an OpenAI-style base URL looks suspicious. Requests will go to /messages. If this endpoint is OpenAI-compatible, switch with /provider openai.")
+		} else if !looksAnthropic && (looksLocal || looksGenericV1) {
+			warnings = append(warnings, "warning -> anthropic transport sends requests to /messages. If this server is OpenAI-compatible, switch with /provider openai.")
+		}
+	case "openai":
+		if looksAnthropic {
+			warnings = append(warnings, "warning -> openai transport sends requests to /chat/completions. If this endpoint is Anthropic-compatible, switch with /provider anthropic.")
+		}
+	}
+
+	return strings.Join(warnings, "\n")
 }
