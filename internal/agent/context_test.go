@@ -125,6 +125,80 @@ func TestSearchMemoryFindsHotAndDurableMarkdown(t *testing.T) {
 	}
 }
 
+func TestScopedMemoryPathsUseChannelAndQueryLayout(t *testing.T) {
+	workDir := filepath.Join(t.TempDir(), "repo")
+	sessionDir := filepath.Join(t.TempDir(), "sessions")
+	when := time.Date(2026, 4, 8, 13, 14, 15, 0, time.UTC)
+
+	root := RootMemoryScope()
+	channel := ChannelMemoryScope("#CornHub", &root)
+	query := QueryMemoryScope("coding buddy", &channel)
+
+	hotPath := ScopedHotMemoryPath(sessionDir, workDir, query)
+	if !strings.Contains(hotPath, filepath.Join("contexts", "channels", "cornhub", "queries", "coding-buddy", "HOT.md")) {
+		t.Fatalf("unexpected scoped hot path: %q", hotPath)
+	}
+
+	dailyPath := ScopedDailyMemoryPath(sessionDir, workDir, query, when)
+	if !strings.Contains(dailyPath, filepath.Join("contexts", "channels", "cornhub", "queries", "coding-buddy", "daily", "2026-04-08.md")) {
+		t.Fatalf("unexpected scoped daily path: %q", dailyPath)
+	}
+}
+
+func TestScopedMemorySearchInheritsParentsWithoutLeakingChildWrites(t *testing.T) {
+	workDir := filepath.Join(t.TempDir(), "repo")
+	sessionDir := filepath.Join(t.TempDir(), "sessions")
+	when := time.Date(2026, 4, 8, 13, 14, 15, 0, time.UTC)
+
+	if err := os.MkdirAll(workDir, 0755); err != nil {
+		t.Fatalf("mkdir workDir: %v", err)
+	}
+
+	root := RootMemoryScope()
+	channel := ChannelMemoryScope("lounge", &root)
+	query := QueryMemoryScope("coding-buddy", &channel)
+
+	if err := SaveMemory(workDir, "# Root memory\n- Root IRC rule\n"); err != nil {
+		t.Fatalf("save root memory: %v", err)
+	}
+	if err := SaveScopedMemory(sessionDir, workDir, channel, "# Channel memory\n- Channel routing rule\n"); err != nil {
+		t.Fatalf("save channel memory: %v", err)
+	}
+	if err := SaveScopedMemory(sessionDir, workDir, query, "# Query memory\n- Query-only scratchpad\n"); err != nil {
+		t.Fatalf("save query memory: %v", err)
+	}
+	if err := AppendScopedDailyMemory(sessionDir, workDir, channel, when, "- Channel durable note"); err != nil {
+		t.Fatalf("append scoped daily memory: %v", err)
+	}
+
+	results, err := SearchScopedMemory(sessionDir, workDir, query, "Channel routing rule", 10)
+	if err != nil {
+		t.Fatalf("search scoped memory: %v", err)
+	}
+	if len(results) != 1 {
+		t.Fatalf("expected 1 channel result, got %d", len(results))
+	}
+	if !strings.Contains(results[0].Source, filepath.Join("contexts", "channels", "lounge", "HOT.md")) {
+		t.Fatalf("expected scoped channel source, got %q", results[0].Source)
+	}
+
+	results, err = SearchScopedMemory(sessionDir, workDir, query, "Root IRC rule", 10)
+	if err != nil {
+		t.Fatalf("search inherited root memory: %v", err)
+	}
+	if len(results) != 1 || results[0].Source != "MEMORY.md" {
+		t.Fatalf("expected inherited root MEMORY.md result, got %#v", results)
+	}
+
+	results, err = SearchScopedMemory(sessionDir, workDir, root, "Query-only scratchpad", 10)
+	if err != nil {
+		t.Fatalf("search root scope memory: %v", err)
+	}
+	if len(results) != 0 {
+		t.Fatalf("expected root scope to ignore child-only writes, got %#v", results)
+	}
+}
+
 func TestRenderMemorySearchResults(t *testing.T) {
 	rendered := RenderMemorySearchResults("irc metaphor", []MemorySearchResult{{
 		Source:  "MEMORY.md",

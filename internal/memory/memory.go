@@ -13,6 +13,34 @@ import (
 
 var nonAlphaNum = regexp.MustCompile(`[^a-z0-9]+`)
 
+type ScopeKind string
+
+const (
+	ScopeRoot    ScopeKind = "root"
+	ScopeChannel ScopeKind = "channel"
+	ScopeQuery   ScopeKind = "query"
+)
+
+// Scope identifies a memory namespace for the current worktree.
+// Root scope remains the legacy top-level MEMORY.md in the repo.
+type Scope struct {
+	Kind   ScopeKind
+	Name   string
+	Parent *Scope
+}
+
+func RootScope() Scope {
+	return Scope{Kind: ScopeRoot}
+}
+
+func ChannelScope(name string, parent *Scope) Scope {
+	return Scope{Kind: ScopeChannel, Name: name, Parent: parent}
+}
+
+func QueryScope(name string, parent *Scope) Scope {
+	return Scope{Kind: ScopeQuery, Name: name, Parent: parent}
+}
+
 // Load reads MEMORY.md from workDir if it exists.
 func Load(workDir string) string {
 	path := filepath.Join(workDir, "MEMORY.md")
@@ -29,25 +57,67 @@ func Save(workDir string, content string) error {
 	return os.WriteFile(path, []byte(content), 0644)
 }
 
+// HotPath returns the hot-memory path for a context scope. Root scope keeps the
+// legacy MEMORY.md in the repo for backward compatibility.
+func HotPath(sessionDir, workDir string, scope Scope) string {
+	if scope.Kind == "" || scope.Kind == ScopeRoot {
+		return filepath.Join(workDir, "MEMORY.md")
+	}
+	return filepath.Join(memoryBaseDir(sessionDir, workDir), "contexts", scope.relativePath(), "HOT.md")
+}
+
+// LoadScoped reads hot memory for a scoped context if it exists.
+func LoadScoped(sessionDir, workDir string, scope Scope) string {
+	path := HotPath(sessionDir, workDir, scope)
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return ""
+	}
+	return string(data)
+}
+
+// SaveScoped writes hot memory for a scoped context.
+func SaveScoped(sessionDir, workDir string, scope Scope, content string) error {
+	path := HotPath(sessionDir, workDir, scope)
+	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
+		return fmt.Errorf("create scoped hot memory dir: %w", err)
+	}
+	return os.WriteFile(path, []byte(content), 0644)
+}
+
 // DailyPath returns the markdown file used for durable daily memory for the
 // current worktree scope.
 func DailyPath(sessionDir, workDir string, when time.Time) string {
+	return DailyPathForScope(sessionDir, workDir, RootScope(), when)
+}
+
+// DailyPathForScope returns the durable daily-memory path for a context scope.
+func DailyPathForScope(sessionDir, workDir string, scope Scope, when time.Time) string {
+	if scope.Kind == "" || scope.Kind == ScopeRoot {
+		return filepath.Join(memoryBaseDir(sessionDir, workDir), when.Format("2006-01-02")+".md")
+	}
 	return filepath.Join(
-		filepath.Dir(sessionDir),
-		"memory",
-		scopeName(workDir),
+		memoryBaseDir(sessionDir, workDir),
+		"contexts",
+		scope.relativePath(),
+		"daily",
 		when.Format("2006-01-02")+".md",
 	)
 }
 
 // AppendDaily appends a dated durable-memory checkpoint for later recall.
 func AppendDaily(sessionDir, workDir string, when time.Time, content string) error {
+	return AppendDailyForScope(sessionDir, workDir, RootScope(), when, content)
+}
+
+// AppendDailyForScope appends a dated durable-memory checkpoint for a scope.
+func AppendDailyForScope(sessionDir, workDir string, scope Scope, when time.Time, content string) error {
 	content = strings.TrimSpace(content)
 	if content == "" {
 		return nil
 	}
 
-	path := DailyPath(sessionDir, workDir, when)
+	path := DailyPathForScope(sessionDir, workDir, scope, when)
 	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
 		return fmt.Errorf("create daily memory dir: %w", err)
 	}
@@ -76,6 +146,12 @@ type SearchResult struct {
 // Search searches hot MEMORY.md and durable daily markdown memory for the
 // current worktree scope.
 func Search(sessionDir, workDir, query string, limit int) ([]SearchResult, error) {
+	return SearchInScope(sessionDir, workDir, RootScope(), query, limit)
+}
+
+// SearchInScope searches hot and durable markdown memory for the current scope
+// and then walks parent scopes outward to support inherited reads.
+func SearchInScope(sessionDir, workDir string, scope Scope, query string, limit int) ([]SearchResult, error) {
 	query = strings.TrimSpace(query)
 	if query == "" {
 		return nil, fmt.Errorf("query is required")
@@ -85,21 +161,9 @@ func Search(sessionDir, workDir, query string, limit int) ([]SearchResult, error
 	}
 
 	terms := queryTerms(query)
-	candidates := []string{filepath.Join(workDir, "MEMORY.md")}
-
-	dailyDir := filepath.Join(filepath.Dir(sessionDir), "memory", scopeName(workDir))
-	if entries, err := os.ReadDir(dailyDir); err == nil {
-		var dailyPaths []string
-		for _, entry := range entries {
-			if entry.IsDir() || filepath.Ext(entry.Name()) != ".md" {
-				continue
-			}
-			dailyPaths = append(dailyPaths, filepath.Join(dailyDir, entry.Name()))
-		}
-		sort.Sort(sort.Reverse(sort.StringSlice(dailyPaths)))
-		candidates = append(candidates, dailyPaths...)
-	} else if !os.IsNotExist(err) {
-		return nil, fmt.Errorf("read daily memory dir: %w", err)
+	candidates, err := candidatePaths(sessionDir, workDir, scope)
+	if err != nil {
+		return nil, err
 	}
 
 	results := make([]SearchResult, 0, limit)
@@ -177,6 +241,38 @@ func scopeName(workDir string) string {
 	return fmt.Sprintf("%s-%08x", base, hasher.Sum32())
 }
 
+func memoryBaseDir(sessionDir, workDir string) string {
+	return filepath.Join(filepath.Dir(sessionDir), "memory", scopeName(workDir))
+}
+
+func candidatePaths(sessionDir, workDir string, scope Scope) ([]string, error) {
+	var candidates []string
+	for _, ancestor := range scope.lineage() {
+		candidates = append(candidates, HotPath(sessionDir, workDir, ancestor))
+
+		dailyDir := filepath.Dir(DailyPathForScope(sessionDir, workDir, ancestor, time.Now()))
+		entries, err := os.ReadDir(dailyDir)
+		if err != nil {
+			if os.IsNotExist(err) {
+				continue
+			}
+			return nil, fmt.Errorf("read daily memory dir: %w", err)
+		}
+
+		var dailyPaths []string
+		for _, entry := range entries {
+			if entry.IsDir() || filepath.Ext(entry.Name()) != ".md" {
+				continue
+			}
+			dailyPaths = append(dailyPaths, filepath.Join(dailyDir, entry.Name()))
+		}
+		sort.Sort(sort.Reverse(sort.StringSlice(dailyPaths)))
+		candidates = append(candidates, dailyPaths...)
+	}
+
+	return candidates, nil
+}
+
 func queryTerms(query string) []string {
 	fields := strings.Fields(strings.ToLower(query))
 	if len(fields) == 0 {
@@ -207,6 +303,62 @@ func formatSource(sessionDir, workDir, path string) string {
 		return rel
 	}
 	return path
+}
+
+func (s Scope) lineage() []Scope {
+	if s.Kind == "" {
+		s = RootScope()
+	}
+
+	var stack []Scope
+	for cur := &s; cur != nil; cur = cur.Parent {
+		stack = append(stack, *cur)
+		if cur.Kind == ScopeRoot {
+			break
+		}
+	}
+
+	if len(stack) == 0 || stack[len(stack)-1].Kind != ScopeRoot {
+		stack = append(stack, RootScope())
+	}
+
+	lineage := make([]Scope, 0, len(stack))
+	for i := 0; i < len(stack); i++ {
+		lineage = append(lineage, stack[i])
+	}
+	return lineage
+}
+
+func (s Scope) relativePath() string {
+	if s.Kind == "" || s.Kind == ScopeRoot {
+		return ""
+	}
+
+	var segments []string
+	lineage := s.lineage()
+	for i := len(lineage) - 1; i >= 0; i-- {
+		ancestor := lineage[i]
+		if ancestor.Kind == "" || ancestor.Kind == ScopeRoot {
+			continue
+		}
+
+		dir := "channels"
+		if ancestor.Kind == ScopeQuery {
+			dir = "queries"
+		}
+		segments = append(segments, dir, sanitizeSegment(ancestor.Name))
+	}
+	return filepath.Join(segments...)
+}
+
+func sanitizeSegment(name string) string {
+	name = strings.ToLower(strings.TrimSpace(name))
+	name = nonAlphaNum.ReplaceAllString(name, "-")
+	name = strings.Trim(name, "-")
+	if name == "" {
+		return "unnamed"
+	}
+	return name
 }
 
 func nearestMarkdownHeading(content string, idx int) string {

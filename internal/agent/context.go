@@ -44,9 +44,45 @@ func LoadMemory(workDir string) string {
 	return memorypkg.Load(workDir)
 }
 
+type MemoryScope = memorypkg.Scope
+type MemoryScopeKind = memorypkg.ScopeKind
+
+const (
+	MemoryScopeRoot    = memorypkg.ScopeRoot
+	MemoryScopeChannel = memorypkg.ScopeChannel
+	MemoryScopeQuery   = memorypkg.ScopeQuery
+)
+
+func RootMemoryScope() MemoryScope {
+	return memorypkg.RootScope()
+}
+
+func ChannelMemoryScope(name string, parent *MemoryScope) MemoryScope {
+	return memorypkg.ChannelScope(name, parent)
+}
+
+func QueryMemoryScope(name string, parent *MemoryScope) MemoryScope {
+	return memorypkg.QueryScope(name, parent)
+}
+
 // SaveMemory writes MEMORY.md to workDir
 func SaveMemory(workDir string, content string) error {
 	return memorypkg.Save(workDir, content)
+}
+
+// LoadScopedMemory reads scoped hot memory if it exists.
+func LoadScopedMemory(sessionDir, workDir string, scope MemoryScope) string {
+	return memorypkg.LoadScoped(sessionDir, workDir, scope)
+}
+
+// SaveScopedMemory writes scoped hot memory.
+func SaveScopedMemory(sessionDir, workDir string, scope MemoryScope, content string) error {
+	return memorypkg.SaveScoped(sessionDir, workDir, scope, content)
+}
+
+// ScopedHotMemoryPath returns the scoped hot-memory path.
+func ScopedHotMemoryPath(sessionDir, workDir string, scope MemoryScope) string {
+	return memorypkg.HotPath(sessionDir, workDir, scope)
 }
 
 // DailyMemoryPath returns the markdown file used for durable daily memory for
@@ -55,9 +91,19 @@ func DailyMemoryPath(sessionDir, workDir string, when time.Time) string {
 	return memorypkg.DailyPath(sessionDir, workDir, when)
 }
 
+// ScopedDailyMemoryPath returns the durable daily-memory path for a scope.
+func ScopedDailyMemoryPath(sessionDir, workDir string, scope MemoryScope, when time.Time) string {
+	return memorypkg.DailyPathForScope(sessionDir, workDir, scope, when)
+}
+
 // AppendDailyMemory appends a dated durable-memory checkpoint for later recall.
 func AppendDailyMemory(sessionDir, workDir string, when time.Time, content string) error {
 	return memorypkg.AppendDaily(sessionDir, workDir, when, content)
+}
+
+// AppendScopedDailyMemory appends durable memory for a context scope.
+func AppendScopedDailyMemory(sessionDir, workDir string, scope MemoryScope, when time.Time, content string) error {
+	return memorypkg.AppendDailyForScope(sessionDir, workDir, scope, when, content)
 }
 
 // MemorySearchResult is a single recall hit from hot or durable markdown memory.
@@ -67,6 +113,11 @@ type MemorySearchResult = memorypkg.SearchResult
 // current worktree scope.
 func SearchMemory(sessionDir, workDir, query string, limit int) ([]MemorySearchResult, error) {
 	return memorypkg.Search(sessionDir, workDir, query, limit)
+}
+
+// SearchScopedMemory searches scoped memory and inherited parent scopes.
+func SearchScopedMemory(sessionDir, workDir string, scope MemoryScope, query string, limit int) ([]MemorySearchResult, error) {
+	return memorypkg.SearchInScope(sessionDir, workDir, scope, query, limit)
 }
 
 // RenderMemorySearchResults formats memory hits for the recall tool output.
