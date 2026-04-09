@@ -3,6 +3,7 @@ package llm
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -195,6 +196,99 @@ func TestStreamChatAPIError(t *testing.T) {
 
 	if !gotError {
 		t.Fatal("expected error event for 429 response")
+	}
+}
+
+func TestStreamChatConnectionRefusedIncludesGuidance(t *testing.T) {
+	client := NewClient("test-key", "http://127.0.0.1:3456", "test-model", "openai")
+	client.HTTP = &http.Client{
+		Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
+			return nil, &url.Error{
+				Op:  "Post",
+				URL: "http://127.0.0.1:3456/chat/completions",
+				Err: errors.New("dial tcp 127.0.0.1:3456: connect: connection refused"),
+			}
+		}),
+	}
+
+	events := make(chan StreamEvent, 100)
+	go client.StreamChat(context.Background(), []Message{{Role: "user", Content: "hi"}}, nil, events)
+
+	var gotError error
+	for ev := range events {
+		if ev.Type == "error" {
+			gotError = ev.Error
+		}
+	}
+
+	if gotError == nil {
+		t.Fatal("expected connection error")
+	}
+	for _, want := range []string{
+		"connection refused",
+		"Hint:",
+		"http://127.0.0.1:3456/chat/completions",
+		"make sure the server is running",
+	} {
+		if !strings.Contains(gotError.Error(), want) {
+			t.Fatalf("expected %q in error, got %v", want, gotError)
+		}
+	}
+}
+
+func TestStreamChat404SuggestsAnthropicProvider(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(404)
+		fmt.Fprint(w, `{"error":{"type":"not_found","message":"Endpoint not supported: POST /chat/completions"}}`)
+	}))
+	defer server.Close()
+
+	client := NewClient("test-key", server.URL, "test-model", "openai")
+	events := make(chan StreamEvent, 100)
+	go client.StreamChat(context.Background(), []Message{{Role: "user", Content: "hi"}}, nil, events)
+
+	var gotError error
+	for ev := range events {
+		if ev.Type == "error" {
+			gotError = ev.Error
+		}
+	}
+
+	if gotError == nil {
+		t.Fatal("expected 404 error")
+	}
+	for _, want := range []string{"API 404", "Try /provider anthropic", "/chat/completions"} {
+		if !strings.Contains(gotError.Error(), want) {
+			t.Fatalf("expected %q in error, got %v", want, gotError)
+		}
+	}
+}
+
+func TestStreamChat429IncludesRateLimitGuidance(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(429)
+		fmt.Fprint(w, `{"error":{"message":"rate limited"}}`)
+	}))
+	defer server.Close()
+
+	client := NewClient("test-key", server.URL, "test-model", "openai")
+	events := make(chan StreamEvent, 100)
+	go client.StreamChat(context.Background(), []Message{{Role: "user", Content: "hi"}}, nil, events)
+
+	var gotError error
+	for ev := range events {
+		if ev.Type == "error" {
+			gotError = ev.Error
+		}
+	}
+
+	if gotError == nil {
+		t.Fatal("expected 429 error")
+	}
+	for _, want := range []string{"API 429", "rate limited", "quota"} {
+		if !strings.Contains(strings.ToLower(gotError.Error()), strings.ToLower(want)) {
+			t.Fatalf("expected %q in error, got %v", want, gotError)
+		}
 	}
 }
 
@@ -540,6 +634,12 @@ func (t rewriteHostTransport) RoundTrip(req *http.Request) (*http.Response, erro
 	clone.URL.Scheme = t.targetScheme
 	clone.URL.Host = t.targetHost
 	return t.base.RoundTrip(clone)
+}
+
+type roundTripFunc func(*http.Request) (*http.Response, error)
+
+func (f roundTripFunc) RoundTrip(req *http.Request) (*http.Response, error) {
+	return f(req)
 }
 
 func min(a, b int) int {

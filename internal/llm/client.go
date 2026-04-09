@@ -191,6 +191,7 @@ func (c *Client) streamChatOpenAI(ctx context.Context, messages []Message, tools
 
 	// Execute request with retry on rate limits and server errors
 	var resp *http.Response
+	var lastStatusErr *apiStatusError
 	retryCfg := DefaultRetryConfig()
 
 	attempts, err := RetryWithBackoff(ctx, retryCfg, func() (bool, error) {
@@ -214,9 +215,10 @@ func (c *Client) streamChatOpenAI(ctx context.Context, messages []Message, tools
 		// Read body before potentially closing
 		respBody, _ := io.ReadAll(resp.Body)
 		resp.Body.Close()
+		lastStatusErr = &apiStatusError{StatusCode: resp.StatusCode, Body: string(respBody)}
 
 		if !IsRetryable(resp.StatusCode) {
-			return false, fmt.Errorf("API %d: %s", resp.StatusCode, string(respBody))
+			return false, lastStatusErr
 		}
 
 		// Rate limited or server error - retry
@@ -224,13 +226,13 @@ func (c *Client) streamChatOpenAI(ctx context.Context, messages []Message, tools
 	})
 
 	if err != nil {
-		events <- StreamEvent{Type: "error", Error: fmt.Errorf("after %d attempts: %w", attempts, err)}
+		events <- StreamEvent{Type: "error", Error: explainRequestFailure(c.Provider, c.BaseURL, attempts, err)}
 		return
 	}
 
 	if resp.StatusCode != 200 {
 		// This shouldn't happen, but handle it
-		events <- StreamEvent{Type: "error", Error: fmt.Errorf("unexpected status: %d", resp.StatusCode)}
+		events <- StreamEvent{Type: "error", Error: explainRequestFailure(c.Provider, c.BaseURL, attempts, lastStatusErr)}
 		return
 	}
 

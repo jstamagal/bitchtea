@@ -199,6 +199,37 @@ func TestStreamChatAnthropicAPIError(t *testing.T) {
 	}
 }
 
+func TestStreamChatAnthropic404SuggestsOpenAIProvider(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(404)
+		fmt.Fprint(w, `{"error":{"type":"not_found","message":"Endpoint not supported: POST /messages"}}`)
+	}))
+	defer server.Close()
+
+	client := NewClient("test-key", server.URL, "claude-sonnet-4-20250514", "anthropic")
+	events := make(chan StreamEvent, 100)
+
+	go client.StreamChat(context.Background(), []Message{
+		{Role: "user", Content: "hi"},
+	}, nil, events)
+
+	var gotError error
+	for ev := range events {
+		if ev.Type == "error" {
+			gotError = ev.Error
+		}
+	}
+
+	if gotError == nil {
+		t.Fatal("expected 404 error")
+	}
+	for _, want := range []string{"API 404", "Try /provider openai", "/messages"} {
+		if !strings.Contains(gotError.Error(), want) {
+			t.Fatalf("expected %q in error, got %v", want, gotError)
+		}
+	}
+}
+
 func TestEnsureAlternating(t *testing.T) {
 	msgs := []anthropicMessage{
 		{Role: "user", Content: []interface{}{anthropicTextBlock{Type: "text", Text: "a"}}},
