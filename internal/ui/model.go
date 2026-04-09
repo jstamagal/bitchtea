@@ -33,6 +33,40 @@ type SignalMsg struct {
 	Signal os.Signal
 }
 
+// BackgroundActivity captures work happening outside the currently focused chat.
+type BackgroundActivity struct {
+	Time    time.Time
+	Context string
+	Sender  string
+	Summary string
+}
+
+func normalizeContextLabel(label string) string {
+	label = strings.TrimSpace(label)
+	if label == "" {
+		return "main"
+	}
+	return label
+}
+
+func formatContextAddress(contextLabel, sender string) string {
+	contextLabel = normalizeContextLabel(contextLabel)
+	sender = strings.TrimSpace(sender)
+	if sender == "" {
+		return fmt.Sprintf("[%s]", contextLabel)
+	}
+	return fmt.Sprintf("[%s] <%s>", contextLabel, sender)
+}
+
+func (a BackgroundActivity) displayLine() string {
+	address := formatContextAddress(a.Context, a.Sender)
+	summary := strings.TrimSpace(a.Summary)
+	if summary == "" {
+		return address
+	}
+	return address + " " + summary
+}
+
 // Model is the top-level bubbletea model
 type Model struct {
 	// Config
@@ -52,13 +86,16 @@ type Model struct {
 	mp3       *mp3Controller
 
 	// State
-	messages     []ChatMessage
-	viewContent  string // rendered viewport content
-	width        int
-	height       int
-	ready        bool
-	streaming    bool
-	streamBuffer *strings.Builder // accumulates current agent response (pointer to avoid copy panic)
+	messages           []ChatMessage
+	viewContent        string // rendered viewport content
+	width              int
+	height             int
+	ready              bool
+	streaming          bool
+	streamBuffer       *strings.Builder // accumulates current agent response (pointer to avoid copy panic)
+	activeContext      string
+	backgroundActivity []BackgroundActivity
+	backgroundUnread   int
 
 	// Input history
 	history    []string
@@ -111,19 +148,20 @@ func NewModel(cfg *config.Config) Model {
 	}
 
 	return Model{
-		config:       cfg,
-		agent:        ag,
-		agentState:   agent.StateIdle,
-		input:        ta,
-		spinner:      sp,
-		toolPanel:    NewToolPanel(),
-		mp3:          newMP3Controller(),
-		messages:     []ChatMessage{},
-		history:      []string{},
-		historyIdx:   -1,
-		streamBuffer: &strings.Builder{},
-		session:      sess,
-		transcript:   transcript,
+		config:        cfg,
+		agent:         ag,
+		agentState:    agent.StateIdle,
+		input:         ta,
+		spinner:       sp,
+		toolPanel:     NewToolPanel(),
+		mp3:           newMP3Controller(),
+		messages:      []ChatMessage{},
+		history:       []string{},
+		historyIdx:    -1,
+		streamBuffer:  &strings.Builder{},
+		activeContext: normalizeContextLabel(""),
+		session:       sess,
+		transcript:    transcript,
 	}
 }
 
@@ -700,7 +738,7 @@ func (m Model) View() string {
 	if len(m.queued) > 0 {
 		queuedStr = fmt.Sprintf(" [queued:%d]", len(m.queued))
 	}
-	topLeft := TopBarStyle.Render(fmt.Sprintf(" bitchtea — %s/%s%s%s ", m.config.Provider, m.config.Model, flags, queuedStr))
+	topLeft := TopBarStyle.Render(fmt.Sprintf(" bitchtea — %s/%s [%s]%s%s ", m.config.Provider, m.config.Model, m.activeContext, flags, queuedStr))
 	topRight := TopBarStyle.Render(fmt.Sprintf(" %s ", time.Now().Format("3:04pm")))
 	topPad := m.width - lipgloss.Width(topLeft) - lipgloss.Width(topRight)
 	if topPad < 0 {
@@ -756,6 +794,9 @@ func (m Model) View() string {
 		mp3Status := truncateRunes(m.mp3.statusText(), mp3StatusBarWidth)
 		statsStr += mp3Status + " | "
 	}
+	if bg := m.backgroundStatus(); bg != "" {
+		statsStr += bg + " | "
+	}
 	statsStr += fmt.Sprintf("~%s tok | %s", tokenStr, elapsed)
 
 	statusRight := barStyle.Render(fmt.Sprintf(" %s ", statsStr))
@@ -776,6 +817,47 @@ func (m Model) View() string {
 		statusBar + "\n" +
 		Separator(m.width) + "\n" +
 		inputView
+}
+
+func (m *Model) SetActiveContext(label string) {
+	m.activeContext = normalizeContextLabel(label)
+}
+
+func (m *Model) NotifyBackgroundActivity(activity BackgroundActivity) {
+	activity.Context = normalizeContextLabel(activity.Context)
+	if activity.Time.IsZero() {
+		activity.Time = time.Now()
+	}
+	if strings.TrimSpace(activity.Summary) == "" {
+		activity.Summary = "activity waiting"
+	}
+	m.backgroundActivity = append(m.backgroundActivity, activity)
+	m.backgroundUnread++
+}
+
+func (m Model) backgroundStatus() string {
+	if len(m.backgroundActivity) == 0 {
+		return ""
+	}
+	latest := truncateRunes(m.backgroundActivity[len(m.backgroundActivity)-1].displayLine(), 22)
+	return fmt.Sprintf("bg:%d /activity %s", m.backgroundUnread, latest)
+}
+
+func (m Model) backgroundActivityReport() string {
+	if len(m.backgroundActivity) == 0 {
+		return "No background activity queued."
+	}
+
+	var sb strings.Builder
+	sb.WriteString("Background activity:\n")
+	for _, activity := range m.backgroundActivity {
+		sb.WriteString("  ")
+		sb.WriteString(activity.Time.Format("15:04"))
+		sb.WriteString(" ")
+		sb.WriteString(activity.displayLine())
+		sb.WriteByte('\n')
+	}
+	return strings.TrimRight(sb.String(), "\n")
 }
 
 // handleCommand processes slash commands

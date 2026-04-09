@@ -43,6 +43,9 @@ func TestHandleCommandUsesAliasRegistry(t *testing.T) {
 	if !strings.Contains(msg.Content, "Commands:") {
 		t.Fatalf("expected help output, got %q", msg.Content)
 	}
+	if !strings.Contains(msg.Content, "/activity [clear]") {
+		t.Fatalf("expected /activity in help output, got %q", msg.Content)
+	}
 }
 
 func TestHandleCommandUnknownCommandStillErrors(t *testing.T) {

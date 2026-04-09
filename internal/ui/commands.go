@@ -38,6 +38,7 @@ var slashCommandRegistry = registerSlashCommands(
 	slashCommandSpec{names: []string{"/auto-idea"}, handler: handleAutoIdeaCommand},
 	slashCommandSpec{names: []string{"/debug"}, handler: handleDebugCommand},
 	slashCommandSpec{names: []string{"/sound"}, handler: handleSoundCommand},
+	slashCommandSpec{names: []string{"/activity"}, handler: handleActivityCommand},
 	slashCommandSpec{names: []string{"/mp3"}, handler: handleMP3Command},
 	slashCommandSpec{names: []string{"/theme"}, handler: handleThemeCommand},
 	slashCommandSpec{names: []string{"/memory"}, handler: handleMemoryCommand},
@@ -87,6 +88,7 @@ const helpCommandText = "Commands:\n" +
 	"  /auto-idea          Toggle auto-next-idea\n" +
 	"  /debug on|off       Toggle verbose API logging\n" +
 	"  /sound              Toggle completion bell\n" +
+	"  /activity [clear]   Show or clear queued background activity\n" +
 	"  /mp3 [cmd]          Toggle MP3 panel and player\n" +
 	"  /quit               Exit\n" +
 	"\n" +
@@ -324,6 +326,32 @@ func handleDebugCommand(m Model, _ string, parts []string) (Model, tea.Cmd) {
 		m.errMsg("Usage: /debug on|off")
 	}
 	return m, nil
+}
+
+func handleActivityCommand(m Model, _ string, parts []string) (Model, tea.Cmd) {
+	switch {
+	case len(parts) == 1:
+		report := m.backgroundActivityReport()
+		if len(m.backgroundActivity) > 0 {
+			m.backgroundUnread = 0
+		}
+		m.addMessage(ChatMessage{
+			Time:    time.Now(),
+			Type:    MsgSystem,
+			Content: report,
+		})
+		m.refreshViewport()
+		return m, nil
+	case len(parts) == 2 && strings.EqualFold(parts[1], "clear"):
+		cleared := len(m.backgroundActivity)
+		m.backgroundActivity = nil
+		m.backgroundUnread = 0
+		m.sysMsg(fmt.Sprintf("Cleared %d background activity notice(s).", cleared))
+		return m, nil
+	default:
+		m.errMsg("Usage: /activity [clear]")
+		return m, nil
+	}
 }
 
 func handleSoundCommand(m Model, _ string, _ []string) (Model, tea.Cmd) {

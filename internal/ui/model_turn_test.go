@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/jstamagal/bitchtea/internal/agent"
 	"github.com/jstamagal/bitchtea/internal/config"
@@ -119,5 +120,62 @@ func TestAgentDoneUsesAgentFollowUpPrompt(t *testing.T) {
 	last := got.messages[len(got.messages)-1]
 	if !strings.Contains(last.Content, "auto-next-steps") {
 		t.Fatalf("expected auto-next system message, got %q", last.Content)
+	}
+}
+
+func TestNotifyBackgroundActivityKeepsViewportClean(t *testing.T) {
+	cfg := config.DefaultConfig()
+	cfg.WorkDir = t.TempDir()
+	cfg.SessionDir = t.TempDir()
+
+	model := NewModel(&cfg)
+	model.messages = append(model.messages, ChatMessage{
+		Time:    time.Date(2026, 4, 8, 9, 0, 0, 0, time.UTC),
+		Type:    MsgSystem,
+		Content: "foreground only",
+	})
+
+	model.NotifyBackgroundActivity(BackgroundActivity{
+		Time:    time.Date(2026, 4, 8, 9, 1, 0, 0, time.UTC),
+		Context: "#infra",
+		Sender:  "deploy-bot",
+		Summary: "build failed",
+	})
+
+	if len(model.messages) != 1 {
+		t.Fatalf("expected viewport messages unchanged, got %d", len(model.messages))
+	}
+	if model.backgroundUnread != 1 {
+		t.Fatalf("expected one unread background notice, got %d", model.backgroundUnread)
+	}
+	if got := model.backgroundActivityReport(); !strings.Contains(got, "[#infra] <deploy-bot> build failed") {
+		t.Fatalf("unexpected background report: %q", got)
+	}
+}
+
+func TestViewShowsContextAndBackgroundStatus(t *testing.T) {
+	cfg := config.DefaultConfig()
+	cfg.WorkDir = t.TempDir()
+	cfg.SessionDir = t.TempDir()
+
+	model := NewModel(&cfg)
+	model.ready = true
+	model.width = 120
+	model.height = 24
+	model.viewport.Width = 120
+	model.viewport.Height = 10
+	model.SetActiveContext("#ops")
+	model.NotifyBackgroundActivity(BackgroundActivity{
+		Time:    time.Date(2026, 4, 8, 9, 1, 0, 0, time.UTC),
+		Context: "@coding-buddy",
+		Sender:  "coding-buddy",
+		Summary: "left notes in /activity",
+	})
+
+	view := model.View()
+	for _, want := range []string{"[#ops]", "bg:1", "coding-buddy", "/activity"} {
+		if !strings.Contains(view, want) {
+			t.Fatalf("expected %q in view, got %q", want, view)
+		}
 	}
 }
