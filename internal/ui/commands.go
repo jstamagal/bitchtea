@@ -80,16 +80,11 @@ const helpCommandText = "Commands:\n" +
 	"  /part [#channel]    Leave context (default: current)\n" +
 	"  /query <nick>       Route Enter persistently to nick\n" +
 	"  /msg <nick> <text>  One-shot send to nick, no focus change\n" +
-	"  /model <name>       Switch LLM model\n" +
-	"  /provider <name>    Set provider transport (openai, anthropic)\n" +
-	"  /baseurl <url>      Set API base URL\n" +
-	"  /apikey <key>       Set API key\n" +
-	"  /set <key> [value]  Show or change a setting (provider, model, baseurl, apikey, profile, sound, auto-next, auto-idea, nick)\n" +
-	"  /profile [cmd]      save/load/delete profiles (built-ins: ollama, openrouter, huggingface, xai, copilot, etc.)\n" +
-	"  /join <#channel>    Join a channel context (persisted until /part)\n" +
-	"  /part [target]      Leave current or named context\n" +
-	"  /query <persona>    Open a direct-message context to a persona\n" +
 	"  /channels           List open contexts\n" +
+	"  /set [key [value]]  Show or change a setting\n" +
+	"                        keys: provider, model, baseurl, apikey, nick,\n" +
+	"                              profile, sound, auto-next, auto-idea\n" +
+	"  /profile [cmd]      save/load/delete profiles (built-ins: ollama, openrouter, etc.)\n" +
 	"  /compact            Compact conversation context\n" +
 	"  /clear              Clear chat display\n" +
 	"  /diff               Show git diff\n" +
@@ -102,10 +97,7 @@ const helpCommandText = "Commands:\n" +
 	"  /sessions           List saved sessions\n" +
 	"  /tree               Show session tree\n" +
 	"  /fork               Fork session\n" +
-	"  /auto-next          Toggle auto-next-steps\n" +
-	"  /auto-idea          Toggle auto-next-idea\n" +
 	"  /debug on|off       Toggle verbose API logging\n" +
-	"  /sound              Toggle completion bell\n" +
 	"  /activity [clear]   Show or clear queued background activity\n" +
 	"  /mp3 [cmd]          Toggle MP3 panel and player\n" +
 	"  /quit               Exit\n" +
