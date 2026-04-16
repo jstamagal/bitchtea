@@ -1,3 +1,3 @@
 # Next Steps
 
-- Keep `brain/PROJECT_MAP.md` and `CURRENT_STATE.md` in sync with any meaningful repo change before starting code work.
+- No obvious safe cleanup remains after the worktree hygiene pass; wait for the next user-directed change.

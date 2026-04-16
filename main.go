@@ -32,27 +32,10 @@ func main() {
 	cfg := config.DefaultConfig()
 	config.DetectProvider(&cfg)
 
-	rcLines := config.ParseRC()
-	rcCommands := config.ApplyRCSetCommands(&cfg, rcLines)
-
-	opts, err := parseCLIArgs(os.Args[1:], &cfg)
+	opts, rcCommands, err := applyStartupConfig(&cfg, os.Args[1:], config.ParseRC())
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "bitchtea: %v\n", err)
 		os.Exit(1)
-	}
-
-	// Load profile if specified
-	if opts.profileName != "" {
-		p, err := config.ResolveProfile(opts.profileName)
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "bitchtea: %v\n", err)
-			os.Exit(1)
-		}
-		config.ApplyProfile(&cfg, p)
-		cfg.Profile = opts.profileName
-		// Re-parse args so explicit flags override profile defaults
-		_, _ = parseCLIArgs(os.Args[1:], &cfg)
-		fmt.Fprintf(os.Stderr, "Loaded profile: %s (provider=%s model=%s)\n", opts.profileName, cfg.Provider, cfg.Model)
 	}
 
 	if cfg.APIKey == "" && !config.ProfileAllowsEmptyAPIKey(cfg) {
@@ -94,13 +77,7 @@ func main() {
 		return
 	}
 
-	m := ui.NewModel(&cfg)
-	if sess != nil {
-		m.ResumeSession(sess)
-	}
-	for _, line := range rcCommands {
-		m.ExecuteStartupCommand(line)
-	}
+	m := buildStartupModel(&cfg, sess, rcCommands)
 
 	// Set up signal channel for graceful shutdown
 	sigCh := make(chan os.Signal, 1)
@@ -128,6 +105,45 @@ func main() {
 	}
 }
 
+func applyStartupConfig(cfg *config.Config, args []string, rcLines []string) (cliOptions, []string, error) {
+	rcCommands := config.ApplyRCSetCommands(cfg, rcLines)
+
+	opts, err := parseCLIArgs(args, cfg)
+	if err != nil {
+		return cliOptions{}, nil, err
+	}
+
+	if opts.profileName == "" {
+		return opts, rcCommands, nil
+	}
+
+	p, err := config.ResolveProfile(opts.profileName)
+	if err != nil {
+		return cliOptions{}, nil, err
+	}
+	config.ApplyProfile(cfg, p)
+	cfg.Profile = opts.profileName
+
+	// Re-parse args so explicit flags override profile defaults using the same
+	// manual-override rules as startup /set processing.
+	if _, err := parseCLIArgs(args, cfg); err != nil {
+		return cliOptions{}, nil, err
+	}
+
+	return opts, rcCommands, nil
+}
+
+func buildStartupModel(cfg *config.Config, sess *session.Session, rcCommands []string) ui.Model {
+	m := ui.NewModel(cfg)
+	if sess != nil {
+		m.ResumeSession(sess)
+	}
+	for _, line := range rcCommands {
+		m.ExecuteStartupCommand(line)
+	}
+	return m
+}
+
 func parseCLIArgs(args []string, cfg *config.Config) (cliOptions, error) {
 	var opts cliOptions
 
@@ -138,6 +154,7 @@ func parseCLIArgs(args []string, cfg *config.Config) (cliOptions, error) {
 				return opts, fmt.Errorf("missing value for %s", args[i])
 			}
 			cfg.Model = args[i+1]
+			cfg.Profile = ""
 			i++
 		case "--resume", "-r":
 			if i+1 < len(args) && len(args[i+1]) > 0 && args[i+1][0] != '-' {
@@ -210,34 +227,69 @@ func runHeadless(cfg *config.Config, sess *session.Session, prompt string) error
 	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer cancel()
 
-	events := make(chan agent.Event, 100)
-	go ag.SendMessage(ctx, prompt, events)
+	return runHeadlessLoop(ctx, ag, prompt, os.Stdout, os.Stderr)
+}
 
+func runHeadlessLoop(ctx context.Context, ag *agent.Agent, prompt string, stdout, stderr io.Writer) error {
+	currentPrompt := prompt
+	var followUp *agent.FollowUpRequest
 	textEndedWithNewline := true
-	for ev := range events {
-		switch ev.Type {
-		case "text":
-			if _, err := fmt.Fprint(os.Stdout, ev.Text); err != nil {
+
+	for {
+		events := make(chan agent.Event, 100)
+		if followUp == nil {
+			go ag.SendMessage(ctx, currentPrompt, events)
+		} else {
+			if _, err := fmt.Fprintf(stderr, "[auto] %s\n", followUp.Label); err != nil {
+				return fmt.Errorf("write stderr: %w", err)
+			}
+			go ag.SendFollowUp(ctx, followUp, events)
+		}
+
+		for ev := range events {
+			switch ev.Type {
+			case "text":
+				if _, err := fmt.Fprint(stdout, ev.Text); err != nil {
+					return fmt.Errorf("write stdout: %w", err)
+				}
+				textEndedWithNewline = strings.HasSuffix(ev.Text, "\n")
+			case "tool_start":
+				if _, err := fmt.Fprintf(stderr, "[tool] %s args=%s\n", ev.ToolName, truncateForLog(ev.ToolArgs, 200)); err != nil {
+					return fmt.Errorf("write stderr: %w", err)
+				}
+			case "tool_result":
+				if ev.ToolError != nil {
+					if _, err := fmt.Fprintf(stderr, "[tool] %s error=%v result=%s\n", ev.ToolName, ev.ToolError, truncateForLog(ev.ToolResult, 200)); err != nil {
+						return fmt.Errorf("write stderr: %w", err)
+					}
+					continue
+				}
+				if _, err := fmt.Fprintf(stderr, "[tool] %s result=%s\n", ev.ToolName, truncateForLog(ev.ToolResult, 200)); err != nil {
+					return fmt.Errorf("write stderr: %w", err)
+				}
+			case "state":
+				if _, err := fmt.Fprintf(stderr, "[status] %s\n", headlessStateLabel(ev.State)); err != nil {
+					return fmt.Errorf("write stderr: %w", err)
+				}
+			case "error":
+				return ev.Error
+			}
+		}
+
+		followUp = ag.MaybeQueueFollowUp()
+		if followUp == nil {
+			break
+		}
+		if !textEndedWithNewline {
+			if _, err := fmt.Fprintln(stdout); err != nil {
 				return fmt.Errorf("write stdout: %w", err)
 			}
-			textEndedWithNewline = strings.HasSuffix(ev.Text, "\n")
-		case "tool_start":
-			fmt.Fprintf(os.Stderr, "[tool] %s args=%s\n", ev.ToolName, truncateForLog(ev.ToolArgs, 200))
-		case "tool_result":
-			if ev.ToolError != nil {
-				fmt.Fprintf(os.Stderr, "[tool] %s error=%v result=%s\n", ev.ToolName, ev.ToolError, truncateForLog(ev.ToolResult, 200))
-				continue
-			}
-			fmt.Fprintf(os.Stderr, "[tool] %s result=%s\n", ev.ToolName, truncateForLog(ev.ToolResult, 200))
-		case "state":
-			fmt.Fprintf(os.Stderr, "[status] %s\n", headlessStateLabel(ev.State))
-		case "error":
-			return ev.Error
+			textEndedWithNewline = true
 		}
 	}
 
 	if !textEndedWithNewline {
-		if _, err := fmt.Fprintln(os.Stdout); err != nil {
+		if _, err := fmt.Fprintln(stdout); err != nil {
 			return fmt.Errorf("write trailing newline: %w", err)
 		}
 	}

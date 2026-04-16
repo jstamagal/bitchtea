@@ -1,120 +1,175 @@
 package main
 
 import (
+	"bytes"
+	"context"
+	"strings"
+	"sync"
 	"testing"
 
+	"github.com/jstamagal/bitchtea/internal/agent"
 	"github.com/jstamagal/bitchtea/internal/config"
+	"github.com/jstamagal/bitchtea/internal/llm"
 )
 
-// TestCLIModelOverridesProfile verifies that -m overrides the profile default
-// even when -p is specified. This covers the regression fixed in aad273e.
-func TestCLIModelOverridesProfile(t *testing.T) {
+type headlessScriptedStreamer struct {
+	mu        sync.Mutex
+	responses []string
+	prompts   []string
+	calls     int
+}
+
+func (s *headlessScriptedStreamer) StreamChat(_ context.Context, messages []llm.Message, _ []llm.ToolDef, events chan<- llm.StreamEvent) {
+	defer close(events)
+
+	s.mu.Lock()
+	idx := s.calls
+	s.calls++
+	if len(messages) > 0 {
+		s.prompts = append(s.prompts, messages[len(messages)-1].Content)
+	}
+	s.mu.Unlock()
+
+	if idx >= len(s.responses) {
+		events <- llm.StreamEvent{Type: "done"}
+		return
+	}
+
+	events <- llm.StreamEvent{Type: "text", Text: s.responses[idx]}
+	events <- llm.StreamEvent{Type: "done"}
+}
+
+func TestRunHeadlessLoopFollowsAutoNextAndIdeaFlow(t *testing.T) {
 	cfg := config.DefaultConfig()
+	cfg.WorkDir = t.TempDir()
+	cfg.SessionDir = t.TempDir()
+	cfg.AutoNextSteps = true
+	cfg.AutoNextIdea = true
 
-	// Simulate: bitchtea -p ollama -m gemma4:latest
-	opts, err := parseCLIArgs([]string{"-p", "ollama", "-m", "gemma4:latest"}, &cfg)
-	if err != nil {
-		t.Fatalf("parseCLIArgs: %v", err)
-	}
-	if opts.profileName != "ollama" {
-		t.Fatalf("expected profileName=ollama, got %q", opts.profileName)
-	}
-	if cfg.Model != "gemma4:latest" {
-		t.Fatalf("expected model=gemma4:latest after first parse, got %q", cfg.Model)
-	}
-
-	// Simulate ApplyProfile (ollama profile sets model to llama3.2)
-	ollamaProfile := &config.Profile{
-		Name:     "ollama",
-		Provider: "openai",
-		BaseURL:  "http://localhost:11434/v1",
-		Model:    "llama3.2",
-	}
-	config.ApplyProfile(&cfg, ollamaProfile)
-	cfg.Profile = opts.profileName
-
-	if cfg.Model != "llama3.2" {
-		t.Fatalf("ApplyProfile should have set model=llama3.2, got %q", cfg.Model)
+	streamer := &headlessScriptedStreamer{
+		responses: []string{
+			"Implemented the fix and still need to run go test.",
+			agentAutoNextDoneToken() + ": tests are green.",
+			agentAutoIdeaDoneToken() + ": nothing worthwhile remains.",
+		},
 	}
 
-	// Re-parse — the -m flag must win over profile default
-	_, _ = parseCLIArgs([]string{"-p", "ollama", "-m", "gemma4:latest"}, &cfg)
+	ag := agent.NewAgentWithStreamer(&cfg, streamer)
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
 
-	if cfg.Model != "gemma4:latest" {
-		t.Fatalf("re-parse: expected model=gemma4:latest (CLI overrides profile), got %q", cfg.Model)
+	if err := runHeadlessLoop(context.Background(), ag, "fix it", &stdout, &stderr); err != nil {
+		t.Fatalf("runHeadlessLoop: %v", err)
 	}
-	if cfg.Profile != "ollama" {
-		t.Fatalf("re-parse must not clear cfg.Profile, got %q", cfg.Profile)
+
+	if strings.Contains(stdout.String(), agentAutoNextDoneToken()) || strings.Contains(stdout.String(), agentAutoIdeaDoneToken()) {
+		t.Fatalf("expected headless stdout to hide control tokens, got %q", stdout.String())
+	}
+	if !strings.Contains(stderr.String(), "[auto] auto-next-steps") {
+		t.Fatalf("expected auto-next-steps follow-up in stderr, got %q", stderr.String())
+	}
+	if !strings.Contains(stderr.String(), "[auto] auto-next-idea") {
+		t.Fatalf("expected auto-next-idea follow-up in stderr, got %q", stderr.String())
+	}
+	if len(streamer.prompts) != 3 {
+		t.Fatalf("expected 3 prompts, got %d", len(streamer.prompts))
+	}
+	if streamer.prompts[0] != "fix it" {
+		t.Fatalf("expected original prompt first, got %q", streamer.prompts[0])
+	}
+	if !strings.Contains(streamer.prompts[1], agentAutoNextDoneToken()) {
+		t.Fatalf("expected auto-next prompt second, got %q", streamer.prompts[1])
+	}
+	if !strings.Contains(streamer.prompts[2], agentAutoIdeaDoneToken()) {
+		t.Fatalf("expected auto-idea prompt third, got %q", streamer.prompts[2])
 	}
 }
 
-// TestCLIModelOverridesProfileOpenRouter exercises the openrouter profile path
-// and a model name containing a slash (qwen/qwen3.6-plus).
-func TestCLIModelOverridesProfileOpenRouter(t *testing.T) {
+func agentAutoNextDoneToken() string { return "AUTONEXT_DONE" }
+
+func agentAutoIdeaDoneToken() string { return "AUTOIDEA_DONE" }
+
+func TestApplyStartupConfigRCProfileOverrideClearsProfile(t *testing.T) {
+	dir := t.TempDir()
+	origDir := config.ProfilesDir
+	config.ProfilesDir = func() string { return dir }
+	defer func() { config.ProfilesDir = origDir }()
+
+	if err := config.SaveProfile(config.Profile{
+		Name:     "mytest",
+		Provider: "anthropic",
+		BaseURL:  "https://test.example.com/v1",
+		APIKey:   "sk-test-profile-key",
+		Model:    "profile-model",
+	}); err != nil {
+		t.Fatalf("save profile: %v", err)
+	}
+
 	cfg := config.DefaultConfig()
+	cfg.WorkDir = t.TempDir()
+	cfg.SessionDir = t.TempDir()
 
-	args := []string{"-p", "openrouter", "-m", "qwen/qwen3.6-plus"}
-	opts, err := parseCLIArgs(args, &cfg)
+	opts, rcCommands, err := applyStartupConfig(&cfg, nil, []string{
+		"set profile mytest",
+		"set model override-model",
+		"join #code",
+	})
 	if err != nil {
-		t.Fatalf("parseCLIArgs: %v", err)
-	}
-	if opts.profileName != "openrouter" {
-		t.Fatalf("expected profileName=openrouter, got %q", opts.profileName)
+		t.Fatalf("applyStartupConfig: %v", err)
 	}
 
-	// Simulate ApplyProfile for openrouter
-	openrouterProfile := &config.Profile{
-		Name:     "openrouter",
-		Provider: "openai",
-		BaseURL:  "https://openrouter.ai/api/v1",
-		Model:    "anthropic/claude-sonnet-4",
-		APIKey:   "sk-or-test",
+	if opts.profileName != "" {
+		t.Fatalf("expected no CLI profile, got %q", opts.profileName)
 	}
-	config.ApplyProfile(&cfg, openrouterProfile)
-	cfg.Profile = opts.profileName
-
-	if cfg.Model != "anthropic/claude-sonnet-4" {
-		t.Fatalf("ApplyProfile should have set openrouter default model, got %q", cfg.Model)
+	if cfg.Model != "override-model" {
+		t.Fatalf("model = %q, want override-model", cfg.Model)
 	}
-
-	// Re-parse — qwen model must win
-	_, _ = parseCLIArgs(args, &cfg)
-
-	if cfg.Model != "qwen/qwen3.6-plus" {
-		t.Fatalf("re-parse: expected model=qwen/qwen3.6-plus (CLI overrides profile), got %q", cfg.Model)
+	if cfg.Profile != "" {
+		t.Fatalf("expected manual rc override to clear profile, got %q", cfg.Profile)
 	}
-	if cfg.Profile != "openrouter" {
-		t.Fatalf("re-parse must not clear cfg.Profile, got %q", cfg.Profile)
-	}
-	if cfg.Provider != "openai" {
-		t.Fatalf("provider should remain openai (openrouter uses openai-compat API), got %q", cfg.Provider)
+	if len(rcCommands) != 1 || rcCommands[0] != "join #code" {
+		t.Fatalf("unexpected rc commands: %v", rcCommands)
 	}
 }
 
-// TestCLIProfileWithoutModel ensures -p alone uses the profile's default model.
-func TestCLIProfileWithoutModel(t *testing.T) {
+func TestApplyStartupConfigCLIModelOverrideClearsProfile(t *testing.T) {
+	dir := t.TempDir()
+	origDir := config.ProfilesDir
+	config.ProfilesDir = func() string { return dir }
+	defer func() { config.ProfilesDir = origDir }()
+
+	if err := config.SaveProfile(config.Profile{
+		Name:     "mytest",
+		Provider: "anthropic",
+		BaseURL:  "https://test.example.com/v1",
+		APIKey:   "sk-test-profile-key",
+		Model:    "profile-model",
+	}); err != nil {
+		t.Fatalf("save profile: %v", err)
+	}
+
 	cfg := config.DefaultConfig()
+	cfg.WorkDir = t.TempDir()
+	cfg.SessionDir = t.TempDir()
 
-	opts, err := parseCLIArgs([]string{"-p", "ollama"}, &cfg)
+	opts, rcCommands, err := applyStartupConfig(&cfg, []string{"--profile", "mytest", "--model", "cli-model", "--headless"}, nil)
 	if err != nil {
-		t.Fatalf("parseCLIArgs: %v", err)
-	}
-	if opts.profileName != "ollama" {
-		t.Fatalf("expected profileName=ollama, got %q", opts.profileName)
+		t.Fatalf("applyStartupConfig: %v", err)
 	}
 
-	ollamaProfile := &config.Profile{
-		Name:     "ollama",
-		Provider: "openai",
-		BaseURL:  "http://localhost:11434/v1",
-		Model:    "llama3.2",
+	if !opts.headless {
+		t.Fatal("expected headless option")
 	}
-	config.ApplyProfile(&cfg, ollamaProfile)
-	cfg.Profile = opts.profileName
-	_, _ = parseCLIArgs([]string{"-p", "ollama"}, &cfg)
-
-	// No -m flag → profile default should stand
-	if cfg.Model != "llama3.2" {
-		t.Fatalf("without -m, expected profile model=llama3.2, got %q", cfg.Model)
+	if opts.profileName != "mytest" {
+		t.Fatalf("profileName = %q, want mytest", opts.profileName)
+	}
+	if cfg.Model != "cli-model" {
+		t.Fatalf("model = %q, want cli-model", cfg.Model)
+	}
+	if cfg.Profile != "" {
+		t.Fatalf("expected CLI model override to clear loaded profile, got %q", cfg.Profile)
+	}
+	if len(rcCommands) != 0 {
+		t.Fatalf("expected no rc commands, got %v", rcCommands)
 	}
 }

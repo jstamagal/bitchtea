@@ -109,6 +109,39 @@ func TestApplyRCSetCommandsProfile(t *testing.T) {
 	}
 }
 
+func TestApplyRCSetCommandsManualConnectionOverrideClearsProfile(t *testing.T) {
+	dir := t.TempDir()
+	origDir := ProfilesDir
+	ProfilesDir = func() string { return dir }
+	defer func() { ProfilesDir = origDir }()
+
+	if err := SaveProfile(Profile{
+		Name:     "mytest",
+		Provider: "anthropic",
+		BaseURL:  "https://test.example.com/v1",
+		Model:    "test-model",
+		APIKey:   "sk-test-profile-key",
+	}); err != nil {
+		t.Fatalf("save profile: %v", err)
+	}
+
+	cfg := DefaultConfig()
+	remaining := ApplyRCSetCommands(&cfg, []string{
+		"set profile mytest",
+		"set model override-model",
+	})
+
+	if len(remaining) != 0 {
+		t.Fatalf("expected no remaining commands, got %v", remaining)
+	}
+	if cfg.Model != "override-model" {
+		t.Fatalf("model = %q, want override-model", cfg.Model)
+	}
+	if cfg.Profile != "" {
+		t.Fatalf("expected manual override to clear loaded profile, got %q", cfg.Profile)
+	}
+}
+
 func TestApplyRCSetCommandsInvalidProviderIgnored(t *testing.T) {
 	cfg := DefaultConfig()
 	original := cfg.Provider

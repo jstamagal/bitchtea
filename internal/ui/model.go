@@ -357,6 +357,16 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 
 		m.addMessage(ChatMessage{Time: time.Now(), Type: MsgRaw, Content: MOTD})
+
+		// Print system prompt in yellow
+		if sp := m.agent.SystemPrompt(); sp != "" {
+			m.addMessage(ChatMessage{
+				Time:    time.Now(),
+				Type:    MsgSystem,
+				Content: sp,
+			})
+		}
+
 		m.refreshViewport()
 
 	case tea.KeyMsg:
@@ -528,6 +538,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.agentState = agent.StateIdle
 		m.eventCh = nil
 		m.cancel = nil
+		m.syncLastAssistantMessage()
 
 		// Play notification sound if enabled
 		if m.config.NotificationSound {
@@ -589,7 +600,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				Content: fmt.Sprintf("*** %s: continuing...", followUp.Label),
 			})
 			m.refreshViewport()
-			return m, m.sendToAgent(followUp.Prompt)
+			return m, m.sendFollowUpToAgent(followUp)
 		}
 
 		return m, nil
@@ -683,9 +694,9 @@ func (m *Model) handleAgentEvent(ev agent.Event) (tea.Model, tea.Cmd) {
 	case "state":
 		m.agentState = ev.State
 		if ev.State == agent.StateThinking {
+			m.streamBuffer.Reset()
 			// Show a styled thinking placeholder in the scroll buffer.
 			// It will be replaced with MsgAgent once the first token arrives.
-			m.streamBuffer.Reset()
 			m.addMessage(ChatMessage{
 				Time:    time.Now(),
 				Type:    MsgThink,
@@ -739,6 +750,18 @@ func ircContextToMemoryScope(ctx IRCContext) agent.MemoryScope {
 }
 
 func (m *Model) sendToAgent(input string) tea.Cmd {
+	return m.startAgentTurn(func(ctx context.Context, ch chan agent.Event) {
+		go m.agent.SendMessage(ctx, input, ch)
+	})
+}
+
+func (m *Model) sendFollowUpToAgent(req *agent.FollowUpRequest) tea.Cmd {
+	return m.startAgentTurn(func(ctx context.Context, ch chan agent.Event) {
+		go m.agent.SendFollowUp(ctx, req, ch)
+	})
+}
+
+func (m *Model) startAgentTurn(start func(context.Context, chan agent.Event)) tea.Cmd {
 	if m.cancel != nil {
 		m.cancel()
 	}
@@ -750,9 +773,23 @@ func (m *Model) sendToAgent(input string) tea.Cmd {
 
 	ch := make(chan agent.Event, 100)
 	m.eventCh = ch
-	go m.agent.SendMessage(ctx, input, ch)
+	start(ctx, ch)
 
 	return waitForAgentEvent(ch)
+}
+
+func (m *Model) syncLastAssistantMessage() {
+	content := m.agent.LastAssistantDisplayContent()
+	if content == "" {
+		return
+	}
+	for i := len(m.messages) - 1; i >= 0; i-- {
+		if m.messages[i].Type != MsgAgent {
+			continue
+		}
+		m.messages[i].Content = content
+		return
+	}
 }
 
 func (m *Model) addMessage(msg ChatMessage) {

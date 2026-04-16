@@ -305,6 +305,34 @@ func TestEnsureAlternatingAlreadyAlternating(t *testing.T) {
 	}
 }
 
+func TestEnsureAlternatingSanitizesNilContentBlocks(t *testing.T) {
+	msgs := []anthropicMessage{
+		{Role: "user", Content: nil},
+		{Role: "user", Content: []interface{}{nil, anthropicTextBlock{Type: "text", Text: "ok"}}},
+		{Role: "assistant", Content: []interface{}{nil}},
+	}
+
+	result := ensureAlternating(msgs)
+	if len(result) != 2 {
+		t.Fatalf("expected 2 messages after merge, got %d", len(result))
+	}
+	if result[0].Content == nil {
+		t.Fatal("expected sanitized user content to be non-nil")
+	}
+	if len(result[0].Content) != 1 {
+		t.Fatalf("expected nil blocks removed from user content, got %d blocks", len(result[0].Content))
+	}
+	if block, ok := result[0].Content[0].(anthropicTextBlock); !ok || block.Text != "ok" {
+		t.Fatalf("unexpected remaining user block: %#v", result[0].Content[0])
+	}
+	if result[1].Content == nil {
+		t.Fatal("expected sanitized assistant content to be non-nil")
+	}
+	if len(result[1].Content) != 0 {
+		t.Fatalf("expected assistant nil-only content to be stripped, got %d blocks", len(result[1].Content))
+	}
+}
+
 func TestStreamChatAnthropicRetryOn429(t *testing.T) {
 	callCount := 0
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

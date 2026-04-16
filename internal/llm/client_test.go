@@ -73,6 +73,20 @@ func TestStreamChatText(t *testing.T) {
 	}
 }
 
+func TestMessageJSONKeepsEmptyContentField(t *testing.T) {
+	data, err := json.Marshal(Message{
+		Role:      "assistant",
+		Content:   "",
+		ToolCalls: []ToolCall{{ID: "call_1", Type: "function"}},
+	})
+	if err != nil {
+		t.Fatalf("marshal message: %v", err)
+	}
+	if !strings.Contains(string(data), `"content":""`) {
+		t.Fatalf("expected empty content field to be preserved, got %s", data)
+	}
+}
+
 func TestStreamChatToolCall(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/event-stream")

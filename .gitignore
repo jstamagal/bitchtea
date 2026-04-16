@@ -18,6 +18,7 @@ Thumbs.db
 .idea/
 .vscode/
 *.swp
+*.kate-swp
 *~
 
 # Env / secrets

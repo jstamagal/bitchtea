@@ -122,18 +122,22 @@ func applySetToConfig(cfg *Config, key, value string) bool {
 	case "provider":
 		if value == "openai" || value == "anthropic" {
 			cfg.Provider = value
+			cfg.Profile = ""
 		}
 	case "model":
 		if value != "" {
 			cfg.Model = value
+			cfg.Profile = ""
 		}
 	case "apikey":
 		if value != "" {
 			cfg.APIKey = value
+			cfg.Profile = ""
 		}
 	case "baseurl":
 		if value != "" {
 			cfg.BaseURL = value
+			cfg.Profile = ""
 		}
 	case "nick":
 		if value != "" {

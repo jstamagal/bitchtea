@@ -249,10 +249,10 @@ func TestNewAgentTracksBootstrapMessageCount(t *testing.T) {
 
 	agent := NewAgentWithStreamer(&cfg, &fakeStreamer{})
 
-	if got := agent.BootstrapMessageCount(); got != 5 {
-		t.Fatalf("expected 5 bootstrap messages, got %d", got)
+	if got := agent.BootstrapMessageCount(); got != 7 {
+		t.Fatalf("expected 7 bootstrap messages, got %d", got)
 	}
-	if got := agent.MessageCount(); got != 5 {
+	if got := agent.MessageCount(); got != 7 {
 		t.Fatalf("expected bootstrap messages to be in history, got %d", got)
 	}
 }
@@ -265,12 +265,12 @@ func TestBuildSystemPromptMentionsSearchMemory(t *testing.T) {
 	if !strings.Contains(prompt, "search_memory") {
 		t.Fatalf("expected search_memory in system prompt, got %q", prompt)
 	}
-	if !strings.Contains(prompt, "prior decisions") {
+	if !strings.Contains(prompt, "prior decision") {
 		t.Fatalf("expected recall guidance in system prompt, got %q", prompt)
 	}
 }
 
-func TestMaybeQueueFollowUpIncludesLastAssistantSummary(t *testing.T) {
+func TestMaybeQueueFollowUpStartsWithAutoNextSteps(t *testing.T) {
 	cfg := config.DefaultConfig()
 	cfg.WorkDir = t.TempDir()
 	cfg.SessionDir = t.TempDir()
@@ -278,24 +278,83 @@ func TestMaybeQueueFollowUpIncludesLastAssistantSummary(t *testing.T) {
 	cfg.AutoNextIdea = true
 
 	agent := NewAgentWithStreamer(&cfg, &fakeStreamer{})
-	agent.messages = append(agent.messages,
-		llm.Message{Role: "user", Content: "ship it"},
-		llm.Message{Role: "assistant", Content: "Implemented the fix, added tests, and still need to verify the binary help output."},
-	)
 	agent.lastTurnState = turnStateCompleted
 
 	followUp := agent.MaybeQueueFollowUp()
 	if followUp == nil {
 		t.Fatal("expected follow-up request")
 	}
-	if followUp.Label != "auto-next" {
-		t.Fatalf("expected combined auto-next label, got %q", followUp.Label)
+	if followUp.Label != "auto-next-steps" {
+		t.Fatalf("expected auto-next-steps label, got %q", followUp.Label)
 	}
-	if !strings.Contains(followUp.Prompt, "Implemented the fix, added tests") {
-		t.Fatalf("expected prompt to include assistant summary, got %q", followUp.Prompt)
+	if followUp.Kind != followUpKindAutoNextSteps {
+		t.Fatalf("expected auto-next-steps kind, got %v", followUp.Kind)
 	}
-	if !strings.Contains(followUp.Prompt, "highest-impact remaining task or improvement") {
-		t.Fatalf("expected combined follow-up instructions, got %q", followUp.Prompt)
+	if !strings.Contains(followUp.Prompt, autoNextDoneToken) {
+		t.Fatalf("expected auto-next done token in prompt, got %q", followUp.Prompt)
+	}
+}
+
+func TestMaybeQueueFollowUpContinuesStepsUntilDone(t *testing.T) {
+	cfg := config.DefaultConfig()
+	cfg.WorkDir = t.TempDir()
+	cfg.SessionDir = t.TempDir()
+	cfg.AutoNextSteps = true
+
+	agent := NewAgentWithStreamer(&cfg, &fakeStreamer{})
+	agent.lastTurnState = turnStateCompleted
+	agent.lastCompletedFollowUp = followUpKindAutoNextSteps
+	agent.lastAssistantRaw = "Implemented the fix and still need to run go test."
+
+	followUp := agent.MaybeQueueFollowUp()
+	if followUp == nil {
+		t.Fatal("expected follow-up request")
+	}
+	if followUp.Label != "auto-next-steps" {
+		t.Fatalf("expected auto-next-steps label, got %q", followUp.Label)
+	}
+}
+
+func TestMaybeQueueFollowUpSwitchesFromStepsToIdeaWhenDone(t *testing.T) {
+	cfg := config.DefaultConfig()
+	cfg.WorkDir = t.TempDir()
+	cfg.SessionDir = t.TempDir()
+	cfg.AutoNextSteps = true
+	cfg.AutoNextIdea = true
+
+	agent := NewAgentWithStreamer(&cfg, &fakeStreamer{})
+	agent.lastTurnState = turnStateCompleted
+	agent.lastCompletedFollowUp = followUpKindAutoNextSteps
+	agent.lastAssistantRaw = autoNextDoneToken + ": tests are green and the task is complete."
+
+	followUp := agent.MaybeQueueFollowUp()
+	if followUp == nil {
+		t.Fatal("expected follow-up request")
+	}
+	if followUp.Label != "auto-next-idea" {
+		t.Fatalf("expected auto-next-idea label, got %q", followUp.Label)
+	}
+	if followUp.Kind != followUpKindAutoNextIdea {
+		t.Fatalf("expected auto-next-idea kind, got %v", followUp.Kind)
+	}
+	if !strings.Contains(followUp.Prompt, autoIdeaDoneToken) {
+		t.Fatalf("expected auto-idea done token in prompt, got %q", followUp.Prompt)
+	}
+}
+
+func TestMaybeQueueFollowUpStopsWhenIdeaLoopIsDone(t *testing.T) {
+	cfg := config.DefaultConfig()
+	cfg.WorkDir = t.TempDir()
+	cfg.SessionDir = t.TempDir()
+	cfg.AutoNextIdea = true
+
+	agent := NewAgentWithStreamer(&cfg, &fakeStreamer{})
+	agent.lastTurnState = turnStateCompleted
+	agent.lastCompletedFollowUp = followUpKindAutoNextIdea
+	agent.lastAssistantRaw = autoIdeaDoneToken + ": nothing worthwhile remains."
+
+	if followUp := agent.MaybeQueueFollowUp(); followUp != nil {
+		t.Fatalf("expected no follow-up after completed idea loop, got %#v", followUp)
 	}
 }
 
@@ -310,5 +369,44 @@ func TestMaybeQueueFollowUpSkipsCanceledTurn(t *testing.T) {
 
 	if followUp := agent.MaybeQueueFollowUp(); followUp != nil {
 		t.Fatalf("expected no follow-up after canceled turn, got %#v", followUp)
+	}
+}
+
+func TestSendMessageSanitizesAutonomyDoneTokens(t *testing.T) {
+	cfg := config.DefaultConfig()
+	cfg.WorkDir = t.TempDir()
+	cfg.SessionDir = t.TempDir()
+
+	streamer := &fakeStreamer{
+		responses: []func(chan<- llm.StreamEvent){
+			func(events chan<- llm.StreamEvent) {
+				events <- llm.StreamEvent{Type: "text", Text: autoNextDoneToken}
+				events <- llm.StreamEvent{Type: "text", Text: ": all tests passed."}
+				events <- llm.StreamEvent{Type: "done"}
+			},
+		},
+	}
+
+	agent := NewAgentWithStreamer(&cfg, streamer)
+	eventCh := make(chan Event, 16)
+
+	go agent.SendFollowUp(context.Background(), &FollowUpRequest{
+		Label:  "auto-next-steps",
+		Prompt: AutoNextPrompt(),
+		Kind:   followUpKindAutoNextSteps,
+	}, eventCh)
+
+	var gotText strings.Builder
+	for ev := range eventCh {
+		if ev.Type == "text" {
+			gotText.WriteString(ev.Text)
+		}
+	}
+
+	if strings.Contains(gotText.String(), autoNextDoneToken) {
+		t.Fatalf("expected streamed text to hide done token, got %q", gotText.String())
+	}
+	if got := agent.LastAssistantDisplayContent(); got != "all tests passed." {
+		t.Fatalf("expected sanitized assistant content, got %q", got)
 	}
 }

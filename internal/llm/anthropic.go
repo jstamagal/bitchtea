@@ -410,5 +410,23 @@ func ensureAlternating(msgs []anthropicMessage) []anthropicMessage {
 		}
 	}
 
+	// Sanitize: remove any nil content blocks and ensure Content is never nil.
+	// A nil interface{} in Content serializes as JSON null, which the
+	// Anthropic API rejects with "invalid message content type: <nil>".
+	for i := range result {
+		if result[i].Content == nil {
+			result[i].Content = []interface{}{}
+		}
+		// Filter out nil elements from Content slices
+		dst := 0
+		for _, block := range result[i].Content {
+			if block != nil {
+				result[i].Content[dst] = block
+				dst++
+			}
+		}
+		result[i].Content = result[i].Content[:dst]
+	}
+
 	return result
 }
