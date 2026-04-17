@@ -60,13 +60,15 @@ func (c *Client) StreamChatAnthropic(ctx context.Context, messages []Message, to
 	defer close(events)
 
 	// Extract system message and convert messages
-	var system string
+	var systemParts []string
 	var anthropicMsgs []anthropicMessage
 
 	for _, m := range messages {
 		switch m.Role {
 		case "system":
-			system = m.Content
+			if strings.TrimSpace(m.Content) != "" {
+				systemParts = append(systemParts, m.Content)
+			}
 
 		case "user":
 			anthropicMsgs = append(anthropicMsgs, anthropicMessage{
@@ -132,8 +134,14 @@ func (c *Client) StreamChatAnthropic(ctx context.Context, messages []Message, to
 		}
 	}
 
+	system := strings.Join(systemParts, "\n\n")
+
 	// Ensure messages alternate user/assistant (Anthropic requirement)
 	anthropicMsgs = ensureAlternating(anthropicMsgs)
+	if len(anthropicMsgs) == 0 {
+		events <- StreamEvent{Type: "error", Error: fmt.Errorf("anthropic request requires at least one non-system message with content")}
+		return
+	}
 
 	// Convert tools
 	var anthropicTools []anthropicTool
@@ -246,23 +254,16 @@ func (c *Client) StreamChatAnthropic(ctx context.Context, messages []Message, to
 
 	// Tool call accumulators
 	type toolAccum struct {
-		id      string
-		name    string
-		argsStr string
+		id         string
+		name       string
+		argsStr    string
+		startInput string
 	}
 	var activeTools []toolAccum
 	var usage TokenUsage
 	var usageSeen bool
 
-	for scanner.Scan() {
-		line := scanner.Text()
-
-		if !strings.HasPrefix(line, "data: ") {
-			continue
-		}
-
-		data := strings.TrimPrefix(line, "data: ")
-
+	processData := func(data string) bool {
 		var event struct {
 			Type  string          `json:"type"`
 			Index int             `json:"index"`
@@ -270,15 +271,17 @@ func (c *Client) StreamChatAnthropic(ctx context.Context, messages []Message, to
 			Delta struct {
 				Type        string `json:"type"`
 				Text        string `json:"text"`
+				Thinking    string `json:"thinking"`
 				PartialJSON string `json:"partial_json"`
 				StopReason  string `json:"stop_reason"`
 			} `json:"delta"`
 			ContentBlock struct {
-				Type  string          `json:"type"`
-				ID    string          `json:"id"`
-				Name  string          `json:"name"`
-				Text  string          `json:"text"`
-				Input json.RawMessage `json:"input"`
+				Type     string          `json:"type"`
+				ID       string          `json:"id"`
+				Name     string          `json:"name"`
+				Text     string          `json:"text"`
+				Thinking string          `json:"thinking"`
+				Input    json.RawMessage `json:"input"`
 			} `json:"content_block"`
 			Message struct {
 				StopReason string          `json:"stop_reason"`
@@ -287,7 +290,7 @@ func (c *Client) StreamChatAnthropic(ctx context.Context, messages []Message, to
 		}
 
 		if err := json.Unmarshal([]byte(data), &event); err != nil {
-			continue
+			return false
 		}
 
 		switch event.Type {
@@ -306,14 +309,19 @@ func (c *Client) StreamChatAnthropic(ctx context.Context, messages []Message, to
 				if event.ContentBlock.Text != "" {
 					events <- StreamEvent{Type: "text", Text: event.ContentBlock.Text}
 				}
+			case "thinking":
+				if event.ContentBlock.Thinking != "" {
+					events <- StreamEvent{Type: "thinking", Text: event.ContentBlock.Thinking}
+				}
 			case "tool_use":
 				// Start accumulating a tool call
 				for len(activeTools) <= event.Index {
 					activeTools = append(activeTools, toolAccum{})
 				}
 				activeTools[event.Index] = toolAccum{
-					id:   event.ContentBlock.ID,
-					name: event.ContentBlock.Name,
+					id:         event.ContentBlock.ID,
+					name:       event.ContentBlock.Name,
+					startInput: compactAnthropicJSON(event.ContentBlock.Input),
 				}
 			}
 
@@ -322,6 +330,10 @@ func (c *Client) StreamChatAnthropic(ctx context.Context, messages []Message, to
 			case "text_delta":
 				if event.Delta.Text != "" {
 					events <- StreamEvent{Type: "text", Text: event.Delta.Text}
+				}
+			case "thinking_delta":
+				if event.Delta.Thinking != "" {
+					events <- StreamEvent{Type: "thinking", Text: event.Delta.Thinking}
 				}
 			case "input_json_delta":
 				if event.Index < len(activeTools) {
@@ -333,11 +345,15 @@ func (c *Client) StreamChatAnthropic(ctx context.Context, messages []Message, to
 			if event.Index < len(activeTools) {
 				tc := activeTools[event.Index]
 				if tc.name != "" {
+					toolArgs := tc.argsStr
+					if toolArgs == "" {
+						toolArgs = tc.startInput
+					}
 					events <- StreamEvent{
 						Type:       "tool_call",
 						ToolCallID: tc.id,
 						ToolName:   tc.name,
-						ToolArgs:   tc.argsStr,
+						ToolArgs:   toolArgs,
 					}
 				}
 			}
@@ -354,17 +370,62 @@ func (c *Client) StreamChatAnthropic(ctx context.Context, messages []Message, to
 				events <- StreamEvent{Type: "usage", Usage: &usageCopy}
 			}
 			events <- StreamEvent{Type: "done"}
-			return
+			return true
 
 		case "error":
 			events <- StreamEvent{Type: "error", Error: fmt.Errorf("stream error: %s", data)}
-			return
+			return true
 		}
+		return false
+	}
+
+	var dataLines []string
+	flushFrame := func() bool {
+		if len(dataLines) == 0 {
+			return false
+		}
+		data := strings.Join(dataLines, "\n")
+		dataLines = dataLines[:0]
+		return processData(data)
+	}
+
+	for scanner.Scan() {
+		line := scanner.Text()
+		if line == "" {
+			if flushFrame() {
+				return
+			}
+			continue
+		}
+
+		if !strings.HasPrefix(line, "data:") {
+			continue
+		}
+
+		data := strings.TrimPrefix(line, "data:")
+		if len(data) > 0 && data[0] == ' ' {
+			data = data[1:]
+		}
+		dataLines = append(dataLines, data)
+	}
+	if flushFrame() {
+		return
 	}
 
 	if err := scanner.Err(); err != nil {
 		events <- StreamEvent{Type: "error", Error: fmt.Errorf("stream: %w", err)}
 	}
+}
+
+func compactAnthropicJSON(raw json.RawMessage) string {
+	if len(raw) == 0 {
+		return ""
+	}
+	var buf bytes.Buffer
+	if err := json.Compact(&buf, raw); err != nil {
+		return strings.TrimSpace(string(raw))
+	}
+	return buf.String()
 }
 
 func (c *Client) anthropicHeaders() map[string]string {
@@ -393,40 +454,35 @@ func (c *Client) debugAnthropicHeaders() map[string]string {
 // ensureAlternating ensures messages alternate between user and assistant.
 // Anthropic requires this. We merge consecutive same-role messages.
 func ensureAlternating(msgs []anthropicMessage) []anthropicMessage {
-	if len(msgs) == 0 {
-		return msgs
-	}
-
-	var result []anthropicMessage
-	result = append(result, msgs[0])
-
-	for i := 1; i < len(msgs); i++ {
-		last := &result[len(result)-1]
-		if msgs[i].Role == last.Role {
-			// Merge content blocks
-			last.Content = append(last.Content, msgs[i].Content...)
-		} else {
-			result = append(result, msgs[i])
+	result := make([]anthropicMessage, 0, len(msgs))
+	for _, msg := range msgs {
+		msg.Content = sanitizeAnthropicContent(msg.Content)
+		if len(msg.Content) == 0 {
+			continue
 		}
-	}
-
-	// Sanitize: remove any nil content blocks and ensure Content is never nil.
-	// A nil interface{} in Content serializes as JSON null, which the
-	// Anthropic API rejects with "invalid message content type: <nil>".
-	for i := range result {
-		if result[i].Content == nil {
-			result[i].Content = []interface{}{}
+		if len(result) > 0 && result[len(result)-1].Role == msg.Role {
+			last := &result[len(result)-1]
+			last.Content = sanitizeAnthropicContent(append(last.Content, msg.Content...))
+			continue
 		}
-		// Filter out nil elements from Content slices
-		dst := 0
-		for _, block := range result[i].Content {
-			if block != nil {
-				result[i].Content[dst] = block
-				dst++
-			}
-		}
-		result[i].Content = result[i].Content[:dst]
+		result = append(result, msg)
 	}
-
 	return result
+}
+
+func sanitizeAnthropicContent(blocks []interface{}) []interface{} {
+	if len(blocks) == 0 {
+		return []interface{}{}
+	}
+	sanitized := make([]interface{}, 0, len(blocks))
+	for _, block := range blocks {
+		if block == nil {
+			continue
+		}
+		if textBlock, ok := block.(anthropicTextBlock); ok && strings.TrimSpace(textBlock.Text) == "" {
+			continue
+		}
+		sanitized = append(sanitized, block)
+	}
+	return sanitized
 }

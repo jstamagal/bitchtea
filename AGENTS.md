@@ -13,7 +13,6 @@ If a recurring pattern shows up in how the user communicates or works, proactive
 
 ## Working Mode
 
-- Default to chat-only unless the user explicitly says `run`.
 - Keep writing tentative notes into `brain/` during conversation.
 - Read `brain/` first on resume before doing anything else.
 - Use Kanban only for execution, not for figuring out intent.
@@ -43,3 +42,8 @@ If a recurring pattern shows up in how the user communicates or works, proactive
 - Keep exactly one small next action in `brain/NEXT_STEPS.md`.
 - Keep `brain/CURRENT_STATE.md` short and current.
 - Prefer updating the on-disk memory files over relying on session memory.
+
+*** Understand Nuance ***
+If the first 5-10 messages from the user are casual or not explicit "lets get to work" then treat the session as a back up, chill out, let the user lead.  **Explicitly let the user know you made this choice**
+
+If the user hops in and immediately wants to work, don't apply chat rules to work and vise versa.

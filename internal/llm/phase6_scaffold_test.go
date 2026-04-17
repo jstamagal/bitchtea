@@ -145,6 +145,39 @@ func TestPhase6RequestAdaptersFantasyMessages(t *testing.T) {
 	}
 }
 
+func TestPhase6RequestAdaptersFantasyMessagesPreserveMultipleSystemMessages(t *testing.T) {
+	t.Parallel()
+
+	scaffold := NewPhase6Scaffold("secret", "https://api.anthropic.com/v1", "claude-sonnet-4", "anthropic")
+	adapters := scaffold.RequestAdapters([]Message{
+		{Role: "system", Content: "first instruction"},
+		{Role: "system", Content: "second instruction"},
+		{Role: "user", Content: "hello"},
+	}, nil)
+
+	got := adapters.FantasyMessages()
+	if len(got) != 3 {
+		t.Fatalf("FantasyMessages() len = %d, want 3", len(got))
+	}
+	if got[0].Role != fantasy.MessageRoleSystem || got[1].Role != fantasy.MessageRoleSystem {
+		t.Fatalf("FantasyMessages() system roles = %#v", []fantasy.MessageRole{got[0].Role, got[1].Role})
+	}
+	if len(got[0].Content) != 1 || len(got[1].Content) != 1 {
+		t.Fatalf("FantasyMessages() system contents = %#v %#v", got[0].Content, got[1].Content)
+	}
+	first, ok := got[0].Content[0].(fantasy.TextPart)
+	if !ok || first.Text != "first instruction" {
+		t.Fatalf("FantasyMessages()[0].Content[0] = %#v", got[0].Content[0])
+	}
+	second, ok := got[1].Content[0].(fantasy.TextPart)
+	if !ok || second.Text != "second instruction" {
+		t.Fatalf("FantasyMessages()[1].Content[0] = %#v", got[1].Content[0])
+	}
+	if got[2].Role != fantasy.MessageRoleUser {
+		t.Fatalf("FantasyMessages()[2].Role = %q, want %q", got[2].Role, fantasy.MessageRoleUser)
+	}
+}
+
 func TestPhase6RequestAdaptersFantasyTools(t *testing.T) {
 	t.Parallel()
 

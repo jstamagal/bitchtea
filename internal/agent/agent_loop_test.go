@@ -186,6 +186,48 @@ func TestSendMessageUsesReportedUsageWhenAvailable(t *testing.T) {
 	}
 }
 
+func TestSendMessageForwardsThinkingEvents(t *testing.T) {
+	cfg := config.DefaultConfig()
+	cfg.WorkDir = t.TempDir()
+	cfg.SessionDir = t.TempDir()
+
+	streamer := &fakeStreamer{
+		responses: []func(chan<- llm.StreamEvent){
+			func(events chan<- llm.StreamEvent) {
+				events <- llm.StreamEvent{Type: "thinking", Text: "plan: "}
+				events <- llm.StreamEvent{Type: "thinking", Text: "inspect file"}
+				events <- llm.StreamEvent{Type: "text", Text: "done"}
+				events <- llm.StreamEvent{Type: "done"}
+			},
+		},
+	}
+
+	agent := NewAgentWithStreamer(&cfg, streamer)
+	eventCh := make(chan Event, 16)
+
+	go agent.SendMessage(context.Background(), "hello", eventCh)
+
+	var thinking string
+	var text string
+	for ev := range eventCh {
+		switch ev.Type {
+		case "thinking":
+			thinking += ev.Text
+		case "text":
+			text += ev.Text
+		case "error":
+			t.Fatalf("unexpected error event: %v", ev.Error)
+		}
+	}
+
+	if thinking != "plan: inspect file" {
+		t.Fatalf("expected forwarded thinking text, got %q", thinking)
+	}
+	if text != "done" {
+		t.Fatalf("expected final text, got %q", text)
+	}
+}
+
 func TestSendMessageEmitsDoneAfterStreamError(t *testing.T) {
 	cfg := config.DefaultConfig()
 	cfg.WorkDir = t.TempDir()

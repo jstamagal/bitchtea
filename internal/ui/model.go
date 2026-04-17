@@ -657,6 +657,22 @@ func (m *Model) handleAgentEvent(ev agent.Event) (tea.Model, tea.Cmd) {
 		}
 		m.refreshViewport()
 
+	case "thinking":
+		if len(m.messages) > 0 && m.messages[len(m.messages)-1].Type == MsgThink {
+			if m.messages[len(m.messages)-1].Content == "thinking..." {
+				m.messages[len(m.messages)-1].Content = ev.Text
+			} else {
+				m.messages[len(m.messages)-1].Content += ev.Text
+			}
+		} else {
+			m.addMessage(ChatMessage{
+				Time:    time.Now(),
+				Type:    MsgThink,
+				Content: ev.Text,
+			})
+		}
+		m.refreshViewport()
+
 	case "tool_start":
 		m.addMessage(ChatMessage{
 			Time:    time.Now(),

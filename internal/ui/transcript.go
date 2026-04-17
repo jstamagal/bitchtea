@@ -54,6 +54,12 @@ func (t *TranscriptLogger) LogMessage(msg ChatMessage) error {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 
+	// Thinking blocks are transient UI state. They mutate in place and should
+	// not leak placeholder text or partial reasoning into the persisted log.
+	if msg.Type == MsgThink {
+		return nil
+	}
+
 	if msg.Type == MsgAgent && strings.TrimSpace(msg.Content) == "" {
 		return nil
 	}
@@ -177,8 +183,6 @@ func formatTranscriptMessage(msg ChatMessage) string {
 			return transcriptLine(msg.Time, fmt.Sprintf("-> %s:", msg.Nick), "")
 		}
 		return fmt.Sprintf("[%s] -> %s:\n%s\n", msg.Time.Format("15:04"), msg.Nick, content)
-	case MsgThink:
-		return transcriptLine(msg.Time, "[thinking]", msg.Content)
 	case MsgRaw:
 		content := strings.TrimRight(sanitizeTranscriptText(msg.Content), "\n")
 		if content == "" {

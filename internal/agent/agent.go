@@ -226,6 +226,9 @@ func (a *Agent) sendMessage(ctx context.Context, userMsg string, kind followUpKi
 					events <- Event{Type: "text", Text: safeText}
 				}
 
+			case "thinking":
+				events <- Event{Type: "thinking", Text: ev.Text}
+
 			case "usage":
 				if ev.Usage != nil {
 					usage = *ev.Usage

@@ -179,3 +179,25 @@ func TestViewShowsContextAndBackgroundStatus(t *testing.T) {
 		}
 	}
 }
+
+func TestHandleAgentEventUpdatesThinkingPlaceholder(t *testing.T) {
+	cfg := config.DefaultConfig()
+	cfg.WorkDir = t.TempDir()
+	cfg.SessionDir = t.TempDir()
+
+	model := NewModel(&cfg)
+	model.handleAgentEvent(agent.Event{Type: "state", State: agent.StateThinking})
+	model.handleAgentEvent(agent.Event{Type: "thinking", Text: "plan: "})
+	model.handleAgentEvent(agent.Event{Type: "thinking", Text: "inspect file"})
+
+	if len(model.messages) == 0 {
+		t.Fatal("expected thinking message")
+	}
+	last := model.messages[len(model.messages)-1]
+	if last.Type != MsgThink {
+		t.Fatalf("expected thinking message, got %#v", last)
+	}
+	if last.Content != "plan: inspect file" {
+		t.Fatalf("expected accumulated thinking content, got %q", last.Content)
+	}
+}
