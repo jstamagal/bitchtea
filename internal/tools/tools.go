@@ -32,11 +32,11 @@ func (r *Registry) SetScope(scope memorypkg.Scope) {
 }
 
 // Definitions returns OpenAI-compatible tool definitions
-func (r *Registry) Definitions() []llm.ToolDef {
-	return []llm.ToolDef{
+func (r *Registry) Definitions() []ToolDef {
+	return []ToolDef{
 		{
 			Type: "function",
-			Function: llm.ToolFuncDef{
+			Function: ToolFuncDef{
 				Name:        "read",
 				Description: "Read the contents of a file. For text files, returns content. Supports offset/limit for large files.",
 				Parameters: map[string]interface{}{
@@ -61,7 +61,7 @@ func (r *Registry) Definitions() []llm.ToolDef {
 		},
 		{
 			Type: "function",
-			Function: llm.ToolFuncDef{
+			Function: ToolFuncDef{
 				Name:        "write",
 				Description: "Write content to a file. Creates the file if it doesn't exist, overwrites if it does. Automatically creates parent directories.",
 				Parameters: map[string]interface{}{
@@ -82,7 +82,7 @@ func (r *Registry) Definitions() []llm.ToolDef {
 		},
 		{
 			Type: "function",
-			Function: llm.ToolFuncDef{
+			Function: ToolFuncDef{
 				Name:        "edit",
 				Description: "Edit a file by replacing exact text matches. Each edit replaces oldText with newText.",
 				Parameters: map[string]interface{}{
@@ -116,7 +116,7 @@ func (r *Registry) Definitions() []llm.ToolDef {
 		},
 		{
 			Type: "function",
-			Function: llm.ToolFuncDef{
+			Function: ToolFuncDef{
 				Name:        "search_memory",
 				Description: "Search the hot MEMORY.md file and durable daily markdown memory for past decisions, notes, and context relevant to the current worktree.",
 				Parameters: map[string]interface{}{
@@ -137,7 +137,7 @@ func (r *Registry) Definitions() []llm.ToolDef {
 		},
 		{
 			Type: "function",
-			Function: llm.ToolFuncDef{
+			Function: ToolFuncDef{
 				Name:        "bash",
 				Description: "Execute a bash command. Returns stdout and stderr.",
 				Parameters: map[string]interface{}{

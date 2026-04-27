@@ -1,6 +1,10 @@
 package llm
 
-import "context"
+import (
+	"context"
+
+	"github.com/jstamagal/bitchtea/internal/tools"
+)
 
 type Message struct {
 	Role       string     `json:"role"`
@@ -20,19 +24,17 @@ type FunctionCall struct {
 	Arguments string `json:"arguments"`
 }
 
-type ToolDef struct {
-	Type     string      `json:"type"`
-	Function ToolFuncDef `json:"function"`
-}
-
-type ToolFuncDef struct {
-	Name        string                 `json:"name"`
-	Description string                 `json:"description"`
-	Parameters  map[string]interface{} `json:"parameters"`
-}
+// ToolDef and ToolFuncDef live in internal/tools to keep the dependency edge
+// llm → tools one-way (internal/llm/tools.go imports Registry, and Registry's
+// Definitions() returns []tools.ToolDef). The aliases below preserve the
+// existing public surface so callers that wrote llm.ToolDef keep compiling.
+type ToolDef = tools.ToolDef
+type ToolFuncDef = tools.ToolFuncDef
 
 // StreamEvent is emitted on the channel passed to ChatStreamer.StreamChat.
-// Type is one of: "text", "thinking", "tool_call", "usage", "error", "done".
+// Type is one of: "text", "thinking", "tool_call", "tool_result", "usage",
+// "error", "done". The "done" event carries the rebuilt transcript in
+// Messages — the agent layer appends those to its own message log.
 type StreamEvent struct {
 	Type       string
 	Text       string
@@ -41,6 +43,7 @@ type StreamEvent struct {
 	ToolCallID string
 	Usage      *TokenUsage
 	Error      error
+	Messages   []Message
 }
 
 // TokenUsage holds the token counts reported by a provider for one response.
@@ -68,6 +71,11 @@ type DebugInfo struct {
 // ChatStreamer is the minimal streaming surface used by the agent loop.
 // Implementations must close events when the turn ends (or send an "error"
 // or "done" event followed by close).
+//
+// The reg parameter is the live tools.Registry for this turn. It may be nil
+// for tool-less turns (e.g., compaction summaries). Passing the Registry
+// (rather than just []ToolDef) lets the implementation bind each tool's
+// Run callback to Registry.Execute without a separate handshake.
 type ChatStreamer interface {
-	StreamChat(ctx context.Context, messages []Message, tools []ToolDef, events chan<- StreamEvent)
+	StreamChat(ctx context.Context, messages []Message, reg *tools.Registry, events chan<- StreamEvent)
 }
