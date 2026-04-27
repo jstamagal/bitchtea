@@ -7,10 +7,11 @@
       "ToolArgs": "{\"path\":\"test.txt\"}"
     },
     {
-      "Type": "done"
-    }
-  ],
-  [
+      "Type": "tool_result",
+      "ToolCallID": "call_1",
+      "ToolName": "read",
+      "Text": "hello from tool"
+    },
     {
       "Type": "text",
       "Text": "done after tool"

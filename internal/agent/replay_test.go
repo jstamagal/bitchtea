@@ -148,8 +148,8 @@ func TestReplayToolLoop(t *testing.T) {
 	if !sawFinalText {
 		t.Fatal("expected final text event after tool execution")
 	}
-	if streamer.calls != 2 {
-		t.Fatalf("expected 2 streamer calls, got %d", streamer.calls)
+	if streamer.calls != 1 {
+		t.Fatalf("expected 1 streamer call (fantasy owns the loop), got %d", streamer.calls)
 	}
 }
 

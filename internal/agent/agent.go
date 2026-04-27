@@ -241,7 +241,20 @@ func (a *Agent) sendMessage(ctx context.Context, userMsg string, kind followUpKi
 			if safeText := streamSanitizer.Flush(); safeText != "" {
 				events <- Event{Type: "text", Text: safeText}
 			}
-			a.messages = append(a.messages, ev.Messages...)
+			appendedAssistant := false
+			for _, m := range ev.Messages {
+				if m.Role == "assistant" {
+					m.Content = sanitizeAssistantText(m.Content)
+					appendedAssistant = true
+				}
+				a.messages = append(a.messages, m)
+			}
+			if !appendedAssistant && textAccum.Len() > 0 {
+				a.messages = append(a.messages, llm.Message{
+					Role:    "assistant",
+					Content: sanitizeAssistantText(textAccum.String()),
+				})
+			}
 		}
 	}
 
