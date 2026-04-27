@@ -43,6 +43,54 @@ func TestDetectProviderOpenAI(t *testing.T) {
 	}
 }
 
+func TestDetectProviderOpenRouter(t *testing.T) {
+	t.Setenv("ANTHROPIC_API_KEY", "")
+	t.Setenv("OPENAI_API_KEY", "")
+	t.Setenv("OPENROUTER_API_KEY", "sk-or-test")
+	t.Setenv("ZAI_API_KEY", "")
+	t.Setenv("BITCHTEA_MODEL", "")
+
+	cfg := DefaultConfig()
+	DetectProvider(&cfg)
+
+	if cfg.Provider != "openai" {
+		t.Fatalf("expected openai provider, got %q", cfg.Provider)
+	}
+	if cfg.Profile != "openrouter" {
+		t.Fatalf("expected openrouter profile, got %q", cfg.Profile)
+	}
+	if cfg.APIKey != "sk-or-test" {
+		t.Fatalf("expected openrouter api key, got %q", cfg.APIKey)
+	}
+	if cfg.BaseURL != "https://openrouter.ai/api/v1" {
+		t.Fatalf("unexpected base URL: %q", cfg.BaseURL)
+	}
+}
+
+func TestDetectProviderZAI(t *testing.T) {
+	t.Setenv("ANTHROPIC_API_KEY", "")
+	t.Setenv("OPENAI_API_KEY", "")
+	t.Setenv("OPENROUTER_API_KEY", "")
+	t.Setenv("ZAI_API_KEY", "sk-zai-test")
+	t.Setenv("BITCHTEA_MODEL", "")
+
+	cfg := DefaultConfig()
+	DetectProvider(&cfg)
+
+	if cfg.Provider != "openai" {
+		t.Fatalf("expected openai provider, got %q", cfg.Provider)
+	}
+	if cfg.Profile != "zai-openai" {
+		t.Fatalf("expected zai-openai profile, got %q", cfg.Profile)
+	}
+	if cfg.APIKey != "sk-zai-test" {
+		t.Fatalf("expected zai api key, got %q", cfg.APIKey)
+	}
+	if cfg.BaseURL != "https://api.z.ai/api/coding/paas/v4" {
+		t.Fatalf("unexpected base URL: %q", cfg.BaseURL)
+	}
+}
+
 func TestProfileSaveLoadDelete(t *testing.T) {
 	// Override profiles dir for test
 	dir := t.TempDir()

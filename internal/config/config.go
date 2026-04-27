@@ -82,6 +82,22 @@ func DetectProvider(cfg *Config) {
 		if cfg.Model == "gpt-4o" {
 			cfg.Model = "claude-sonnet-4-20250514"
 		}
+	} else if key := os.Getenv("OPENROUTER_API_KEY"); key != "" && cfg.APIKey == "" {
+		cfg.APIKey = key
+		cfg.Provider = builtinProfiles["openrouter"].Provider
+		cfg.BaseURL = builtinProfiles["openrouter"].BaseURL
+		cfg.Profile = "openrouter"
+		if cfg.Model == "gpt-4o" {
+			cfg.Model = builtinProfiles["openrouter"].Model
+		}
+	} else if key := os.Getenv("ZAI_API_KEY"); key != "" && cfg.APIKey == "" {
+		cfg.APIKey = key
+		cfg.Provider = builtinProfiles["zai-openai"].Provider
+		cfg.BaseURL = builtinProfiles["zai-openai"].BaseURL
+		cfg.Profile = "zai-openai"
+		if cfg.Model == "gpt-4o" {
+			cfg.Model = builtinProfiles["zai-openai"].Model
+		}
 	} else if key := os.Getenv("OPENAI_API_KEY"); key != "" && cfg.APIKey == "" {
 		cfg.APIKey = key
 		cfg.Provider = "openai"
