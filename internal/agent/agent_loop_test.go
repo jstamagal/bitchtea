@@ -418,6 +418,66 @@ func TestMaybeQueueFollowUpSkipsCanceledTurn(t *testing.T) {
 	}
 }
 
+func TestSendMessageSplicesRealMessagesAndSanitizesAssistant(t *testing.T) {
+	cfg := config.DefaultConfig()
+	cfg.WorkDir = t.TempDir()
+	cfg.SessionDir = t.TempDir()
+
+	streamer := &fakeStreamer{
+		responses: []func(chan<- llm.StreamEvent){
+			func(events chan<- llm.StreamEvent) {
+				events <- llm.StreamEvent{Type: "text", Text: autoNextDoneToken}
+				events <- llm.StreamEvent{Type: "text", Text: ": shipped."}
+				events <- llm.StreamEvent{
+					Type: "done",
+					Messages: []llm.Message{
+						{Role: "assistant", Content: autoNextDoneToken + ": shipped.", ToolCalls: []llm.ToolCall{{ID: "c1", Type: "function", Function: llm.FunctionCall{Name: "read", Arguments: `{"path":"x"}`}}}},
+						{Role: "tool", ToolCallID: "c1", Content: "file body"},
+					},
+				}
+			},
+		},
+	}
+
+	ag := NewAgentWithStreamer(&cfg, streamer)
+	startLen := ag.MessageCount()
+
+	eventCh := make(chan Event, 16)
+	go ag.SendFollowUp(context.Background(), &FollowUpRequest{
+		Label:  "auto-next-steps",
+		Prompt: AutoNextPrompt(),
+		Kind:   followUpKindAutoNextSteps,
+	}, eventCh)
+	for range eventCh {
+	}
+
+	// startLen + 1 (user prompt) + 2 (assistant + tool from ev.Messages) = startLen + 3
+	if got := ag.MessageCount(); got != startLen+3 {
+		t.Fatalf("expected %d messages, got %d", startLen+3, got)
+	}
+	msgs := ag.Messages()
+	asst := msgs[len(msgs)-2]
+	if asst.Role != "assistant" {
+		t.Fatalf("expected assistant role at -2, got %q", asst.Role)
+	}
+	if strings.Contains(asst.Content, autoNextDoneToken) {
+		t.Fatalf("assistant content not sanitized, got %q", asst.Content)
+	}
+	if asst.Content != "shipped." {
+		t.Fatalf("expected sanitized 'shipped.', got %q", asst.Content)
+	}
+	if len(asst.ToolCalls) != 1 {
+		t.Fatalf("expected ToolCalls preserved on assistant message, got %+v", asst.ToolCalls)
+	}
+	tool := msgs[len(msgs)-1]
+	if tool.Role != "tool" || tool.ToolCallID != "c1" || tool.Content != "file body" {
+		t.Fatalf("tool message not preserved: %+v", tool)
+	}
+	if got := ag.LastAssistantDisplayContent(); got != "shipped." {
+		t.Fatalf("LastAssistantDisplayContent = %q", got)
+	}
+}
+
 func TestSendMessageSanitizesAutonomyDoneTokens(t *testing.T) {
 	cfg := config.DefaultConfig()
 	cfg.WorkDir = t.TempDir()

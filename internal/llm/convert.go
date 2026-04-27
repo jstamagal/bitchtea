@@ -6,28 +6,42 @@ import (
 	"charm.land/fantasy"
 )
 
-// splitForFantasy splits the current transcript into fantasy's current Prompt
-// plus prior Messages. The last user message is the prompt; system messages are
-// omitted because the caller passes the system prompt through fantasy options.
-func splitForFantasy(msgs []Message) (prompt string, prior []fantasy.Message) {
-	lastUser := -1
-	for i, m := range msgs {
-		if m.Role == "user" {
-			lastUser = i
+// splitForFantasy splits the current transcript into fantasy's current Prompt,
+// prior Messages, and the system prompt. The TAIL user message becomes the
+// prompt — only if the transcript actually ends with a user turn. If the
+// transcript ends with an assistant or tool message (e.g., bootstrap, restored
+// session, partial replay), prompt is empty and every message stays in prior
+// in original order. System messages are concatenated into systemPrompt and
+// passed via fantasy.WithSystemPrompt at the call site.
+func splitForFantasy(msgs []Message) (prompt string, prior []fantasy.Message, systemPrompt string) {
+	tailUser := -1
+	for i := len(msgs) - 1; i >= 0; i-- {
+		switch msgs[i].Role {
+		case "user":
+			tailUser = i
+		case "assistant", "tool":
+			// transcript ends with non-user turn → no prompt to extract
+		default:
+			continue
 		}
+		break
 	}
-	if lastUser >= 0 {
-		prompt = msgs[lastUser].Content
+	if tailUser >= 0 {
+		prompt = msgs[tailUser].Content
 	}
 
+	var systemParts []string
 	prior = make([]fantasy.Message, 0, len(msgs))
 	for i, m := range msgs {
-		if i == lastUser {
+		if i == tailUser {
 			continue
 		}
 
 		switch m.Role {
 		case "system":
+			if m.Content != "" {
+				systemParts = append(systemParts, m.Content)
+			}
 			continue
 		case "user":
 			prior = append(prior, fantasy.Message{
@@ -61,7 +75,8 @@ func splitForFantasy(msgs []Message) (prompt string, prior []fantasy.Message) {
 		}
 	}
 
-	return prompt, prior
+	systemPrompt = strings.Join(systemParts, "\n\n")
+	return prompt, prior, systemPrompt
 }
 
 // fantasyToLLM converts a fantasy message back into bitchtea's JSONL-stable

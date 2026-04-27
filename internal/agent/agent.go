@@ -422,33 +422,35 @@ func (a *Agent) Model() string {
 	return a.config.Model
 }
 
-// SetModel changes the model
+// SetModel changes the model. Routes through Client.SetModel so the
+// cached fantasy.Provider/LanguageModel are invalidated.
 func (a *Agent) SetModel(model string) {
 	a.config.Model = model
-	a.client.Model = model
+	a.client.SetModel(model)
 }
 
-// SetBaseURL changes the API base URL
+// SetBaseURL changes the API base URL and invalidates the cached provider.
 func (a *Agent) SetBaseURL(url string) {
 	a.config.BaseURL = url
-	a.client.BaseURL = url
+	a.client.SetBaseURL(url)
 }
 
-// SetAPIKey changes the API key
+// SetAPIKey changes the API key and invalidates the cached provider.
 func (a *Agent) SetAPIKey(key string) {
 	a.config.APIKey = key
-	a.client.APIKey = key
+	a.client.SetAPIKey(key)
 }
 
-// SetProvider changes the LLM provider
+// SetProvider changes the LLM provider and invalidates the cached provider.
 func (a *Agent) SetProvider(provider string) {
 	a.config.Provider = provider
-	a.client.Provider = provider
+	a.client.SetProvider(provider)
 }
 
-// SetDebugHook sets a debug callback on the underlying LLM client
+// SetDebugHook installs (or clears) the debug hook; rebuilds the HTTP
+// transport on the next call.
 func (a *Agent) SetDebugHook(hook func(llm.DebugInfo)) {
-	a.client.DebugHook = hook
+	a.client.SetDebugHook(hook)
 }
 
 // Config returns the current config (for profile save)

@@ -36,10 +36,13 @@ func (c *Client) StreamChat(ctx context.Context, msgs []Message, reg *tools.Regi
 		return
 	}
 
-	prompt, prior := splitForFantasy(msgs)
+	prompt, prior, systemPrompt := splitForFantasy(msgs)
 
 	opts := []fantasy.AgentOption{
 		fantasy.WithStopConditions(fantasy.StepCountIs(maxAgentSteps)),
+	}
+	if systemPrompt != "" {
+		opts = append(opts, fantasy.WithSystemPrompt(systemPrompt))
 	}
 	if reg != nil {
 		opts = append(opts, fantasy.WithTools(translateTools(reg)...))
@@ -122,11 +125,15 @@ func (c *Client) CompleteText(ctx context.Context, msgs []Message) (string, erro
 	if err != nil {
 		return "", err
 	}
-	prompt, prior := splitForFantasy(msgs)
+	prompt, prior, systemPrompt := splitForFantasy(msgs)
 
-	fa := fantasy.NewAgent(model,
+	opts := []fantasy.AgentOption{
 		fantasy.WithStopConditions(fantasy.StepCountIs(1)),
-	)
+	}
+	if systemPrompt != "" {
+		opts = append(opts, fantasy.WithSystemPrompt(systemPrompt))
+	}
+	fa := fantasy.NewAgent(model, opts...)
 
 	var out strings.Builder
 	_, err = fa.Stream(ctx, fantasy.AgentStreamCall{
