@@ -14,30 +14,6 @@ import (
 	"github.com/jstamagal/bitchtea/internal/tools"
 )
 
-// State represents the agent's current state
-type State int
-
-const (
-	StateIdle     State = iota
-	StateThinking       // waiting for LLM response
-	StateToolCall       // executing a tool
-)
-
-// Event is emitted by the agent to update the UI
-type Event struct {
-	Type string // "text", "tool_start", "tool_result", "thinking", "done", "error", "state"
-
-	Text string // for text events (streamed tokens)
-
-	ToolName   string // for tool events
-	ToolArgs   string
-	ToolResult string
-	ToolError  error
-
-	State State // for state events
-	Error error // for error events
-}
-
 // Agent manages the conversation loop
 type Agent struct {
 	client   *llm.Client
