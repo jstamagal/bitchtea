@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"charm.land/fantasy"
@@ -342,7 +343,12 @@ func TestStreamChatSendsValidToolSchemaAndExecutesToolCall(t *testing.T) {
 	client.model = model
 
 	events := make(chan StreamEvent, 32)
-	client.StreamChat(context.Background(), []Message{{Role: "user", Content: "read test.txt"}}, tools.NewRegistry(workDir, t.TempDir()), events)
+	reg := tools.NewRegistry(workDir, t.TempDir())
+	messages := []Message{
+		{Role: "system", Content: "SYSTEM_TOOL_PROMPT_MARKER terminal_start preview_image"},
+		{Role: "user", Content: "read test.txt"},
+	}
+	client.StreamChat(context.Background(), messages, reg, events)
 
 	var toolCallSeen bool
 	var toolResultSeen bool
@@ -368,6 +374,8 @@ func TestStreamChatSendsValidToolSchemaAndExecutesToolCall(t *testing.T) {
 	}
 
 	assertReadToolSchema(t, model.calls[0].Tools)
+	assertAllRegistryToolsAttached(t, reg.Definitions(), model.calls[0].Tools)
+	assertPromptContainsSystemText(t, model.calls[0].Prompt, "SYSTEM_TOOL_PROMPT_MARKER")
 
 	if !toolCallSeen {
 		t.Fatal("expected tool_call event for read")
@@ -379,6 +387,37 @@ func TestStreamChatSendsValidToolSchemaAndExecutesToolCall(t *testing.T) {
 		t.Fatalf("expected final text %q, got %q", "done", text)
 	}
 	assertRebuiltToolTranscript(t, doneMessages)
+}
+
+func assertAllRegistryToolsAttached(t *testing.T, defs []tools.ToolDef, fantasyTools []fantasy.Tool) {
+	t.Helper()
+	got := map[string]bool{}
+	for _, tool := range fantasyTools {
+		if functionTool, ok := tool.(fantasy.FunctionTool); ok {
+			got[functionTool.Name] = true
+		}
+	}
+	for _, def := range defs {
+		if !got[def.Function.Name] {
+			t.Fatalf("provider call missing tool %q; got tools %#v", def.Function.Name, got)
+		}
+	}
+}
+
+func assertPromptContainsSystemText(t *testing.T, prompt fantasy.Prompt, want string) {
+	t.Helper()
+	for _, msg := range prompt {
+		if msg.Role != fantasy.MessageRoleSystem {
+			continue
+		}
+		for _, part := range msg.Content {
+			textPart, ok := part.(fantasy.TextPart)
+			if ok && strings.Contains(textPart.Text, want) {
+				return
+			}
+		}
+	}
+	t.Fatalf("provider call prompt missing system text %q: %+v", want, prompt)
 }
 
 func assertReadToolSchema(t *testing.T, fantasyTools []fantasy.Tool) {

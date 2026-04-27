@@ -307,12 +307,57 @@ func TestBuildSystemPromptMentionsSearchMemory(t *testing.T) {
 	cfg := config.DefaultConfig()
 	cfg.WorkDir = t.TempDir()
 
-	prompt := buildSystemPrompt(&cfg)
+	reg := tools.NewRegistry(cfg.WorkDir, t.TempDir())
+	prompt := buildSystemPrompt(&cfg, reg.Definitions())
 	if !strings.Contains(prompt, "search_memory") {
 		t.Fatalf("expected search_memory in system prompt, got %q", prompt)
 	}
 	if !strings.Contains(prompt, "prior decision") {
 		t.Fatalf("expected recall guidance in system prompt, got %q", prompt)
+	}
+}
+
+func TestSystemPromptIncludesLiveToolDefinitions(t *testing.T) {
+	cfg := config.DefaultConfig()
+	cfg.WorkDir = t.TempDir()
+	cfg.SessionDir = t.TempDir()
+
+	reg := tools.NewRegistry(cfg.WorkDir, cfg.SessionDir)
+	prompt := buildSystemPrompt(&cfg, reg.Definitions())
+
+	for _, def := range reg.Definitions() {
+		if !strings.Contains(prompt, "- "+def.Function.Name+"(") {
+			t.Fatalf("system prompt missing tool %q:\n%s", def.Function.Name, prompt)
+		}
+	}
+	for _, want := range []string{
+		"Tool schemas are attached to the provider request",
+		"terminal_start/send/snapshot/close",
+		"preview_image(",
+	} {
+		if !strings.Contains(prompt, want) {
+			t.Fatalf("system prompt missing %q:\n%s", want, prompt)
+		}
+	}
+}
+
+func TestRestoreMessagesRefreshesSystemPromptToolDefinitions(t *testing.T) {
+	cfg := config.DefaultConfig()
+	cfg.WorkDir = t.TempDir()
+	cfg.SessionDir = t.TempDir()
+
+	agent := NewAgentWithStreamer(&cfg, &fakeStreamer{})
+	agent.RestoreMessages([]llm.Message{
+		{Role: "system", Content: "old stale prompt"},
+		{Role: "user", Content: "hello"},
+	})
+
+	prompt := agent.SystemPrompt()
+	if strings.Contains(prompt, "old stale prompt") {
+		t.Fatalf("expected restore to refresh stale system prompt, got %q", prompt)
+	}
+	if !strings.Contains(prompt, "terminal_start(") || !strings.Contains(prompt, "preview_image(") {
+		t.Fatalf("restored system prompt missing live tools:\n%s", prompt)
 	}
 }
 
