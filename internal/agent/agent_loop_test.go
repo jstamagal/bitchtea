@@ -332,7 +332,8 @@ func TestSystemPromptIncludesLiveToolDefinitions(t *testing.T) {
 	}
 	for _, want := range []string{
 		"Tool schemas are attached to the provider request",
-		"terminal_start/send/snapshot/close",
+		"terminal_start, terminal_keys, terminal_wait",
+		"Quit safely with keys",
 		"preview_image(",
 	} {
 		if !strings.Contains(prompt, want) {

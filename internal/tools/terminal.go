@@ -131,6 +131,38 @@ func (m *terminalManager) Send(argsJSON string) (string, error) {
 	return session.snapshot(false), nil
 }
 
+func (m *terminalManager) Keys(argsJSON string) (string, error) {
+	var args struct {
+		ID      string   `json:"id"`
+		Keys    []string `json:"keys"`
+		DelayMS int      `json:"delay_ms"`
+	}
+	if err := json.Unmarshal([]byte(argsJSON), &args); err != nil {
+		return "", fmt.Errorf("parse args: %w", err)
+	}
+	if len(args.Keys) == 0 {
+		return "", errors.New("keys is required")
+	}
+	if args.DelayMS <= 0 {
+		args.DelayMS = 100
+	}
+	session, err := m.get(args.ID)
+	if err != nil {
+		return "", err
+	}
+	if !session.running() {
+		return session.snapshot(false), nil
+	}
+
+	var input strings.Builder
+	for _, key := range args.Keys {
+		input.WriteString(terminalKeyInput(key))
+	}
+	session.emu.SendText(input.String())
+	time.Sleep(time.Duration(args.DelayMS) * time.Millisecond)
+	return session.snapshot(false), nil
+}
+
 func (m *terminalManager) Snapshot(argsJSON string) (string, error) {
 	var args struct {
 		ID   string `json:"id"`
@@ -144,6 +176,80 @@ func (m *terminalManager) Snapshot(argsJSON string) (string, error) {
 		return "", err
 	}
 	return session.snapshot(args.ANSI), nil
+}
+
+func (m *terminalManager) Wait(argsJSON string) (string, error) {
+	var args struct {
+		ID            string `json:"id"`
+		Text          string `json:"text"`
+		TimeoutMS     int    `json:"timeout_ms"`
+		IntervalMS    int    `json:"interval_ms"`
+		CaseSensitive bool   `json:"case_sensitive"`
+	}
+	if err := json.Unmarshal([]byte(argsJSON), &args); err != nil {
+		return "", fmt.Errorf("parse args: %w", err)
+	}
+	if strings.TrimSpace(args.Text) == "" {
+		return "", errors.New("text is required")
+	}
+	if args.TimeoutMS <= 0 {
+		args.TimeoutMS = 5000
+	}
+	if args.IntervalMS <= 0 {
+		args.IntervalMS = 100
+	}
+
+	session, err := m.get(args.ID)
+	if err != nil {
+		return "", err
+	}
+
+	deadline := time.Now().Add(time.Duration(args.TimeoutMS) * time.Millisecond)
+	for {
+		snapshot := session.snapshot(false)
+		if containsTerminalText(snapshot, args.Text, args.CaseSensitive) {
+			return "matched terminal text " + fmt.Sprintf("%q", args.Text) + "\n" + snapshot, nil
+		}
+		if !session.running() {
+			return "terminal exited before matching text " + fmt.Sprintf("%q", args.Text) + "\n" + snapshot, nil
+		}
+		if time.Now().After(deadline) {
+			return "timeout waiting for terminal text " + fmt.Sprintf("%q", args.Text) + "\n" + snapshot, nil
+		}
+		time.Sleep(time.Duration(args.IntervalMS) * time.Millisecond)
+	}
+}
+
+func (m *terminalManager) Resize(argsJSON string) (string, error) {
+	var args struct {
+		ID      string `json:"id"`
+		Width   int    `json:"width"`
+		Height  int    `json:"height"`
+		DelayMS int    `json:"delay_ms"`
+	}
+	if err := json.Unmarshal([]byte(argsJSON), &args); err != nil {
+		return "", fmt.Errorf("parse args: %w", err)
+	}
+	if args.Width <= 0 {
+		return "", errors.New("width must be positive")
+	}
+	if args.Height <= 0 {
+		return "", errors.New("height must be positive")
+	}
+	if args.DelayMS <= 0 {
+		args.DelayMS = 100
+	}
+
+	session, err := m.get(args.ID)
+	if err != nil {
+		return "", err
+	}
+	if err := session.pty.Resize(args.Width, args.Height); err != nil {
+		return "", fmt.Errorf("resize pty: %w", err)
+	}
+	session.emu.Resize(args.Width, args.Height)
+	time.Sleep(time.Duration(args.DelayMS) * time.Millisecond)
+	return session.snapshot(false), nil
 }
 
 func (m *terminalManager) Close(argsJSON string) (string, error) {
@@ -239,6 +345,58 @@ func (s *terminalSession) snapshot(ansi bool) string {
 		sb.WriteString(s.emu.String())
 	}
 	return strings.TrimRight(sb.String(), "\n")
+}
+
+func terminalKeyInput(key string) string {
+	normalized := strings.ToLower(strings.TrimSpace(key))
+	switch normalized {
+	case "esc", "escape":
+		return "\x1b"
+	case "enter", "return":
+		return "\r"
+	case "newline", "linefeed", "lf":
+		return "\n"
+	case "tab":
+		return "\t"
+	case "backspace", "bs":
+		return "\x7f"
+	case "delete", "del":
+		return "\x1b[3~"
+	case "up":
+		return "\x1b[A"
+	case "down":
+		return "\x1b[B"
+	case "right":
+		return "\x1b[C"
+	case "left":
+		return "\x1b[D"
+	case "home":
+		return "\x1b[H"
+	case "end":
+		return "\x1b[F"
+	case "pageup", "pgup":
+		return "\x1b[5~"
+	case "pagedown", "pgdown":
+		return "\x1b[6~"
+	case "space":
+		return " "
+	}
+
+	if strings.HasPrefix(normalized, "ctrl-") && len(normalized) == len("ctrl-a") {
+		ch := normalized[len("ctrl-")]
+		if ch >= 'a' && ch <= 'z' {
+			return string([]byte{ch - 'a' + 1})
+		}
+	}
+
+	return key
+}
+
+func containsTerminalText(snapshot string, text string, caseSensitive bool) bool {
+	if caseSensitive {
+		return strings.Contains(snapshot, text)
+	}
+	return strings.Contains(strings.ToLower(snapshot), strings.ToLower(text))
 }
 
 func sleepContext(ctx context.Context, d time.Duration) {

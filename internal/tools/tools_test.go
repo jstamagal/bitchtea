@@ -127,8 +127,8 @@ func TestUnknownTool(t *testing.T) {
 func TestDefinitions(t *testing.T) {
 	reg := NewRegistry(t.TempDir(), t.TempDir())
 	defs := reg.Definitions()
-	if len(defs) != 10 {
-		t.Fatalf("expected 10 tool definitions, got %d", len(defs))
+	if len(defs) != 13 {
+		t.Fatalf("expected 13 tool definitions, got %d", len(defs))
 	}
 
 	names := map[string]bool{}
@@ -137,7 +137,8 @@ func TestDefinitions(t *testing.T) {
 	}
 	for _, expected := range []string{
 		"read", "write", "edit", "search_memory", "bash",
-		"terminal_start", "terminal_send", "terminal_snapshot", "terminal_close",
+		"terminal_start", "terminal_send", "terminal_keys", "terminal_snapshot",
+		"terminal_wait", "terminal_resize", "terminal_close",
 		"preview_image",
 	} {
 		if !names[expected] {
@@ -220,6 +221,64 @@ func TestTerminalSessionCommandExit(t *testing.T) {
 		t.Fatalf("expected exited snapshot containing output, got %q", result)
 	}
 	_, _ = reg.Execute(context.Background(), "terminal_close", `{"id":"`+id+`"}`)
+}
+
+func TestTerminalKeysSendNamedKeysAndLiteralText(t *testing.T) {
+	dir := t.TempDir()
+	reg := NewRegistry(dir, t.TempDir())
+
+	result, err := reg.Execute(context.Background(), "terminal_start", `{"command":"cat","width":40,"height":10,"delay_ms":50}`)
+	if err != nil {
+		t.Fatalf("terminal_start: %v", err)
+	}
+	id := terminalIDFromResult(t, result)
+	defer reg.Execute(context.Background(), "terminal_close", `{"id":"`+id+`"}`) //nolint:errcheck
+
+	result, err = reg.Execute(context.Background(), "terminal_keys", `{"id":"`+id+`","keys":["hello from keys","enter","ctrl-d"],"delay_ms":100}`)
+	if err != nil {
+		t.Fatalf("terminal_keys: %v", err)
+	}
+	if !strings.Contains(result, "hello from keys") {
+		t.Fatalf("expected terminal screen to contain sent text, got %q", result)
+	}
+}
+
+func TestTerminalWaitMatchesScreenText(t *testing.T) {
+	reg := NewRegistry(t.TempDir(), t.TempDir())
+
+	result, err := reg.Execute(context.Background(), "terminal_start", `{"command":"printf READY && sleep 1","width":40,"height":10,"delay_ms":50}`)
+	if err != nil {
+		t.Fatalf("terminal_start: %v", err)
+	}
+	id := terminalIDFromResult(t, result)
+	defer reg.Execute(context.Background(), "terminal_close", `{"id":"`+id+`"}`) //nolint:errcheck
+
+	result, err = reg.Execute(context.Background(), "terminal_wait", `{"id":"`+id+`","text":"ready","timeout_ms":1000,"interval_ms":25}`)
+	if err != nil {
+		t.Fatalf("terminal_wait: %v", err)
+	}
+	if !strings.Contains(result, `matched terminal text "ready"`) || !strings.Contains(result, "READY") {
+		t.Fatalf("expected wait match result, got %q", result)
+	}
+}
+
+func TestTerminalResizeUpdatesSnapshotDimensions(t *testing.T) {
+	reg := NewRegistry(t.TempDir(), t.TempDir())
+
+	result, err := reg.Execute(context.Background(), "terminal_start", `{"command":"cat","width":40,"height":10,"delay_ms":50}`)
+	if err != nil {
+		t.Fatalf("terminal_start: %v", err)
+	}
+	id := terminalIDFromResult(t, result)
+	defer reg.Execute(context.Background(), "terminal_close", `{"id":"`+id+`"}`) //nolint:errcheck
+
+	result, err = reg.Execute(context.Background(), "terminal_resize", `{"id":"`+id+`","width":50,"height":8,"delay_ms":50}`)
+	if err != nil {
+		t.Fatalf("terminal_resize: %v", err)
+	}
+	if !strings.Contains(result, "terminal session "+id+" (50x8) running") {
+		t.Fatalf("expected resized snapshot dimensions, got %q", result)
+	}
 }
 
 func TestPreviewImage(t *testing.T) {

@@ -194,7 +194,7 @@ func (r *Registry) Definitions() []ToolDef {
 			Type: "function",
 			Function: ToolFuncDef{
 				Name:        "terminal_send",
-				Description: "Send raw text/input to a persistent terminal session, then return a fresh screen snapshot. Use newline for Enter and \\u001b for Escape.",
+				Description: "Send raw text/input to a persistent terminal session, then return a fresh screen snapshot. Prefer terminal_keys for control keys like Escape, Ctrl+C, arrows, and Enter.",
 				Parameters: map[string]interface{}{
 					"type": "object",
 					"properties": map[string]interface{}{
@@ -218,6 +218,34 @@ func (r *Registry) Definitions() []ToolDef {
 		{
 			Type: "function",
 			Function: ToolFuncDef{
+				Name:        "terminal_keys",
+				Description: "Send named keys or literal text chunks to a persistent terminal session, then return a fresh screen snapshot. Use this for editors and TUIs. Named keys include esc, enter, tab, backspace, delete, up, down, left, right, home, end, pageup, pagedown, ctrl-a through ctrl-z. Unknown entries are sent as literal text, so [\"esc\",\":q!\",\"enter\"] quits vim.",
+				Parameters: map[string]interface{}{
+					"type": "object",
+					"properties": map[string]interface{}{
+						"id": map[string]interface{}{
+							"type":        "string",
+							"description": "Terminal session id returned by terminal_start",
+						},
+						"keys": map[string]interface{}{
+							"type":        "array",
+							"description": "Named keys or literal text chunks to send in order",
+							"items": map[string]interface{}{
+								"type": "string",
+							},
+						},
+						"delay_ms": map[string]interface{}{
+							"type":        "integer",
+							"description": "Milliseconds to wait before taking the screen snapshot (default 100)",
+						},
+					},
+					"required": []string{"id", "keys"},
+				},
+			},
+		},
+		{
+			Type: "function",
+			Function: ToolFuncDef{
 				Name:        "terminal_snapshot",
 				Description: "Return the current screen contents and status for a persistent terminal session.",
 				Parameters: map[string]interface{}{
@@ -233,6 +261,68 @@ func (r *Registry) Definitions() []ToolDef {
 						},
 					},
 					"required": []string{"id"},
+				},
+			},
+		},
+		{
+			Type: "function",
+			Function: ToolFuncDef{
+				Name:        "terminal_wait",
+				Description: "Wait until a persistent terminal session screen contains text, exits, or times out. Use this instead of guessing sleeps after starting REPLs, editors, servers, and TUIs.",
+				Parameters: map[string]interface{}{
+					"type": "object",
+					"properties": map[string]interface{}{
+						"id": map[string]interface{}{
+							"type":        "string",
+							"description": "Terminal session id returned by terminal_start",
+						},
+						"text": map[string]interface{}{
+							"type":        "string",
+							"description": "Text to wait for in the terminal screen",
+						},
+						"timeout_ms": map[string]interface{}{
+							"type":        "integer",
+							"description": "Maximum milliseconds to wait (default 5000)",
+						},
+						"interval_ms": map[string]interface{}{
+							"type":        "integer",
+							"description": "Polling interval in milliseconds (default 100)",
+						},
+						"case_sensitive": map[string]interface{}{
+							"type":        "boolean",
+							"description": "Use case-sensitive matching (default false)",
+						},
+					},
+					"required": []string{"id", "text"},
+				},
+			},
+		},
+		{
+			Type: "function",
+			Function: ToolFuncDef{
+				Name:        "terminal_resize",
+				Description: "Resize a persistent terminal session PTY and virtual screen, then return a fresh screen snapshot.",
+				Parameters: map[string]interface{}{
+					"type": "object",
+					"properties": map[string]interface{}{
+						"id": map[string]interface{}{
+							"type":        "string",
+							"description": "Terminal session id returned by terminal_start",
+						},
+						"width": map[string]interface{}{
+							"type":        "integer",
+							"description": "New terminal width in cells",
+						},
+						"height": map[string]interface{}{
+							"type":        "integer",
+							"description": "New terminal height in cells",
+						},
+						"delay_ms": map[string]interface{}{
+							"type":        "integer",
+							"description": "Milliseconds to wait before taking the screen snapshot (default 100)",
+						},
+					},
+					"required": []string{"id", "width", "height"},
 				},
 			},
 		},
@@ -298,8 +388,14 @@ func (r *Registry) Execute(ctx context.Context, name string, argsJSON string) (s
 		return r.terminals.Start(ctx, argsJSON)
 	case "terminal_send":
 		return r.terminals.Send(argsJSON)
+	case "terminal_keys":
+		return r.terminals.Keys(argsJSON)
 	case "terminal_snapshot":
 		return r.terminals.Snapshot(argsJSON)
+	case "terminal_wait":
+		return r.terminals.Wait(argsJSON)
+	case "terminal_resize":
+		return r.terminals.Resize(argsJSON)
 	case "terminal_close":
 		return r.terminals.Close(argsJSON)
 	case "preview_image":
