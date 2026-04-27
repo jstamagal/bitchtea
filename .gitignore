@@ -57,3 +57,4 @@ tasks.json
 
 brain/
 personal_docs/
+.subagents/*

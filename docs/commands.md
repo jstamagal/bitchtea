@@ -36,3 +36,89 @@ Slash commands control the TUI. Use them to bend the session to your will.
 - **`/quit`** (or **`/q`**): Exit bitchtea.
 
 🦍💪🤝 APES STRONK TOGETHER 🦍💪🤝
+
+## 🧱 TECHNICAL DEEP-DIVE: THE REPL HANDSHAKE
+
+### 🤝 REPL-TO-AGENT ORCHESTRATION
+When a command or message is committed (Enter), the model undergoes a transition:
+1. **Input Capture**: `internal/ui/model.go` captures `tea.KeyMsg` for `enter`.
+2. **Dispatch**:
+   - **Slash Commands**: Routed via `handleCommand` to handlers in `internal/ui/commands.go`.
+   - **User Messages**: Routed via `m.sendToAgent(input)`.
+3. **The Turn Context**: `startAgentTurn` (`internal/ui/model_turn_test.go` / `model.go`) creates a fresh `context.WithCancel` and an `agent.Event` channel.
+4. **Asynchronous Execution**: `go m.agent.SendMessage(ctx, input, ch)` fires.
+5. **Event Loop**: The TUI stays responsive, processing `agentEventMsg` (wrapping `agent.Event`) to update spinners and stream text until a `done` event arrives.
+
+### 🌀 COMMAND TRACES
+
+#### `/compact` (The Context Shrinker)
+- **Viewport**: Prints `Compacted: ~X -> ~Y tokens`.
+- **Under the Hood**:
+  1. Calls `agent.Compact(ctx)`.
+  2. **Summary Phase**: The agent sends a internal "summarize" prompt to the LLM via `streamer.StreamChat`.
+  3. **Flush Phase**: Before deletion, it extracts lasting facts using another LLM call (`flushCompactedMessagesToDailyMemory`) and appends them to the **Daily Memory** log.
+  4. **Rewrite**: `a.messages` is truncated. Index 0 (System) remains, followed by the new Summary, then an Assistant Ack, and finally the last 4 messages of the original history.
+
+#### `/fork` (Timeline Splitting)
+- **Viewport**: Prints `Forked to new session: [path]`.
+- **Under the Hood**:
+  1. Identifies the `lastID` of the current session entries.
+  2. Calls `session.Fork(lastID)` (`internal/session/session.go:102`).
+  3. **Atomic Copy**: A new `.jsonl` file is created with a timestamped suffix. All entries up to `lastID` are marshaled and written in a single pass.
+  4. **State Swap**: The `Model.session` pointer is updated to the new file, making all subsequent `Append` calls target the fork.
+
+#### `/msg` (Targeted Routing)
+- **Viewport**: Prints `→nick: text`.
+- **Agent Handshake**: Sends `[to:nick] text` to `agent.SendMessage`.
+- **Logic**: This bypasses the persistent `/query` focus but tells the agent exactly who is being addressed via the `[to:...]` prefix, which the agent's system prompt (Persona) is trained to understand as a routing hint.
+
+### 📜 COMMAND VERBATIM MAP
+
+| Command | Viewport Output (sysMsg) | Agent Handshake |
+| :--- | :--- | :--- |
+| `/model <m>` | `*** Model switched to: <m>` | `a.SetModel(<m>)` (Immediate config sync) |
+| `/tokens` | `~X tokens \| $Y \| Z msgs` | None (Local stat read) |
+| `/join #ch` | `Joined #ch` | `a.SetScope(ChannelScope("#ch"))` |
+| `/debug on` | `Debug mode: ON` | `a.SetDebugHook(fn)` (Wraps HTTP transport) |
+| `/set k v` | `K set to: V` | Syncs `a.SetProvider/Model/etc` if profile-related |
+
+🦍💪🤝 APES STRONK TOGETHER 🦍💪🤝
+
+## 🧱 TECHNICAL DEEP-DIVE: THE REPL ENGINE
+
+### 🤝 THE REPL-TO-AGENT HANDSHAKE
+Every slash command and message enters through `internal/ui/model.go`. 
+
+1. **Capture**: `tea.KeyMsg` for Enter triggers `m.handleCommand`.
+2. **Dispatch**: The command string is split and routed to handlers in `internal/ui/commands.go`.
+3. **Execution**:
+   - **TUI-only**: Commands like `/clear` or `/copy` only touch `Model` state.
+   - **Agent-sync**: Commands like `/model` or `/join` update `m.agent` configuration or scope immediately.
+   - **Async Turns**: User messages trigger `m.sendToAgent`, which starts a Go routine using `m.agent.SendMessage` and a channel for `agent.Event` messages.
+
+### 🌀 COMMAND TRACES
+
+#### `/compact` (The Context Purge)
+- **Handshake**: Calls `m.agent.Compact`.
+- **Churn Phase 1 (Memory Extraction)**: The agent sends the conversation history to the LLM with a hidden instruction to "Extract durable memory". The LLM's response is appended to the current scope's daily markdown log (`AppendScopedDailyMemory`).
+- **Churn Phase 2 (Summary)**: The agent sends a second request to "Summarize the conversation". 
+- **The Swap**: The middle of the `a.messages` slice is deleted. The new Summary is inserted as a single `user` message at index 1.
+- **Viewport Output**: `Compacted: ~X -> ~Y tokens`.
+
+#### `/fork` (Timeline Splitting)
+- **Handshake**: Calls `m.session.Fork`.
+- **Under the Hood**: 
+  1. Locates the last entry ID in the current session.
+  2. Creates a new `.jsonl` file with a `_fork_TIMESTAMP` suffix.
+  3. Iterates through the original entries, marshaling and writing them to the new file one-by-one until the fork point is hit.
+- **State Swap**: The `Model.session` pointer is updated to the new file. All subsequent turns append only to the fork.
+- **Viewport Output**: `Forked to new session: path/to/session_fork_123.jsonl`.
+
+#### `/join <#channel>`
+- **Handshake**: Calls `m.focus.SetFocus` and `m.agent.SetScope`.
+- **Under the Hood**:
+  1. Updates the TUI's active context label.
+  2. Triggers `agent.SetScope`, which checks for a scoped `HOT.md` in the memory archive.
+  3. **Context Injection**: If `HOT.md` exists for the channel, it is injected into the LLM as a context message immediately.
+- **Viewport Output**: `Joined #channel`.
+
