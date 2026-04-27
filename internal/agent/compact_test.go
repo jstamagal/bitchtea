@@ -10,6 +10,7 @@ import (
 
 	"github.com/jstamagal/bitchtea/internal/config"
 	"github.com/jstamagal/bitchtea/internal/llm"
+	"github.com/jstamagal/bitchtea/internal/tools"
 )
 
 // helpers ----------------------------------------------------------------
@@ -361,7 +362,7 @@ type blockingStreamer struct {
 	calls int
 }
 
-func (b *blockingStreamer) StreamChat(ctx context.Context, _ []llm.Message, _ []llm.ToolDef, events chan<- llm.StreamEvent) {
+func (b *blockingStreamer) StreamChat(ctx context.Context, _ []llm.Message, _ *tools.Registry, events chan<- llm.StreamEvent) {
 	b.calls++
 	defer close(events)
 	<-ctx.Done()

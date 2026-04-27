@@ -10,6 +10,7 @@ import (
 	"github.com/jstamagal/bitchtea/internal/agent"
 	"github.com/jstamagal/bitchtea/internal/config"
 	"github.com/jstamagal/bitchtea/internal/llm"
+	"github.com/jstamagal/bitchtea/internal/tools"
 )
 
 type headlessScriptedStreamer struct {
@@ -19,7 +20,7 @@ type headlessScriptedStreamer struct {
 	calls     int
 }
 
-func (s *headlessScriptedStreamer) StreamChat(_ context.Context, messages []llm.Message, _ []llm.ToolDef, events chan<- llm.StreamEvent) {
+func (s *headlessScriptedStreamer) StreamChat(_ context.Context, messages []llm.Message, _ *tools.Registry, events chan<- llm.StreamEvent) {
 	defer close(events)
 
 	s.mu.Lock()

@@ -11,6 +11,7 @@ import (
 
 	"github.com/jstamagal/bitchtea/internal/config"
 	"github.com/jstamagal/bitchtea/internal/llm"
+	"github.com/jstamagal/bitchtea/internal/tools"
 )
 
 type replayTurn []llm.StreamEvent
@@ -43,7 +44,7 @@ func newFixtureStreamer(t *testing.T, name string) *fixtureStreamer {
 	return &fixtureStreamer{turns: loadReplayFixture(t, name)}
 }
 
-func (f *fixtureStreamer) StreamChat(_ context.Context, _ []llm.Message, _ []llm.ToolDef, events chan<- llm.StreamEvent) {
+func (f *fixtureStreamer) StreamChat(_ context.Context, _ []llm.Message, _ *tools.Registry, events chan<- llm.StreamEvent) {
 	defer close(events)
 
 	f.mu.Lock()

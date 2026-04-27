@@ -8,6 +8,8 @@ import (
 	"sort"
 	"strings"
 	"time"
+
+	"github.com/jstamagal/bitchtea/internal/llm"
 )
 
 // Entry is a single line in a JSONL session file

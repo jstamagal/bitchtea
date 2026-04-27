@@ -12,11 +12,12 @@ import (
 	"github.com/jstamagal/bitchtea/internal/config"
 	"github.com/jstamagal/bitchtea/internal/llm"
 	"github.com/jstamagal/bitchtea/internal/session"
+	"github.com/jstamagal/bitchtea/internal/tools"
 )
 
 type stubStreamer struct{}
 
-func (stubStreamer) StreamChat(_ context.Context, _ []llm.Message, _ []llm.ToolDef, events chan<- llm.StreamEvent) {
+func (stubStreamer) StreamChat(_ context.Context, _ []llm.Message, _ *tools.Registry, events chan<- llm.StreamEvent) {
 	close(events)
 }
 
@@ -24,7 +25,7 @@ type singleReplyStreamer struct {
 	text string
 }
 
-func (s singleReplyStreamer) StreamChat(_ context.Context, _ []llm.Message, _ []llm.ToolDef, events chan<- llm.StreamEvent) {
+func (s singleReplyStreamer) StreamChat(_ context.Context, _ []llm.Message, _ *tools.Registry, events chan<- llm.StreamEvent) {
 	defer close(events)
 	events <- llm.StreamEvent{Type: "text", Text: s.text}
 	events <- llm.StreamEvent{Type: "done"}

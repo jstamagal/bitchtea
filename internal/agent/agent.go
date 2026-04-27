@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/jstamagal/bitchtea/internal/config"
+	"github.com/jstamagal/bitchtea/internal/llm"
 	"github.com/jstamagal/bitchtea/internal/tools"
 )
 
@@ -167,145 +168,92 @@ func (a *Agent) SendFollowUp(ctx context.Context, req *FollowUpRequest, events c
 	a.sendMessage(ctx, req.Prompt, req.Kind, events)
 }
 
+// sendMessage runs one user turn through the streamer. fantasy owns the
+// LLM/tool loop now: it streams text, dispatches tool calls into bitchteaTool
+// (which calls Registry.Execute), and emits StreamEvents back through the
+// channel. This function's job is to translate llm.StreamEvent → agent.Event
+// for the UI, accumulate cost, run the follow-up sanitizer on streamed text,
+// track per-tool counters, and on the terminal "done" event splice the
+// rebuilt transcript (ev.Messages) into a.messages.
 func (a *Agent) sendMessage(ctx context.Context, userMsg string, kind followUpKind, events chan<- Event) {
 	defer close(events)
 	a.activeFollowUpKind = kind
 
-	// Expand @file references
 	expanded := ExpandFileRefs(userMsg, a.config.WorkDir)
-
-	// Add user message (with optional per-message persona injection)
 	a.messages = append(a.messages, llm.Message{Role: "user", Content: injectPerMessagePrefix(expanded)})
 	a.TurnCount++
 
-	// Agent loop - keeps going while there are tool calls
-	for {
-		events <- Event{Type: "state", State: StateThinking}
-		estimatedInputTokens := a.EstimateTokens()
+	estimatedInputTokens := a.EstimateTokens()
+	streamSanitizer := newFollowUpStreamSanitizer(kind)
+	var textAccum strings.Builder
+	var gotUsage bool
 
-		// Stream LLM response
-		streamEvents := make(chan llm.StreamEvent, 100)
-		go a.streamer.StreamChat(ctx, a.messages, a.tools.Definitions(), streamEvents)
+	events <- Event{Type: "state", State: StateThinking}
 
-		var textAccum strings.Builder
-		streamSanitizer := newFollowUpStreamSanitizer(kind)
-		var toolCalls []llm.ToolCall
-		var usage llm.TokenUsage
-		var gotUsage bool
+	streamEvents := make(chan llm.StreamEvent, 100)
+	go a.streamer.StreamChat(ctx, a.messages, a.tools, streamEvents)
 
-		for ev := range streamEvents {
-			switch ev.Type {
-			case "text":
-				textAccum.WriteString(ev.Text)
-				if safeText := streamSanitizer.Consume(ev.Text); safeText != "" {
-					events <- Event{Type: "text", Text: safeText}
-				}
-
-			case "thinking":
-				events <- Event{Type: "thinking", Text: ev.Text}
-
-			case "usage":
-				if ev.Usage != nil {
-					usage = *ev.Usage
-					gotUsage = true
-				}
-
-			case "tool_call":
-				toolCalls = append(toolCalls, llm.ToolCall{
-					ID:   ev.ToolCallID,
-					Type: "function",
-					Function: llm.FunctionCall{
-						Name:      ev.ToolName,
-						Arguments: ev.ToolArgs,
-					},
-				})
-
-			case "error":
-				if errors.Is(ev.Error, context.Canceled) {
-					a.lastTurnState = turnStateCanceled
-				} else {
-					a.lastTurnState = turnStateErrored
-				}
-				events <- Event{Type: "state", State: StateIdle}
-				events <- Event{Type: "error", Error: ev.Error}
-				events <- Event{Type: "done"}
-				return
-
-			case "done":
-				if safeText := streamSanitizer.Flush(); safeText != "" {
-					events <- Event{Type: "text", Text: safeText}
-				}
-				// handled below
+	for ev := range streamEvents {
+		switch ev.Type {
+		case "text":
+			textAccum.WriteString(ev.Text)
+			if safeText := streamSanitizer.Consume(ev.Text); safeText != "" {
+				events <- Event{Type: "text", Text: safeText}
 			}
-		}
 
-		// Add assistant message to history
-		rawAssistantText := textAccum.String()
-		a.lastAssistantRaw = strings.TrimSpace(rawAssistantText)
-		assistantMsg := llm.Message{
-			Role:    "assistant",
-			Content: sanitizeAssistantText(rawAssistantText),
-		}
-		if len(toolCalls) > 0 {
-			assistantMsg.ToolCalls = toolCalls
-		}
-		a.messages = append(a.messages, assistantMsg)
+		case "thinking":
+			events <- Event{Type: "thinking", Text: ev.Text}
 
-		if gotUsage {
-			a.CostTracker.AddTokenUsage(usage)
-		} else {
-			a.CostTracker.AddUsage(estimatedInputTokens, textAccum.Len()/4)
-		}
+		case "usage":
+			if ev.Usage != nil {
+				a.CostTracker.AddTokenUsage(*ev.Usage)
+				gotUsage = true
+			}
 
-		// If no tool calls, we're done (maybe auto-next)
-		if len(toolCalls) == 0 {
-			a.lastTurnState = turnStateCompleted
-			a.lastCompletedFollowUp = kind
-			events <- Event{Type: "state", State: StateIdle}
-			events <- Event{Type: "done"}
-			return
-		}
-
-		// Execute tool calls
-		events <- Event{Type: "state", State: StateToolCall}
-
-		for _, tc := range toolCalls {
-			a.ToolCalls[tc.Function.Name]++
-
+		case "tool_call":
+			a.ToolCalls[ev.ToolName]++
+			events <- Event{Type: "state", State: StateToolCall}
 			events <- Event{
 				Type:     "tool_start",
-				ToolName: tc.Function.Name,
-				ToolArgs: tc.Function.Arguments,
+				ToolName: ev.ToolName,
+				ToolArgs: ev.ToolArgs,
 			}
 
-			result, err := a.tools.Execute(ctx, tc.Function.Name, tc.Function.Arguments)
+		case "tool_result":
+			events <- Event{
+				Type:       "tool_result",
+				ToolName:   ev.ToolName,
+				ToolResult: ev.Text,
+			}
 
-			if err != nil {
-				result = fmt.Sprintf("Error: %v", err)
-				events <- Event{
-					Type:       "tool_result",
-					ToolName:   tc.Function.Name,
-					ToolResult: result,
-					ToolError:  err,
-				}
+		case "error":
+			if errors.Is(ev.Error, context.Canceled) {
+				a.lastTurnState = turnStateCanceled
 			} else {
-				events <- Event{
-					Type:       "tool_result",
-					ToolName:   tc.Function.Name,
-					ToolResult: result,
-				}
+				a.lastTurnState = turnStateErrored
 			}
+			events <- Event{Type: "state", State: StateIdle}
+			events <- Event{Type: "error", Error: ev.Error}
+			events <- Event{Type: "done"}
+			return
 
-			// Add tool result to messages
-			a.messages = append(a.messages, llm.Message{
-				Role:       "tool",
-				Content:    result,
-				ToolCallID: tc.ID,
-			})
+		case "done":
+			if safeText := streamSanitizer.Flush(); safeText != "" {
+				events <- Event{Type: "text", Text: safeText}
+			}
+			a.messages = append(a.messages, ev.Messages...)
 		}
-
-		// Loop back to get the next LLM response (agent loop continues)
 	}
+
+	a.lastAssistantRaw = strings.TrimSpace(textAccum.String())
+	if !gotUsage {
+		a.CostTracker.AddUsage(estimatedInputTokens, textAccum.Len()/4)
+	}
+
+	a.lastTurnState = turnStateCompleted
+	a.lastCompletedFollowUp = kind
+	events <- Event{Type: "state", State: StateIdle}
+	events <- Event{Type: "done"}
 }
 
 func buildSystemPrompt(cfg *config.Config) string {

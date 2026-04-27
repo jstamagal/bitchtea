@@ -10,6 +10,7 @@ import (
 
 	"github.com/jstamagal/bitchtea/internal/config"
 	"github.com/jstamagal/bitchtea/internal/llm"
+	"github.com/jstamagal/bitchtea/internal/tools"
 )
 
 type fakeStreamer struct {
@@ -18,7 +19,7 @@ type fakeStreamer struct {
 	calls     int
 }
 
-func (f *fakeStreamer) StreamChat(_ context.Context, _ []llm.Message, _ []llm.ToolDef, events chan<- llm.StreamEvent) {
+func (f *fakeStreamer) StreamChat(_ context.Context, _ []llm.Message, _ *tools.Registry, events chan<- llm.StreamEvent) {
 	defer close(events)
 
 	f.mu.Lock()
