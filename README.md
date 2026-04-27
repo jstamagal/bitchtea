@@ -121,10 +121,6 @@ BITCHTEA_PROVIDER      Force provider (openai, anthropic)
 | `/profile save\|load\|delete <name>` | Manage saved profiles and load built-ins like `ollama`, `openrouter`, `zai-openai`, and `zai-anthropic` | Safe |
 | `/compact` | Compact conversation context | Moderate: rewrites in-memory context |
 | `/clear` | Clear chat display | Safe |
-| `/diff` | Show git diff | Safe |
-| `/status` | Show git status | Safe |
-| `/undo` | Preview tracked-file revert; use `/undo confirm` to restore all unstaged tracked files or `/undo <file>` to restore one tracked file | Destructive after preview |
-| `/commit [msg]` | Preview git state with no message, or commit tracked changes only with `git add -u` when a message is provided | Persistent: writes a git commit |
 | `/copy` | Copy the last assistant message | Safe |
 | `/tokens` | Show token usage estimate | Safe |
 | `/memory` | Show `MEMORY.md` from the current workspace | Safe |

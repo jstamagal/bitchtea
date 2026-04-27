@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"os"
-	"os/exec"
 	"strings"
 	"time"
 
@@ -1058,77 +1057,6 @@ func (m *Model) handleMP3Key(msg tea.KeyMsg) (bool, tea.Cmd) {
 		m.sysMsg(status)
 	}
 	return true, cmd
-}
-
-// runGit runs a git command and returns its output
-func runGit(workDir string, args ...string) string {
-	return strings.TrimSpace(runGitRaw(workDir, args...))
-}
-
-func runGitRaw(workDir string, args ...string) string {
-	cmd := exec.Command("git", args...)
-	cmd.Dir = workDir
-	out, _ := cmd.CombinedOutput()
-	return strings.TrimRight(string(out), "\n")
-}
-
-func gitUndoPreview(workDir string) string {
-	diff := runGit(workDir, "diff", "--stat", "--")
-	if diff == "" {
-		return "No unstaged tracked changes to revert.\nUsage: /undo confirm to revert all, or /undo <file> to revert one file."
-	}
-	return diff + "\nUsage: /undo confirm to revert all, or /undo <file> to revert one file."
-}
-
-func gitCommitPreview(workDir string) string {
-	status := runGitRaw(workDir, "status", "--short")
-	if status == "" {
-		return "Nothing to commit. Working tree clean."
-	}
-
-	var staged []string
-	var unstaged []string
-	var untracked []string
-
-	for _, line := range strings.Split(status, "\n") {
-		if strings.TrimSpace(line) == "" {
-			continue
-		}
-		path := strings.TrimSpace(line[2:])
-		switch {
-		case strings.HasPrefix(line, "??"):
-			untracked = append(untracked, path)
-		default:
-			if len(line) >= 1 && line[0] != ' ' {
-				staged = append(staged, path)
-			}
-			if len(line) >= 2 && line[1] != ' ' {
-				unstaged = append(unstaged, path)
-			}
-		}
-	}
-
-	var b strings.Builder
-	b.WriteString("Tracked changes only will be committed.\n")
-	writeGitPreviewSection(&b, "Staged", staged)
-	writeGitPreviewSection(&b, "Unstaged", unstaged)
-	writeGitPreviewSection(&b, "Untracked", untracked)
-	b.WriteString("Run /commit <message> to stage tracked changes with git add -u and commit.")
-	return b.String()
-}
-
-func writeGitPreviewSection(b *strings.Builder, heading string, items []string) {
-	b.WriteString(heading)
-	b.WriteString(":\n")
-	if len(items) == 0 {
-		b.WriteString("  (none)\n")
-		return
-	}
-	for _, item := range items {
-		b.WriteString("  ")
-		b.WriteString(item)
-		b.WriteByte('\n')
-	}
 }
 
 // formatTokens formats a token count nicely

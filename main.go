@@ -344,10 +344,6 @@ Commands (inside the TUI):
   /model <name>          Switch models
   /compact               Compact context
   /clear                 Clear chat display
-  /diff                  Show git diff
-  /status                Git status
-  /undo [confirm|file]   Preview tracked revert, confirm all, or restore one file
-  /commit [msg]          Preview git state or commit tracked changes only
   /tokens                Token usage estimate
   /sessions              List saved sessions
   /tree                  Show session tree

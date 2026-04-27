@@ -30,10 +30,6 @@ var slashCommandRegistry = registerSlashCommands(
 	slashCommandSpec{names: []string{"/model"}, handler: handleModelCommand},
 	slashCommandSpec{names: []string{"/clear"}, handler: handleClearCommand},
 	slashCommandSpec{names: []string{"/compact"}, handler: handleCompactCommand},
-	slashCommandSpec{names: []string{"/diff"}, handler: handleDiffCommand},
-	slashCommandSpec{names: []string{"/status"}, handler: handleStatusCommand},
-	slashCommandSpec{names: []string{"/undo"}, handler: handleUndoCommand},
-	slashCommandSpec{names: []string{"/commit"}, handler: handleCommitCommand},
 	slashCommandSpec{names: []string{"/copy"}, handler: handleCopyCommand},
 	slashCommandSpec{names: []string{"/tokens"}, handler: handleTokensCommand},
 	slashCommandSpec{names: []string{"/auto-next"}, handler: handleAutoNextCommand},
@@ -87,11 +83,7 @@ const helpCommandText = "Commands:\n" +
 	"  /profile [cmd]      save/load/delete profiles (built-ins: ollama, openrouter, etc.)\n" +
 	"  /compact            Compact conversation context\n" +
 	"  /clear              Clear chat display\n" +
-	"  /diff               Show git diff\n" +
-	"  /undo [confirm|file] Preview revert, confirm all, or revert one file\n" +
-	"  /commit [msg]       Preview git state or commit tracked changes only\n" +
 	"  /copy [n]           Copy last or nth assistant response\n" +
-	"  /status             Git status\n" +
 	"  /tokens             Token usage estimate\n" +
 	"  /memory             Show MEMORY.md contents\n" +
 	"  /sessions           List saved sessions\n" +
@@ -243,93 +235,6 @@ func handleCompactCommand(m Model, _ string, _ []string) (Model, tea.Cmd) {
 		after := m.agent.EstimateTokens()
 		m.sysMsg(fmt.Sprintf("Compacted: ~%s -> ~%s tokens", formatTokens(before), formatTokens(after)))
 	}
-	return m, nil
-}
-
-func handleDiffCommand(m Model, _ string, _ []string) (Model, tea.Cmd) {
-	output := runGit(m.config.WorkDir, "diff")
-	if output == "" {
-		output = "No changes. Clean as a whistle."
-	}
-	m.addMessage(ChatMessage{
-		Time:    time.Now(),
-		Type:    MsgRaw,
-		Content: "\033[1;36m--- git diff ---\033[0m\n" + output,
-	})
-	m.refreshViewport()
-	return m, nil
-}
-
-func handleStatusCommand(m Model, _ string, _ []string) (Model, tea.Cmd) {
-	output := runGit(m.config.WorkDir, "status", "--short")
-	if output == "" {
-		output = "Nothing to report. Working tree clean."
-	}
-	m.addMessage(ChatMessage{
-		Time:    time.Now(),
-		Type:    MsgRaw,
-		Content: "\033[1;36m--- git status ---\033[0m\n" + output,
-	})
-	m.refreshViewport()
-	return m, nil
-}
-
-func handleUndoCommand(m Model, input string, parts []string) (Model, tea.Cmd) {
-	switch {
-	case len(parts) == 1:
-		preview := gitUndoPreview(m.config.WorkDir)
-		m.addMessage(ChatMessage{
-			Time:    time.Now(),
-			Type:    MsgRaw,
-			Content: "\033[1;36m--- /undo preview ---\033[0m\n" + preview,
-		})
-		m.refreshViewport()
-	case len(parts) == 2 && parts[1] == "confirm":
-		output := runGit(m.config.WorkDir, "restore", "--worktree", "--", ".")
-		if output == "" {
-			output = "Reverted all unstaged tracked changes."
-		} else {
-			output = "Reverted all unstaged tracked changes.\n" + output
-		}
-		m.sysMsg(output)
-	default:
-		target := strings.TrimSpace(strings.TrimPrefix(input, parts[0]))
-		output := runGit(m.config.WorkDir, "restore", "--worktree", "--", target)
-		if output == "" {
-			output = fmt.Sprintf("Reverted unstaged changes for %s.", target)
-		} else {
-			output = fmt.Sprintf("Reverted unstaged changes for %s.\n%s", target, output)
-		}
-		m.sysMsg(output)
-	}
-	return m, nil
-}
-
-func handleCommitCommand(m Model, input string, parts []string) (Model, tea.Cmd) {
-	if len(parts) == 1 {
-		preview := gitCommitPreview(m.config.WorkDir)
-		m.addMessage(ChatMessage{
-			Time:    time.Now(),
-			Type:    MsgRaw,
-			Content: "\033[1;36m--- /commit preview ---\033[0m\n" + preview,
-		})
-		m.refreshViewport()
-		return m, nil
-	}
-
-	msg := strings.TrimSpace(strings.TrimPrefix(input, parts[0]))
-	if msg == "" {
-		m.errMsg("Usage: /commit <message>")
-		return m, nil
-	}
-
-	runGit(m.config.WorkDir, "add", "-u")
-	output := runGit(m.config.WorkDir, "commit", "-m", msg)
-	if strings.Contains(output, "nothing to commit") || strings.Contains(output, "no changes added to commit") {
-		m.sysMsg("Nothing to commit. Only tracked changes are staged by /commit.")
-		return m, nil
-	}
-	m.sysMsg("Committed: " + output)
 	return m, nil
 }
 
