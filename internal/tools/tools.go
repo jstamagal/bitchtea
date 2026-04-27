@@ -11,7 +11,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/jstamagal/bitchtea/internal/llm"
 	memorypkg "github.com/jstamagal/bitchtea/internal/memory"
 )
 

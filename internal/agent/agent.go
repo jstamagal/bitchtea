@@ -11,7 +11,6 @@ import (
 	"time"
 
 	"github.com/jstamagal/bitchtea/internal/config"
-	"github.com/jstamagal/bitchtea/internal/llm"
 	"github.com/jstamagal/bitchtea/internal/tools"
 )
 

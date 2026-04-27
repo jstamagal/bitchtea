@@ -15,7 +15,6 @@ import (
 
 	"github.com/jstamagal/bitchtea/internal/agent"
 	"github.com/jstamagal/bitchtea/internal/config"
-	"github.com/jstamagal/bitchtea/internal/llm"
 	"github.com/jstamagal/bitchtea/internal/session"
 	"github.com/jstamagal/bitchtea/internal/sound"
 )
