@@ -1,39 +1,28 @@
-# 🦍 MEMORY TIERS 🦍
+# 🦍 THE BITCHTEA SCROLLS: MEMORY & SCOPE
 
-This scroll documents how `bitchtea` remembers and forgets. 
+Bitchtea's memory is hierarchical, mapping directly to IRC-style contexts.
 
-## 1. IRC Tiers & Scope (`internal/memory/memory.go:22`)
+## 🏛️ IRC TIERS (MemoryScope)
 
-Memory is partitioned into hierarchical scopes to prevent context pollution.
+Defined in `internal/memory/memory.go`, scopes follow a nested structure:
 
-- **`ScopeRoot`**: The global truth. Maps to `MEMORY.md` at the project root.
-- **`ScopeChannel`**: Context-specific memory. Maps to a `HOT.md` file for a specific IRC channel.
-- **`ScopeQuery`**: Private DM memory.
+1. **`Root`**: The global project scope. Uses `MEMORY.md` in the work directory.
+2. **`Channel`**: A named context (e.g., `#frontend`). Uses `HOT.md` and durable daily logs.
+3. **`Query`**: A direct persona/nick context.
 
-### Inheritance
-When searching memory (`SearchInScope`), the agent walks the **lineage** from the current scope up to the Root scope. This allows a channel to "inherit" global project knowledge (`memory.go:308`).
+### 🧬 Scope Discovery (`internal/agent/context.go:13`)
+When a turn starts, the agent walks the tree:
+- **Project Files**: Checks for `AGENTS.md`, `CLAUDE.md`, etc., from the CWD up to the system root.
+- **Hot Memory**: Loads `MEMORY.md` (root) or scoped `HOT.md`.
+- **Durable Memory**: Pulls from daily logs (e.g., `2026-04-27.md`) based on the active scope.
 
-## 2. Memory Discovery
+## 🔍 SEARCH & RECALL
 
-The agent automatically scans the canopy as it swings. 
+The `search_memory` tool triggers `memorypkg.SearchInScope`. It performs:
+- **Inheritance**: Searches the active scope *and* all parent scopes (e.g., `#ui/sidebar` searches `#ui` then `root`).
+- **Context Injection**: Hits are returned to the LLM to ground the current turn in prior decisions.
 
-### Discovery Walking (`internal/agent/context.go:14`)
-`DiscoverContextFiles` walks UP from the working directory to the system root, looking for:
-- `AGENTS.md`
-- `CLAUDE.md`
-- `.agents.md`
-- `.claude.md`
+## 💾 COMPACTION FLUSH (`internal/agent/compact_test.go:154`)
+During `/compact`, the agent extracts durable facts (decisions, work done) and appends them to the **Daily Memory Path** before shrinking the active history. This ensures that while the context window stays small, the "knowledge" is never lost.
 
-These are concatenated and injected into the system prompt to provide project-specific rules.
-
-### @File Expansion (`internal/agent/context.go:130`)
-Inline file references (e.g., `fix @main.go`) are expanded into the prompt with their actual contents before being sent to the LLM.
-
-## 3. Storage Paths
-
-- **Hot Memory**: `~/.bitchtea/memory/<scope-hash>/contexts/<path>/HOT.md`
-- **Daily Memory**: `~/.bitchtea/memory/<scope-hash>/daily/YYYY-MM-DD.md`
-
-When a conversation is compacted, old entries are flushed to the daily memory files to keep the context window lean while preserving the "bones" for later recall (`memory.go:114`).
-
-APE STRONK TOGETHER. 🦍💪🤝
+🦍💪🤝 APES STRONK TOGETHER 🦍💪🤝

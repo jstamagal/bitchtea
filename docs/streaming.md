@@ -1,51 +1,35 @@
-# 🦍 STREAMING & LLM SHIM 🦍
+# 🦍 THE BITCHTEA SCROLLS: STREAMING & LLM
 
-This scroll documents the token pulse of `bitchtea` post-fantasy migration.
+Bitchtea talks to models through a unified streaming interface.
 
-## 1. The `StreamEvent` Contract
+## 📡 THE STREAMER CONTRACT
 
-`internal/llm/types.go` defines the `StreamEvent` struct used to communicate
-between the provider transport and the agent.
+Defined in `internal/llm/types.go`, the `ChatStreamer` interface is the minimal surface for communication:
 
-### Event Types
-- **`text`**: Standard assistant response chunk.
-- **`thinking`**: Reasoning tokens (Anthropic and reasoning models).
-- **`tool_call`**: Request for tool execution (`ToolCallID`, `ToolName`, `ToolArgs`).
-- **`tool_result`**: Tool finished — `ToolCallID`, `ToolName`, `Text` payload.
-- **`usage`**: Per-stream token usage report (one per step in fantasy).
-- **`error`**: Transport, provider, or context-cancellation failure.
-- **`done`**: Terminal event. Carries `Messages []Message` — the rebuilt
-  transcript from `result.Steps[].Messages`. The agent layer appends these
-  to its own `a.messages` log on receipt.
+```go
+type ChatStreamer interface {
+    StreamChat(ctx context.Context, messages []Message, reg *tools.Registry, events chan<- StreamEvent)
+}
+```
 
-## 2. The Fantasy Shim (`internal/llm`)
+### `StreamEvent` Types:
+- **`text`**: Incremental tokens of the response.
+- **`thinking`**: Internal model reasoning (if supported, e.g., O1/O3).
+- **`tool_call`**: A request to run a tool.
+- **`tool_result`**: The output of a tool execution.
+- **`usage`**: Final token counts for cost estimation.
+- **`done`**: Signal that the turn is finished, carries the final `Messages`.
 
-`internal/llm` is a thin shim over `charm.land/fantasy v0.17.1`.
+## 🔌 THE FANTASY SHIM
 
-- **Interface**: `ChatStreamer` (`internal/llm/types.go`). Signature:
-  `StreamChat(ctx, messages, *tools.Registry, events chan<- StreamEvent)`.
-  The Registry parameter (not `[]ToolDef`) lets the shim bind tool `Run`
-  callbacks directly to `Registry.Execute`.
-- **Implementation**: `Client.StreamChat` (`internal/llm/stream.go`)
-  builds a `fantasy.Agent`, wires every callback (`OnTextDelta`,
-  `OnReasoningDelta`, `OnToolCall`, `OnToolResult`, `OnStreamFinish`,
-  `OnError`, `PrepareStep`), and runs `fa.Stream`. Fantasy owns the
-  inner agent loop — it dispatches tool calls into `bitchteaTool.Run`
-  (`internal/llm/tools.go`) and feeds results back to the model.
-- **Transcript**: After `Stream` returns, the shim walks
-  `result.Steps[].Messages`, converts each via `fantasyToLLM`
-  (`internal/llm/convert.go`), and ships the slice on the `done` event.
-- **Stop condition**: `fantasy.WithStopConditions(fantasy.StepCountIs(64))`.
+Bitchtea uses `charm.land/fantasy` as its multi-provider engine. The `llm.Client` (in `internal/llm/client.go`) wraps this to provide:
 
-## 3. Cancellation & Errors
+1. **Lazy Initialization**: Providers and models are only built when needed.
+2. **Provider Switching**: Seamless transition between OpenAI, Anthropic, and local Ollama.
+3. **Debug Hooks**: Intercepts raw HTTP requests/responses for `/debug on` mode.
 
-- **Cancellation**: All channel sends from inside fantasy callbacks go
-  through `safeSend`, which selects on `ctx.Done()`. A canceled context
-  bubbles `ctx.Err()` back into fantasy and aborts the stream cleanly.
-- **Provider errors**: Surface as `*fantasy.ProviderError` on the `error`
-  event. The UI dispatches `ErrorHint` (`internal/llm/errors.go`) on this
-  type to render a one-line status hint.
-- **Retries**: Fantasy handles retryable HTTP statuses (408/429/5xx)
-  internally via `ProviderError.IsRetryable()`. The shim does not retry.
+## 💰 COST TRACKING
 
-APE STRONK TOGETHER. 🦍💪🤝
+The `CostTracker` (in `internal/llm/cost.go`) estimates USD spend in real-time based on input/output tokens and model-specific pricing tiers.
+
+🦍💪🤝 APES STRONK TOGETHER 🦍💪🤝

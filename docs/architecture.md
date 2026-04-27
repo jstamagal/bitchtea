@@ -1,47 +1,58 @@
-# 🦍 BITCHTEA ARCHITECTURE 🦍
+# 🦍 THE BITCHTEA SCROLLS: ARCHITECTURE
 
-This scroll maps the deep vines of `bitchtea`. It is for those who wish to see how the canopy is built.
+Bitchtea is a terminal-native agent harness built for power and speed. It follows the **Green Dark** philosophy: minimal friction, maximal action.
 
-## 1. Package Map & Rationale
+## 🗺️ PACKAGE MAP
 
-The project is strictly partitioned into `internal/` packages to maintain an acyclic dependency graph. This ensures the brain (`agent`) does not depend on the eyes (`ui`).
+### 🏛️ Core Brain & Orchestration
+- **`main.go`**: The anchor. Handles CLI flags, profile loading, and boots either the TUI or Headless mode.
+- **`internal/agent`**: The soul. Manages conversation history (`llm.Message`), system prompts, and the autonomous loop.
+  - `agent.go`: The `Agent` struct and `SendMessage` orchestration.
+  - `context.go`: Discovers project-specific context files (`AGENTS.md`, `ARCHITECTURE.md`).
 
-- **`main`**: The root. Handles CLI flags (`main.go:108`) and boots the Bubble Tea program (`main.go:85`).
-- **`internal/ui`**: The presentation layer. Built on `charmbracelet/bubbletea`. It is a pure Model-View-Update engine.
-- **`internal/agent`**: The orchestration engine. Manages the autonomous "fantasy" loop and tool-calling state (`internal/agent/agent.go`).
-- **`internal/config`**: Global configuration, environment variables, and profiles (`internal/config/config.go`).
-- **`internal/llm`**: [IN FLUX] A thin abstraction over LLM providers. Currently transitioning to a shim over `charm.land/fantasy`.
-- **`internal/session`**: Persistence. Manages the JSONL append-only logs (`internal/session/session.go`).
-- **`internal/memory`**: Tiered memory storage (Root, Channel, Daily).
-- **`internal/tools`**: Registry of local capabilities (bash, read, write).
-- **`internal/sound`**: Audio feedback (MP3 notifications).
+### 🖥️ User Interface
+- **`internal/ui`**: The body. A [Bubbletea](https://github.com/charmbracelet/bubbletea) TUI.
+  - `model.go`: Top-level TUI state.
+  - `commands.go`: Slash-command handlers (`/model`, `/compact`, etc.).
+  - `render.go`: Styled viewport rendering.
 
-## 2. Dependency Graph (Acyclic Law)
+### 🛠️ Capabilities & Infrastructure
+- **`internal/llm`**: The connection. Wraps the `fantasy` library to talk to OpenAI, Anthropic, etc.
+- **`internal/tools`**: The hands. Implementation of file manipulation, bash execution, and persistent terminals.
+- **`internal/session`**: The memory bank. Persistence of chat history as JSONL.
+- **`internal/memory`**: The long-term archive. Manages `MEMORY.md` and daily memory logs.
+- **`internal/config`**: The settings. Global defaults and profile management.
 
-The sap must only flow one way. If the vines tangle (circular dependencies), the tree dies.
+## 📐 DEPENDENCY GRAPH RATIONALE
 
-- `main` -> `config`, `session`, `ui` (`main.go:14-17`)
-- `ui` -> `agent`, `config`, `llm`, `session`, `sound` (`internal/ui/model.go:16-20`)
-- `agent` -> `config`, `llm`, `tools` (`internal/agent/agent.go:13-15`)
-- `session` -> `llm` (`internal/session/session.go:13`)
-- `tools` -> `llm` (`internal/tools/tools.go:15`)
+\`\`\`mermaid
+graph TD
+    main --> ui
+    main --> agent
+    ui --> agent
+    ui --> session
+    agent --> llm
+    agent --> tools
+    tools --> memory
+    agent --> config
+\`\`\`
 
-**Why Acyclic?** Isolation. We can test the `agent` in a headless environment (`main.go:73`) without ever initializing the `ui`.
+1. **Separation of Concerns**: The \`agent\` is agnostic of the TUI. It communicates via channels (\`agent.Event\`), allowing it to run in \`headless\` mode (see \`runHeadless\` in \`main.go:210\`).
+2. **Persistence Layer**: \`session\` and \`memory\` are decoupled. \`session\` tracks the immediate conversation; \`memory\` tracks durable facts across sessions.
+3. **Lazy Tooling**: \`tools.Registry\` is initialized by the \`agent\` but tools are only executed when the LLM requests them.
 
-## 3. Runtime State Machine
+## 🌀 RUNTIME STATE MACHINE
 
-The `agent` tracks its internal rhythm via the `State` type (`internal/agent/agent.go:19`):
+The system operates in three primary states defined in \`internal/agent/agent.go:218\`:
 
-- **`StateIdle` (0)**: Waiting for user command or tool results to settle.
-- **`StateThinking` (1)**: The LLM is processing. Tokens are streaming.
-- **`StateToolCall` (2)**: A local tool (e.g., `bash`) is executing.
+1. **\`StateIdle\`**: Waiting for KING (user) input.
+2. **\`StateThinking\`**: LLM is processing the prompt. TUI shows a spinner and "thinking..." placeholder.
+3. **\`StateToolCall\`**: A tool is executing. TUI displays the tool name and arguments.
 
-## 4. Event Flow (Eyes & Brain)
+### Turn Lifecycle:
+- **\`turnStateIdle\`**: Default state.
+- **\`turnStateCompleted\`**: Successful response received.
+- **\`turnStateErrored\`**: API or Tool failure.
+- **\`turnStateCanceled\`**: User hit \`Ctrl+C\`.
 
-The `agent` communicates with the `ui` via a channel of `agent.Event` structs (`internal/agent/agent.go:28`). 
-
-1. `agent` emits an `Event` (e.g., Type: "text").
-2. `ui` model receives this in its `Update` loop as an `agentEventMsg` (`internal/ui/model.go:28`).
-3. `ui` routes the content into the `viewport` and triggers a re-render.
-
-APE STRONK TOGETHER. 🦍💪🤝
+🦍💪🤝 APES STRONK TOGETHER 🦍💪🤝

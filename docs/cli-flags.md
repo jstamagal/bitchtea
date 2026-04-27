@@ -1,14 +1,31 @@
-# 🦍 CLI FLAGS 🦍
+# 🦍 BITCHTEA: CLI FLAGS
 
-Arguments you pass when starting `bitchtea` from your shell.
+Control the launch from the terminal.
 
-- **--resume, -r [path|latest]**: Resume a previous session. "latest" picks the newest file.
-- **--profile, -p <name>**: Load a saved profile (e.g., `ollama`, `openrouter`).
-- **--model, -m <name>**: Override the default model ID.
-- **--prompt <text>**: Send an initial message immediately on startup.
-- **--headless, -H**: Run without the TUI. Best for piping output or scripts.
-- **--auto-next-steps**: Enable automatic tool-chaining from the start.
-- **--auto-next-idea**: Enable automatic idea suggestions from the start.
-- **--help, -h**: Show the usage summary and exit.
+## 🚀 PRIMARY FLAGS
 
-APE STRONK TOGETHER. 🦍💪🤝
+- **`-m, --model <name>`**: Set the model on startup (overrides default).
+- **`-p, --profile <name>`**: Load a specific saved profile (e.g., `ollama`, `zai-openai`).
+- **`-r, --resume [path]`**: Resume a session. If no path given, resumes the `latest`.
+- **`-H, --headless`**: Run in "one-shot" mode without the TUI. Requires `--prompt`.
+
+## 🤖 AUTOMATION FLAGS
+
+- **`--prompt <text>`**: The message to send in headless mode.
+- **`--auto-next-steps`**: Automatically trigger the "next steps" follow-up loop.
+- **`--auto-next-idea`**: Automatically trigger the "improvement idea" follow-up loop.
+
+## ℹ️ INFO FLAGS
+
+- **`-h, --help`**: Show usage and flag descriptions.
+
+## 🌍 ENVIRONMENT VARIABLES
+
+- **`OPENAI_API_KEY`**: Key for OpenAI models.
+- **`ANTHROPIC_API_KEY`**: Key for Anthropic models.
+- **`OPENROUTER_API_KEY`**: Key for OpenRouter profile.
+- **`ZAI_API_KEY`**: Key for Z.ai profiles.
+- **`BITCHTEA_MODEL`**: Default model name.
+- **`BITCHTEA_PROVIDER`**: Default provider (openai/anthropic).
+
+🦍💪🤝 APES STRONK TOGETHER 🦍💪🤝

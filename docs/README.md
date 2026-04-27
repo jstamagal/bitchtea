@@ -1,26 +1,24 @@
-# 🦍 BITCHTEA DOCUMENTATION 🦍
+# 🦍 BITCHTEA DOCUMENTATION
 
-The sacred scrolls of the canopy. 
+Welcome to the Green Dark. This is the master index for the soul of bitchtea.
 
-## 📜 Core Architecture (The Elders)
-- [**Architecture**](architecture.md) — Package map, dependency graph, and state machine.
-- [**Agent Loop**](agent-loop.md) — The autonomous turn-taking logic and tool execution cycle.
+## 📜 SACRED SCROLLS
 
-## 🛠️ Gears & Grease (The Strong)
-- [**Tools**](tools.md) — Catalog of built-in capabilities (bash, read, write, edit).
-- [**Streaming**](streaming.md) — The LLM streaming event contract and internal/llm shim.
-- [**Development**](development.md) — How to add commands, tools, and run tests.
-- [**Sessions**](sessions.md) — JSONL format, entry fields, and resume/fork/tree logic.
-- [**Memory**](memory.md) — IRC-style memory tiers and context discovery.
-- [**Signals & Keys**](signals-and-keys.md) — Keyboard controls and signal handling spec.
+1. **[Architecture](architecture.md)**: The high-level package map, dependency rationale, and runtime state machine.
+2. **[Agent Loop](agent-loop.md)**: Deep dive into the `SendMessage` flow, tool execution, and autonomous follow-up logic.
 
-## 🍌 For the Young (The Little)
-- [**Getting Started**](getting-started.md) — Installation and your first prompt.
-- [**User Guide**](user-guide.md) — Daily usage, @file refs, and tool monitoring.
-- [**Troubleshooting**](troubleshooting.md) — Common errors and how to reset state.
-- [**Commands**](commands.md) — Exhaustive catalog of REPL slash commands.
-- [**CLI Flags**](cli-flags.md) — Command-line argument reference.
-- [**Glossary**](glossary.md) — Definitions for project-specific terms.
+## 🗺️ QUICK MAP
 
----
-*APES STRONK TOGETHER.* 🦍💪🤝
+- **Brain**: `internal/agent/agent.go`
+- **Body**: `internal/ui/model.go`
+- **Hands**: `internal/tools/tools.go`
+- **Memory**: `internal/memory/memory.go`
+- **Entry**: `main.go`
+
+## 🦍 PHILOSOPHY
+
+- **Result First**: No preambles. No "I can help with that." Just action.
+- **Autonomous**: If there is work to do, do it.
+- **Power**: Full shell access, persistent terminals, file manipulation.
+
+🦍💪🤝 APES STRONK TOGETHER 🦍💪🤝

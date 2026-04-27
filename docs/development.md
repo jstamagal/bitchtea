@@ -1,35 +1,34 @@
-# 🦍 DEVELOPMENT GUIDE 🦍
+# 🦍 THE BITCHTEA SCROLLS: DEVELOPMENT
 
-This scroll is for the apes building the tree. 
+How to feed and grow the ape.
 
-## 1. Required Checks
+## 🧪 TESTING PATTERNS
 
-Before you commit or close a task, the "Canopy Four" must pass:
-```bash
-go build ./...
-go test ./...
-go test -race ./...
-go vet ./...
-```
+- **Headless Tests**: Use `runHeadlessLoop` with a `scriptedStreamer` to verify agent logic without the TUI (see `main_test.go`).
+- **Package Tests**: Every internal package should have `*_test.go` verifying its core logic.
+- **MAMA Rule**: Witness the failure before applying the fix.
 
-## 2. Adding a Slash Command
+## 🛠️ ADDING NEW TOOLS
 
-1.  **Logic**: Implement the logic in `internal/ui/model.go` under `handleCommand`.
-2.  **Registration**: Wire it into the `switch` block.
-3.  **UI**: Ensure it returns a `tea.Cmd` if it performs side effects.
-4.  **Testing**: Add a test case in `internal/ui/commands_test.go`.
+1. **Define Schema**: Add a new `ToolDef` to `Registry.Definitions()` in `internal/tools/tools.go`.
+2. **Implement Logic**: Create a private `execNewTool` method in `internal/tools/tools.go`.
+3. **Route**: Add a case to the switch in `Registry.Execute()`.
 
-## 3. Adding a Tool
+## ⌨️ ADDING SLASH COMMANDS
 
-1.  **Definition**: Add the JSON schema to `Definitions()` in `internal/tools/tools.go`.
-2.  **Dispatch**: Add a `case` to the `Execute()` method.
-3.  **Implementation**: Write the `execYourTool` function. Handle paths with `resolvePath`.
-4.  **Testing**: Add a test in `internal/tools/tools_test.go`.
+1. **Handler**: Create a function with signature `func(Model, string, []string) (Model, tea.Cmd)` in `internal/ui/commands.go`.
+2. **Register**: Add the command name and handler to the `slashCommandRegistry` at the top of the file.
 
-## 4. Testing Patterns
+## 🏗️ REQUIRED CHECKS
 
-- **Fake Streamers**: Do not call real APIs in tests. Use the `fakeStreamer` pattern in `internal/agent/agent_loop_test.go`.
-- **Hermetic Filesystem**: Use `t.TempDir()` for all tests that read/write files.
-- **Non-Blocking**: Ensure `Update()` in the UI never blocks. Use goroutines and channels to feed messages back to the model.
+Before shipping code:
+- **`go fmt ./...`**: Keep the metal clean.
+- **`go test ./...`**: Don't break the jungle.
+- **`go build`**: Ensure it compiles.
 
-APE STRONK TOGETHER. 🦍💪🤝
+## 🦍 PERSONA COMPLIANCE
+
+- All code comments must be in **Ape-speak**.
+- The `Agent` must always anchor the persona via `buildPersonaAnchor` in `internal/agent/agent.go`.
+
+🦍💪🤝 APES STRONK TOGETHER 🦍💪🤝

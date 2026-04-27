@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	tea "github.com/charmbracelet/bubbletea"
 	"github.com/jstamagal/bitchtea/internal/agent"
 	"github.com/jstamagal/bitchtea/internal/config"
 	"github.com/jstamagal/bitchtea/internal/llm"
@@ -53,6 +54,350 @@ func TestSendToAgentCancelsPreviousContext(t *testing.T) {
 	}
 	if !model.streaming {
 		t.Fatal("expected model to enter streaming state")
+	}
+}
+
+func TestUpUnqueuesLastQueuedMessage(t *testing.T) {
+	cfg := config.DefaultConfig()
+	cfg.WorkDir = t.TempDir()
+	cfg.SessionDir = t.TempDir()
+
+	model := NewModel(&cfg)
+	model.queued = []string{"first", "second"}
+
+	updated, _ := model.Update(tea.KeyMsg{Type: tea.KeyUp})
+	got := updated.(Model)
+
+	if len(got.queued) != 1 || got.queued[0] != "first" {
+		t.Fatalf("expected last queued message to be removed, got %#v", got.queued)
+	}
+	if got.input.Value() != "second" {
+		t.Fatalf("expected unqueued message in input, got %q", got.input.Value())
+	}
+}
+
+func TestCtrlCCancelsTurnWithoutClearingQueue(t *testing.T) {
+	cfg := config.DefaultConfig()
+	cfg.WorkDir = t.TempDir()
+	cfg.SessionDir = t.TempDir()
+
+	model := NewModel(&cfg)
+	model.streaming = true
+	model.queued = []string{"first", "second"}
+	canceled := false
+	model.cancel = func() { canceled = true }
+
+	updated, _ := model.Update(tea.KeyMsg{Type: tea.KeyCtrlC})
+	got := updated.(Model)
+
+	if !canceled {
+		t.Fatal("expected ctrl+c to cancel active turn")
+	}
+	if got.streaming {
+		t.Fatal("expected ctrl+c to stop streaming")
+	}
+	if len(got.queued) != 2 {
+		t.Fatalf("expected first ctrl+c to leave queued messages intact, got %#v", got.queued)
+	}
+	if got.queueClearArmed {
+		t.Fatal("expected ctrl+c not to arm queue clearing")
+	}
+	if got.ctrlCStage != 1 {
+		t.Fatalf("expected first ctrl+c to set stage 1, got %d", got.ctrlCStage)
+	}
+	if len(got.messages) == 0 || !strings.Contains(got.messages[len(got.messages)-1].Content, "Press Ctrl+C again to clear") {
+		t.Fatalf("expected ctrl+c feedback to report queued messages, got %#v", got.messages)
+	}
+}
+
+func TestSecondCtrlCClearsQueueAfterCancellingTurn(t *testing.T) {
+	cfg := config.DefaultConfig()
+	cfg.WorkDir = t.TempDir()
+	cfg.SessionDir = t.TempDir()
+
+	model := NewModel(&cfg)
+	model.streaming = true
+	model.queued = []string{"first", "second"}
+	model.cancel = func() {}
+
+	updated, _ := model.Update(tea.KeyMsg{Type: tea.KeyCtrlC})
+	updated, cmd := updated.(Model).Update(tea.KeyMsg{Type: tea.KeyCtrlC})
+	got := updated.(Model)
+
+	if cmd != nil {
+		t.Fatal("expected second ctrl+c to clear queue without quitting")
+	}
+	if len(got.queued) != 0 {
+		t.Fatalf("expected second ctrl+c to clear queued messages, got %#v", got.queued)
+	}
+	if got.queueClearArmed {
+		t.Fatal("expected ctrl+c not to arm queue clearing")
+	}
+	if got.ctrlCStage != 2 {
+		t.Fatalf("expected second ctrl+c to set stage 2, got %d", got.ctrlCStage)
+	}
+}
+
+func TestThirdCtrlCQuitsWithinWindow(t *testing.T) {
+	cfg := config.DefaultConfig()
+	cfg.WorkDir = t.TempDir()
+	cfg.SessionDir = t.TempDir()
+
+	model := NewModel(&cfg)
+	model.streaming = true
+	model.queued = []string{"first", "second"}
+	model.cancel = func() {}
+
+	updated, _ := model.Update(tea.KeyMsg{Type: tea.KeyCtrlC})
+	updated, _ = updated.(Model).Update(tea.KeyMsg{Type: tea.KeyCtrlC})
+	_, cmd := updated.(Model).Update(tea.KeyMsg{Type: tea.KeyCtrlC})
+
+	if cmd == nil {
+		t.Fatal("expected third ctrl+c within window to quit")
+	}
+}
+
+func TestCtrlCSequenceResetsAfterTimeout(t *testing.T) {
+	cfg := config.DefaultConfig()
+	cfg.WorkDir = t.TempDir()
+	cfg.SessionDir = t.TempDir()
+
+	model := NewModel(&cfg)
+	model.ctrlCStage = 2
+	model.ctrlCLast = time.Now().Add(-2 * ctrlCGraduationWindow)
+
+	updated, cmd := model.Update(tea.KeyMsg{Type: tea.KeyCtrlC})
+	got := updated.(Model)
+
+	if cmd != nil {
+		t.Fatal("expected ctrl+c after timeout not to quit")
+	}
+	if got.ctrlCStage != 1 {
+		t.Fatalf("expected ctrl+c stage to reset to 1, got %d", got.ctrlCStage)
+	}
+	if len(got.messages) == 0 || !strings.Contains(got.messages[len(got.messages)-1].Content, "twice more") {
+		t.Fatalf("expected reset ctrl+c feedback, got %#v", got.messages)
+	}
+}
+
+func TestCancelledTurnDoneDoesNotDrainQueue(t *testing.T) {
+	cfg := config.DefaultConfig()
+	cfg.WorkDir = t.TempDir()
+	cfg.SessionDir = t.TempDir()
+
+	model := NewModel(&cfg)
+	oldCh := make(chan agent.Event)
+	model.eventCh = oldCh
+	model.streaming = true
+	model.queued = []string{"next"}
+	model.cancel = func() {}
+
+	updated, _ := model.Update(tea.KeyMsg{Type: tea.KeyCtrlC})
+	got := updated.(Model)
+	updated, cmd := got.Update(agentDoneMsg{ch: oldCh})
+	got = updated.(Model)
+
+	if cmd != nil {
+		t.Fatal("expected stale done after ctrl+c to produce no command")
+	}
+	if len(got.queued) != 1 || got.queued[0] != "next" {
+		t.Fatalf("expected stale done after ctrl+c to leave queue alone, got %#v", got.queued)
+	}
+	if got.streaming {
+		t.Fatal("expected ctrl+c to leave model stopped")
+	}
+}
+
+func TestFirstEscDuringStreamingPromptsForTurnCancel(t *testing.T) {
+	cfg := config.DefaultConfig()
+	cfg.WorkDir = t.TempDir()
+	cfg.SessionDir = t.TempDir()
+
+	model := NewModel(&cfg)
+	model.streaming = true
+	model.queued = []string{"first", "second"}
+	canceled := false
+	model.cancel = func() { canceled = true }
+
+	updated, _ := model.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	got := updated.(Model)
+
+	if canceled {
+		t.Fatal("expected first esc without active tool to leave turn running")
+	}
+	if !got.streaming {
+		t.Fatal("expected first esc without active tool to leave streaming on")
+	}
+	if len(got.queued) != 2 {
+		t.Fatalf("expected first esc to keep queued messages, got %#v", got.queued)
+	}
+	if len(got.messages) == 0 || !strings.Contains(got.messages[len(got.messages)-1].Content, "Press Esc again to cancel the turn") {
+		t.Fatalf("expected first esc feedback, got %#v", got.messages)
+	}
+}
+
+func TestSecondEscCancelsTurnWithoutClearingQueue(t *testing.T) {
+	cfg := config.DefaultConfig()
+	cfg.WorkDir = t.TempDir()
+	cfg.SessionDir = t.TempDir()
+
+	model := NewModel(&cfg)
+	model.streaming = true
+	model.queued = []string{"first", "second"}
+	canceled := false
+	model.cancel = func() { canceled = true }
+
+	updated, _ := model.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	updated, _ = updated.(Model).Update(tea.KeyMsg{Type: tea.KeyEsc})
+	got := updated.(Model)
+
+	if !canceled {
+		t.Fatal("expected second esc to cancel active turn")
+	}
+	if got.streaming {
+		t.Fatal("expected second esc to stop streaming")
+	}
+	if len(got.queued) != 2 {
+		t.Fatalf("expected second esc to preserve queued messages, got %#v", got.queued)
+	}
+	if !got.queueClearArmed {
+		t.Fatal("expected second esc to arm queue clearing")
+	}
+	if len(got.messages) == 0 || !strings.Contains(got.messages[len(got.messages)-1].Content, "press Esc again to clear them") {
+		t.Fatalf("expected second esc feedback to report queued messages, got %#v", got.messages)
+	}
+}
+
+func TestThirdEscClearsQueueAfterTurnCancel(t *testing.T) {
+	cfg := config.DefaultConfig()
+	cfg.WorkDir = t.TempDir()
+	cfg.SessionDir = t.TempDir()
+
+	model := NewModel(&cfg)
+	model.streaming = true
+	model.queued = []string{"first", "second"}
+	model.cancel = func() {}
+
+	updated, _ := model.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	updated, _ = updated.(Model).Update(tea.KeyMsg{Type: tea.KeyEsc})
+	updated, _ = updated.(Model).Update(tea.KeyMsg{Type: tea.KeyEsc})
+	got := updated.(Model)
+
+	if len(got.queued) != 0 {
+		t.Fatalf("expected third esc to clear queued messages, got %#v", got.queued)
+	}
+	if got.queueClearArmed {
+		t.Fatal("expected queue clear arm to reset after clearing")
+	}
+}
+
+func TestEscSequenceResetsAfterTimeout(t *testing.T) {
+	cfg := config.DefaultConfig()
+	cfg.WorkDir = t.TempDir()
+	cfg.SessionDir = t.TempDir()
+
+	model := NewModel(&cfg)
+	model.streaming = true
+	model.queued = []string{"first"}
+	canceled := false
+	model.cancel = func() { canceled = true }
+	model.escStage = 1
+	model.escLast = time.Now().Add(-2 * escGraduationWindow)
+
+	updated, _ := model.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	got := updated.(Model)
+
+	if canceled {
+		t.Fatal("expected esc after timeout to restart at stage 1")
+	}
+	if !got.streaming {
+		t.Fatal("expected esc after timeout to leave turn running")
+	}
+	if got.escStage != 1 {
+		t.Fatalf("expected esc stage to reset to 1, got %d", got.escStage)
+	}
+}
+
+func TestFirstEscDuringRunningToolFallsBackToTurnCancel(t *testing.T) {
+	cfg := config.DefaultConfig()
+	cfg.WorkDir = t.TempDir()
+	cfg.SessionDir = t.TempDir()
+
+	model := NewModel(&cfg)
+	model.streaming = true
+	model.activeToolName = "bash"
+	model.queued = []string{"next"}
+	canceled := false
+	model.cancel = func() { canceled = true }
+
+	updated, _ := model.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	got := updated.(Model)
+
+	if !canceled {
+		t.Fatal("expected first esc during active tool to cancel current turn fallback")
+	}
+	if got.streaming {
+		t.Fatal("expected active-tool fallback to stop streaming")
+	}
+	if len(got.queued) != 1 {
+		t.Fatalf("expected active-tool fallback to preserve queue, got %#v", got.queued)
+	}
+	if len(got.messages) == 0 || !strings.Contains(got.messages[len(got.messages)-1].Content, "Tool-only cancel is not wired yet") {
+		t.Fatalf("expected active-tool fallback feedback, got %#v", got.messages)
+	}
+}
+
+func TestStaleAgentEventsAreIgnoredAfterChannelReplacement(t *testing.T) {
+	cfg := config.DefaultConfig()
+	cfg.WorkDir = t.TempDir()
+	cfg.SessionDir = t.TempDir()
+
+	model := NewModel(&cfg)
+	oldCh := make(chan agent.Event)
+	newCh := make(chan agent.Event)
+	model.eventCh = newCh
+	model.streaming = true
+
+	updated, _ := model.Update(agentEventMsg{
+		ch:    oldCh,
+		event: agent.Event{Type: "tool_start", ToolName: "bash"},
+	})
+	got := updated.(Model)
+
+	if len(got.messages) != 0 {
+		t.Fatalf("expected stale event to be ignored, got messages %#v", got.messages)
+	}
+	if !got.streaming {
+		t.Fatal("expected stale event to leave current streaming state alone")
+	}
+}
+
+func TestStaleAgentDoneIsIgnoredAfterChannelReplacement(t *testing.T) {
+	cfg := config.DefaultConfig()
+	cfg.WorkDir = t.TempDir()
+	cfg.SessionDir = t.TempDir()
+
+	model := NewModel(&cfg)
+	oldCh := make(chan agent.Event)
+	newCh := make(chan agent.Event)
+	model.eventCh = newCh
+	model.streaming = true
+	model.queued = []string{"next"}
+
+	updated, cmd := model.Update(agentDoneMsg{ch: oldCh})
+	got := updated.(Model)
+
+	if cmd != nil {
+		t.Fatal("expected stale done to produce no command")
+	}
+	if !got.streaming {
+		t.Fatal("expected stale done to leave current streaming state alone")
+	}
+	if len(got.queued) != 1 || got.queued[0] != "next" {
+		t.Fatalf("expected stale done to leave queue alone, got %#v", got.queued)
+	}
+	if got.eventCh != newCh {
+		t.Fatal("expected stale done to leave current event channel alone")
 	}
 }
 

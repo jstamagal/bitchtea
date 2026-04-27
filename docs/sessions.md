@@ -1,38 +1,32 @@
-# 🦍 SESSIONS 🦍
+# 🦍 THE BITCHTEA SCROLLS: SESSIONS
 
-This scroll documents the persistence of time in `bitchtea`. 
+Bitchtea never forgets a turn. Sessions are the immutable record of the Green Dark.
 
-## 1. JSONL Format (`internal/session/session.go:17`)
+## 📄 JSONL FORMAT
 
-Sessions are stored as append-only JSONL (JSON Lines) files in `~/.bitchtea/sessions/`. Each line is an independent `session.Entry` object.
+Every session is a `.jsonl` file in the session directory. Each line is a self-contained JSON `Entry`.
 
-### Fields
+### 🧬 Entry Fields (`internal/session/session.go:16`)
 - **`ts`**: RFC3339 timestamp.
 - **`role`**: `user`, `assistant`, `system`, or `tool`.
 - **`content`**: The message text or tool output.
-- **`context`**: IRC routing label (e.g., `#main`).
-- **`bootstrap`**: Boolean. True if the entry was injected during startup (e.g., `CLAUDE.md`).
-- **`tool_name`**: Name of the tool called.
-- **`tool_args`**: Arguments passed to the tool.
-- **`tool_call_id`**: Unique ID for the tool call (matching provider requirements).
-- **`tool_calls`**: List of tool calls (for providers that support multiple in one turn).
-- **`parent_id`**: ID of the previous message (enables branching/tree).
-- **`branch`**: Label for the branch.
-- **`id`**: Unique identifier for this entry (nanosecond timestamp).
+- **`context`**: The IRC routing label (e.g., `#main`, `buddy`).
+- **`bootstrap`**: `true` if injected during startup (hidden from TUI transcript).
+- **`tool_calls`**: List of requested tool metadata (for assistant role).
+- **`tool_call_id`**: Mapping response to request (for tool role).
 
-## 2. Resume & List
+## 🌳 RESUME, FORK, & TREE
 
-- **Resume**: `bitchtea --resume [path]` loads a session by reading every line and reconstructing the `llm.Message` history via `MessagesFromEntries` (`session.go:327`).
-- **List**: `bitchtea --sessions` (or `/ls`) lists all `.jsonl` files in the session directory, sorted newest first (`session.go:214`).
+### 🔄 Resume
+When booting with `--resume` or `-r`, bitchtea loads the `latest` or specified JSONL. It replays `DisplayEntries` (skipping bootstrap) into the TUI and restores the full `Messages` into the agent's history.
 
-## 3. Fork & Tree
+### 🍴 Fork (`internal/session/session.go:102`)
+The `/fork` command clones the current session up to the last message. This creates a new timeline, allowing for experimentation without polluting the original record.
 
-- **Fork**: `/fork` creates a new session file. It copies all entries from the current session up to the active message, allowing the user to explore a different path without mutating the original history (`session.go:130`).
-- **Tree**: `/tree` provides a text representation of the session history, showing timestamps, roles, and truncated content summaries (`session.go:169`).
+### 🌲 Tree (`internal/session/session.go:138`)
+The `/tree` command renders a visual path of the session. It tracks parent-child relationships via `id` and `parent_id` fields, though the current TUI primarily shows a linear view of the active branch.
 
-## 4. State Persistence
+## 📍 CHECKPOINTS (`internal/session/session.go:198`)
+A hidden `.bitchtea_checkpoint.json` tracks turn counts and tool usage statistics. This is used for session resumes to ensure counters don't reset to zero.
 
-- **Checkpoint**: Autonomous-turn state is periodically saved to `.bitchtea_checkpoint.json` (`session.go:273`).
-- **Focus**: The IRC context list and active focus are saved to `.bitchtea_focus.json` (`session.go:348`) to ensure your workspace looks the same when you return.
-
-APE STRONK TOGETHER. 🦍💪🤝
+🦍💪🤝 APES STRONK TOGETHER 🦍💪🤝

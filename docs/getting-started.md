@@ -1,39 +1,45 @@
-# 🦍 GETTING STARTED 🦍
+# 🦍 BITCHTEA: GETTING STARTED
 
-Welcome to the canopy! Follow these steps to start coding with `bitchtea`.
+Welcome to the canopy. Stop being a wimp and build the tool.
 
-## 1. Build and Install
+## 🏗️ BUILD & INSTALL
 
-You need **Go 1.26** or later.
+Bitchtea is written in Go. You need `go 1.22+` and a functional terminal.
+
+1. **Clone the repository**:
+   ```bash
+   git clone https://github.com/jstamagal/bitchtea.git
+   cd bitchtea
+   ```
+
+2. **Build the binary**:
+   ```bash
+   go build -o bitchtea main.go
+   ```
+
+3. **Install to your path** (optional):
+   ```bash
+   mv bitchtea /usr/local/bin/
+   ```
+
+## 🔑 SETUP CREDENTIALS
+
+Bitchtea needs to talk to the models. Set your API keys in your environment:
 
 ```bash
-# Clone the repo
-git clone https://github.com/jstamagal/bitchtea.git
-cd bitchtea
-
-# Build the binary
-go build -o bitchtea .
-
-# Move it to your path
-sudo mv bitchtea /usr/local/bin/
+export OPENAI_API_KEY="your-key"
+export ANTHROPIC_API_KEY="your-key"
 ```
 
-## 2. Setup API Keys
+## 🚀 YOUR FIRST PROMPT
 
-`bitchtea` needs to talk to an LLM. Set your key in your shell profile (`.bashrc` or `.zshrc`):
+Run the tool in the root of your project:
 
 ```bash
-export OPENAI_API_KEY="sk-..."
-# OR
-export ANTHROPIC_API_KEY="sk-ant-..."
+./bitchtea
 ```
 
-## 3. Your First Prompt
+Once inside, type a message and hit **Enter**. Try:
+`>> hello ape, what files do you see in this jungle? @README.md`
 
-1. Launch the app: `bitchtea`
-2. Type a message: `Hello! What files are in this directory?`
-3. Press **Enter**.
-4. Watch the agent think, run tools, and reply.
-5. Use `/quit` when you are done.
-
-APE STRONK TOGETHER. 🦍💪🤝
+🦍💪🤝 APES STRONK TOGETHER 🦍💪🤝

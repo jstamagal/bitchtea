@@ -31,8 +31,8 @@ func (t *bitchteaTool) Run(ctx context.Context, call fantasy.ToolCall) (fantasy.
 	return fantasy.NewTextResponse(out), nil
 }
 
-func (t *bitchteaTool) ProviderOptions() fantasy.ProviderOptions        { return nil }
-func (t *bitchteaTool) SetProviderOptions(_ fantasy.ProviderOptions)    {}
+func (t *bitchteaTool) ProviderOptions() fantasy.ProviderOptions     { return nil }
+func (t *bitchteaTool) SetProviderOptions(_ fantasy.ProviderOptions) {}
 
 // translateTools builds one *bitchteaTool per Registry definition. Called per
 // stream-call (cheap — definitions are static, only the Required slice varies).
@@ -55,9 +55,10 @@ func translateTools(reg *tools.Registry) []fantasy.AgentTool {
 	return out
 }
 
-// splitSchema separates the "required" field out of a JSON-schema parameters
-// map. Returns (paramsCopy, required) where paramsCopy is the original map
-// minus the "required" key, and required is the []string list (or nil).
+// splitSchema converts the OpenAI-style object schema from Registry.Definitions
+// into fantasy.ToolInfo's shape: Parameters is only the "properties" map, while
+// Required is carried separately. Passing the whole object schema would make
+// fantasy nest "type", "properties", and "required" as bogus tool parameters.
 //
 // Defensive: tools.Registry stores required as []string, but anything coming
 // in via json.Unmarshal would be []any — handle both.
@@ -65,20 +66,64 @@ func splitSchema(params map[string]any) (map[string]any, []string) {
 	if params == nil {
 		return nil, nil
 	}
+
+	if rawProperties, ok := params["properties"]; ok {
+		out := sanitizeProperties(rawProperties)
+		return out, parseRequired(params["required"], out)
+	}
+
+	if schemaType, ok := params["type"].(string); ok {
+		if schemaType != "object" {
+			return map[string]any{}, nil
+		}
+		return map[string]any{}, nil
+	}
+
+	if rawRequired := params["required"]; rawRequired != nil {
+		if _, ok := rawRequired.(map[string]any); !ok {
+			return map[string]any{}, nil
+		}
+	}
+
 	out := make(map[string]any, len(params))
 	for k, v := range params {
-		if k == "required" {
-			continue
+		if property, ok := sanitizeProperty(v); ok {
+			out[k] = property
 		}
-		out[k] = v
 	}
-	raw, ok := params["required"]
+
+	return out, parseRequired(params["required"], out)
+}
+
+func sanitizeProperties(raw any) map[string]any {
+	propertyMap, ok := raw.(map[string]any)
 	if !ok {
-		return out, nil
+		return map[string]any{}
+	}
+	out := make(map[string]any, len(propertyMap))
+	for k, v := range propertyMap {
+		if property, ok := sanitizeProperty(v); ok {
+			out[k] = property
+		}
+	}
+	return out
+}
+
+func sanitizeProperty(raw any) (map[string]any, bool) {
+	property, ok := raw.(map[string]any)
+	if !ok {
+		return nil, false
+	}
+	return property, true
+}
+
+func parseRequired(raw any, properties map[string]any) []string {
+	if raw == nil {
+		return nil
 	}
 	switch r := raw.(type) {
 	case []string:
-		return out, r
+		return filterRequired(r, properties)
 	case []any:
 		req := make([]string, 0, len(r))
 		for _, x := range r {
@@ -86,7 +131,23 @@ func splitSchema(params map[string]any) (map[string]any, []string) {
 				req = append(req, s)
 			}
 		}
-		return out, req
+		return filterRequired(req, properties)
 	}
-	return out, nil
+	return nil
+}
+
+func filterRequired(required []string, properties map[string]any) []string {
+	if len(required) == 0 {
+		return nil
+	}
+	if properties == nil {
+		return required
+	}
+	out := make([]string, 0, len(required))
+	for _, name := range required {
+		if _, ok := properties[name]; ok {
+			out = append(out, name)
+		}
+	}
+	return out
 }

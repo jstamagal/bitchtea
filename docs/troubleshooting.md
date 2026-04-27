@@ -1,24 +1,33 @@
-# 🦍 TROUBLESHOOTING 🦍
+# 🦍 BITCHTEA: TROUBLESHOOTING
 
-If the vines tangle, use this guide.
+If the jungle gets quiet, something is wrong.
 
-## 1. "No API key found"
+## 🔑 API KEY ISSUES
 
-This means `bitchtea` can't find your keys.
-- **Fix**: Run `export OPENAI_API_KEY="your-key"` before starting.
-- **Fix**: Or use the `/apikey your-key` command inside the app.
+If you see `no API key found`:
+1. Check your environment variables (`echo $OPENAI_API_KEY`).
+2. Ensure you are using the correct provider with `/provider <openai|anthropic>`.
+3. Use `/apikey <key>` to set it manually for the active session.
 
-## 2. Debugging
+## 🔍 DEBUGGING THE METAL
 
-If the agent is acting strange, see what it sees:
-- Run `/debug on` to see raw API data.
-- Look at the terminal output if you ran it in a way that captures logs.
+If the agent is acting weird or failing silently, use the debug hook:
+- Type `/debug on`.
+- Bitchtea will now log every raw HTTP request and response header into the transcript.
+- Check for `401 Unauthorized` (key issue) or `429 Too Many Requests` (rate limits).
 
-## 3. Resetting State
+## 🧹 STATE RESET
 
-If a session is broken or memory is corrupted:
-- **Sessions**: Delete files in `~/.bitchtea/sessions/`.
-- **Memory**: Delete the `~/.bitchtea/memory/` directory.
-- **Full Reset**: Delete the entire `~/.bitchtea/` directory.
+If a session is corrupted or the TUI is hanging:
+1. **Kill the process**: `Ctrl+C` (twice) or `killall bitchtea`.
+2. **Clear checkpoints**: Delete `~/.config/bitchtea/sessions/.bitchtea_checkpoint.json`.
+3. **Start Fresh**: Run without resuming: `./bitchtea`.
 
-APE STRONK TOGETHER. 🦍💪🤝
+## 🆘 APE STUCK
+
+If the agent says `🦍😱💀 APE STUCK. KING HELP.`:
+- This means 3 consecutive failures occurred.
+- Usually, the model is trying to use a tool incorrectly or a file path is wrong.
+- Give it a direct instruction: `>> stop trying to read that file, it does not exist. try ls instead.`
+
+🦍💪🤝 APES STRONK TOGETHER 🦍💪🤝

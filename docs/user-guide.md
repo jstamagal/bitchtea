@@ -1,31 +1,35 @@
-# 🦍 USER GUIDE 🦍
+# 🦍 BITCHTEA: USER GUIDE
 
-How to use the tools of the canopy.
+The Green Dark is powerful. Here is how you navigate it.
 
-## 1. The Interface
+## 🌟 CORE FEATURES
 
-- **Input Bar**: Bottom of the screen. Type messages or `/commands`.
-- **Transcript**: Main window. Shows what you and the agent said.
-- **Status Bar**: Shows your `nick`, the `model`, and the `context` (like #main).
+- **Autonomous Follow-ups**: Enable `/auto-next` or `/auto-idea` to let the agent work while you watch.
+- **Persistent Terminals**: The agent can open REPLs, editors, and background processes using `terminal_start`.
+- **IRC Contexts**: Use `/join #channel` to organize different tasks within the same session.
 
-## 2. Including Files (@file)
+## 📎 @FILE REFERENCES
 
-You can show the agent files by using the `@` symbol:
-`Can you explain what @main.go does?`
+You can include any file in your prompt by prefixing it with `@`.
+- `>> check this @main.go for bugs`
+- `>> read @docs/architecture.md and summarize`
 
-The agent will read the file and include it in your prompt.
+Bitchtea will automatically expand these references into the full content of the file before sending the prompt.
 
-## 3. Tool Monitoring
+## 🛠️ MONITORING TOOLS
 
-The agent is autonomous. It can read, write, and run bash commands. 
-- You will see "Tool Call" in the transcript when it works.
-- If it takes a long time, use `/activity` to see what it is doing in the background.
+When the agent runs a tool, you will see a status update in the bottom bar and a message in the transcript:
+- **Thinking**: The model is drafting its plan.
+- **Calling [tool]**: The agent is reaching out to the system.
+- **[tool] result**: The output of the command.
 
-## 4. IRC-Style Channels
+Use **Ctrl+T** to toggle the Tool Panel for a detailed view of in-flight operations.
 
-You can split your work into channels:
-- `/join #refactor`: Create a new context for refactoring.
-- `/channels`: List all your open work contexts.
-- `/part`: Leave the current channel.
+## 🧭 SLASH COMMANDS
 
-APE STRONK TOGETHER. 🦍💪🤝
+Type `/help` inside the TUI to see the full list of commands.
+- `/model <name>`: Switch the brain.
+- `/compact`: Shrink the history but keep the knowledge.
+- `/fork`: Create a new timeline.
+
+🦍💪🤝 APES STRONK TOGETHER 🦍💪🤝

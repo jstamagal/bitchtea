@@ -19,11 +19,16 @@ type Registry struct {
 	WorkDir    string
 	SessionDir string
 	Scope      memorypkg.Scope
+	terminals  *terminalManager
 }
 
 // NewRegistry creates a tool registry
 func NewRegistry(workDir, sessionDir string) *Registry {
-	return &Registry{WorkDir: workDir, SessionDir: sessionDir}
+	return &Registry{
+		WorkDir:    workDir,
+		SessionDir: sessionDir,
+		terminals:  newTerminalManager(workDir),
+	}
 }
 
 // SetScope updates the memory scope used for search_memory queries.
@@ -156,6 +161,123 @@ func (r *Registry) Definitions() []ToolDef {
 				},
 			},
 		},
+		{
+			Type: "function",
+			Function: ToolFuncDef{
+				Name:        "terminal_start",
+				Description: "Start a persistent interactive terminal session attached to a real PTY. Use this for terminal apps, REPLs, editors, TUIs, and long-running commands that need follow-up input.",
+				Parameters: map[string]interface{}{
+					"type": "object",
+					"properties": map[string]interface{}{
+						"command": map[string]interface{}{
+							"type":        "string",
+							"description": "Command to run inside bash -lc",
+						},
+						"width": map[string]interface{}{
+							"type":        "integer",
+							"description": "Terminal width in cells (default 100)",
+						},
+						"height": map[string]interface{}{
+							"type":        "integer",
+							"description": "Terminal height in cells (default 30)",
+						},
+						"delay_ms": map[string]interface{}{
+							"type":        "integer",
+							"description": "Milliseconds to wait before taking the initial screen snapshot (default 200)",
+						},
+					},
+					"required": []string{"command"},
+				},
+			},
+		},
+		{
+			Type: "function",
+			Function: ToolFuncDef{
+				Name:        "terminal_send",
+				Description: "Send raw text/input to a persistent terminal session, then return a fresh screen snapshot. Use newline for Enter and \\u001b for Escape.",
+				Parameters: map[string]interface{}{
+					"type": "object",
+					"properties": map[string]interface{}{
+						"id": map[string]interface{}{
+							"type":        "string",
+							"description": "Terminal session id returned by terminal_start",
+						},
+						"text": map[string]interface{}{
+							"type":        "string",
+							"description": "Raw text to send to the terminal session",
+						},
+						"delay_ms": map[string]interface{}{
+							"type":        "integer",
+							"description": "Milliseconds to wait before taking the screen snapshot (default 100)",
+						},
+					},
+					"required": []string{"id", "text"},
+				},
+			},
+		},
+		{
+			Type: "function",
+			Function: ToolFuncDef{
+				Name:        "terminal_snapshot",
+				Description: "Return the current screen contents and status for a persistent terminal session.",
+				Parameters: map[string]interface{}{
+					"type": "object",
+					"properties": map[string]interface{}{
+						"id": map[string]interface{}{
+							"type":        "string",
+							"description": "Terminal session id returned by terminal_start",
+						},
+						"ansi": map[string]interface{}{
+							"type":        "boolean",
+							"description": "Return ANSI styled screen output instead of plain text (default false)",
+						},
+					},
+					"required": []string{"id"},
+				},
+			},
+		},
+		{
+			Type: "function",
+			Function: ToolFuncDef{
+				Name:        "terminal_close",
+				Description: "Close a persistent terminal session and kill its process if still running.",
+				Parameters: map[string]interface{}{
+					"type": "object",
+					"properties": map[string]interface{}{
+						"id": map[string]interface{}{
+							"type":        "string",
+							"description": "Terminal session id returned by terminal_start",
+						},
+					},
+					"required": []string{"id"},
+				},
+			},
+		},
+		{
+			Type: "function",
+			Function: ToolFuncDef{
+				Name:        "preview_image",
+				Description: "Render an image file into terminal-friendly ANSI block art for screenshot and visual debugging. Supports PNG, JPEG, and GIF.",
+				Parameters: map[string]interface{}{
+					"type": "object",
+					"properties": map[string]interface{}{
+						"path": map[string]interface{}{
+							"type":        "string",
+							"description": "Path to the image file to preview",
+						},
+						"width": map[string]interface{}{
+							"type":        "integer",
+							"description": "Output width in terminal cells (default 80)",
+						},
+						"height": map[string]interface{}{
+							"type":        "integer",
+							"description": "Output height in terminal cells (default preserves aspect ratio)",
+						},
+					},
+					"required": []string{"path"},
+				},
+			},
+		},
 	}
 }
 
@@ -172,6 +294,16 @@ func (r *Registry) Execute(ctx context.Context, name string, argsJSON string) (s
 		return r.execSearchMemory(argsJSON)
 	case "bash":
 		return r.execBash(ctx, argsJSON)
+	case "terminal_start":
+		return r.terminals.Start(ctx, argsJSON)
+	case "terminal_send":
+		return r.terminals.Send(argsJSON)
+	case "terminal_snapshot":
+		return r.terminals.Snapshot(argsJSON)
+	case "terminal_close":
+		return r.terminals.Close(argsJSON)
+	case "preview_image":
+		return r.execPreviewImage(argsJSON)
 	default:
 		return "", fmt.Errorf("unknown tool: %s", name)
 	}

@@ -1,42 +1,38 @@
-# 🦍 SLASH COMMANDS 🦍
+# 🦍 BITCHTEA: COMMAND REFERENCE
 
-These are the words you type in the input bar to control `bitchtea`.
+Slash commands control the TUI. Use them to bend the session to your will.
 
-## 🍌 Navigation & Context
-- **/join <#channel>**: Switch focus to a channel (creates it if new).
-- **/part [#channel]**: Leave the current (or named) context.
-- **/channels (alias /ch)**: List all open contexts.
-- **/query <nick>**: Open a private DM with a persona.
-- **/msg <nick> <text>**: Send a quick message without switching focus.
+## 🏛️ CONTEXT & NAVIGATION
 
-## 🍌 Agent Control
-- **/model <name>**: Change the LLM model (e.g., `gpt-4o`).
-- **/compact**: Manually flush old history to save tokens.
-- **/tokens**: Show estimated token usage and cost.
-- **/auto-next**: Toggle automatic execution of tool chains.
-- **/auto-idea**: Toggle automatic suggestion of next steps.
+- **`/join <#channel>`**: Switch focus to a channel. Creates it if it doesn't exist.
+- **`/part [#channel]`**: Leave the current or named context.
+- **`/query <nick>`**: Open a direct persistent conversation with a persona/nick.
+- **`/msg <nick> <text>`**: Send a one-shot message to a nick without changing focus.
+- **`/channels`** (or **`/ch`**): List all open contexts and their active members.
 
-## 🍌 Session Management
-- **/sessions (alias /ls)**: List saved session files.
-- **/fork**: Branch the current session into a new file.
-- **/tree**: See the history and branches of the session.
+## 🧠 MODEL & CONFIG
 
-## 🍌 Configuration
-- **/set [key [value]]**: View or change settings like `nick` or `sound`.
-- **/profile [cmd]**: Save, load, or delete configuration profiles.
-- **/apikey <key>**: Set your API key for the current session.
-- **/provider <name>**: Switch transport (e.g., `openai`, `anthropic`).
+- **`/model <name>`**: Switch the LLM (e.g., `gpt-4o`, `claude-3-5-sonnet-latest`).
+- **`/provider <name>`**: Switch provider (e.g., `openai`, `anthropic`).
+- **`/profile [load|save|delete] <name>`**: Manage saved connection profiles.
+- **`/set <key> <value>`**: Change settings (e.g., `nick`, `sound`, `auto-next`).
 
-## 🍌 UI & System
-- **/clear**: Wipe the screen transcript.
-- **/theme**: Rotate through UI color themes.
-- **/sound**: Toggle notification bings.
-- **/debug on|off**: Show raw API data for debugging.
-- **/copy [n]**: Copy the last (or nth) assistant reply to clipboard.
-- **/activity [clear]**: View or clear background tool tasks.
-- **/mp3 [cmd]**: Control the built-in MP3 player.
-- **/memory**: Show the contents of your `MEMORY.md`.
-- **/help (alias /h)**: Show the help summary.
-- **/quit (alias /q, /exit)**: Exit the canopy.
+## 💾 SESSION & MEMORY
 
-APE STRONK TOGETHER. 🦍💪🤝
+- **`/sessions`** (or **`/ls`**): List saved sessions in the session directory.
+- **`/tree`**: Show the branch structure of the current session.
+- **`/fork`**: Create a new session file from the current state.
+- **`/compact`**: Summarize history to save tokens and durable knowledge.
+- **`/memory`**: View the contents of `MEMORY.md` and scoped `HOT.md`.
+
+## 🛠️ UTILITIES
+
+- **`/copy [n]`**: Copy the last (or nth) assistant response to the clipboard.
+- **`/tokens`**: Show estimated token usage and session cost.
+- **`/debug [on|off]`**: Toggle verbose HTTP logging for API calls.
+- **`/mp3 [cmd]`**: Control the built-in MP3 player (rescan, play, next, prev).
+- **`/clear`**: Clear the scrollback buffer from the TUI.
+- **`/help`** (or **`/h`**): Show the quick help menu.
+- **`/quit`** (or **`/q`**): Exit bitchtea.
+
+🦍💪🤝 APES STRONK TOGETHER 🦍💪🤝

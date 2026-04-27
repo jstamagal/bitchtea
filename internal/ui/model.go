@@ -22,11 +22,19 @@ import (
 
 // agentEventMsg wraps agent events for the bubbletea message loop
 type agentEventMsg struct {
+	ch    chan agent.Event
 	event agent.Event
 }
 
 // agentDoneMsg signals the agent event channel is closed
-type agentDoneMsg struct{}
+type agentDoneMsg struct {
+	ch chan agent.Event
+}
+
+const (
+	escGraduationWindow   = 1500 * time.Millisecond
+	ctrlCGraduationWindow = 3 * time.Second
+)
 
 // SignalMsg wraps an OS signal for the bubbletea message loop
 type SignalMsg struct {
@@ -93,6 +101,7 @@ type Model struct {
 	ready              bool
 	streaming          bool
 	streamBuffer       *strings.Builder // accumulates current agent response (pointer to avoid copy panic)
+	activeToolName     string
 	focus              *FocusManager
 	membership         *MembershipManager
 	backgroundActivity []BackgroundActivity
@@ -103,7 +112,12 @@ type Model struct {
 	historyIdx int
 
 	// Queued messages (steering - typed while agent is working)
-	queued []string
+	queued          []string
+	queueClearArmed bool
+	escStage        int
+	escLast         time.Time
+	ctrlCStage      int
+	ctrlCLast       time.Time
 
 	// Session
 	session         *session.Session
@@ -373,6 +387,20 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// otherwise fall through to textarea for normal multiline cursor movement.
 		switch msg.String() {
 		case "up":
+			if strings.TrimSpace(m.input.Value()) == "" && len(m.queued) > 0 {
+				lastIdx := len(m.queued) - 1
+				input := m.queued[lastIdx]
+				m.queued = m.queued[:lastIdx]
+				m.input.SetValue(input)
+				m.input.SetCursor(len(input))
+				m.addMessage(ChatMessage{
+					Time:    time.Now(),
+					Type:    MsgSystem,
+					Content: fmt.Sprintf("Unqueued message: %s", input),
+				})
+				m.refreshViewport()
+				return m, nil
+			}
 			if m.input.Line() == 0 && len(m.history) > 0 && m.historyIdx > 0 {
 				m.historyIdx--
 				m.input.SetValue(m.history[m.historyIdx])
@@ -394,20 +422,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 
 		case "ctrl+c":
-			if m.streaming && m.cancel != nil {
-				m.cancel()
-				_ = m.transcript.FinishAgentMessage()
-				m.streaming = false
-				m.agentState = agent.StateIdle
-				m.addMessage(ChatMessage{
-					Time:    time.Now(),
-					Type:    MsgSystem,
-					Content: "Interrupted. Like your attention span.",
-				})
-				m.refreshViewport()
-				return m, nil
-			}
-			return m, tea.Quit
+			return m.handleCtrlCKey()
+
+		case "esc":
+			m.handleEscKey()
+			return m, nil
 
 		case "enter":
 			// Enter sends; Shift+Enter / Alt+Enter adds newline
@@ -435,6 +454,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					Type:    MsgSystem,
 					Content: fmt.Sprintf("Queued message (agent is busy): %s", input),
 				})
+				m.queueClearArmed = false
 				m.refreshViewport()
 				return m, nil
 			}
@@ -493,16 +513,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case SignalMsg:
 		// Handle OS signals (SIGINT, SIGTERM) sent from main.go
 		if m.streaming && m.cancel != nil {
-			m.cancel()
-			_ = m.transcript.FinishAgentMessage()
-			m.streaming = false
-			m.agentState = agent.StateIdle
-			m.addMessage(ChatMessage{
-				Time:    time.Now(),
-				Type:    MsgSystem,
-				Content: "Interrupted by signal.",
-			})
-			m.refreshViewport()
+			m.cancelActiveTurn("Interrupted by signal.", true)
 			return m, nil
 		}
 		return m, tea.Quit
@@ -516,6 +527,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.cancel()
 			_ = m.transcript.FinishAgentMessage()
 			m.streaming = false
+			m.queued = nil
 		}
 		if m.mp3 != nil {
 			m.mp3.stop()
@@ -524,6 +536,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, tea.Quit
 
 	case agentEventMsg:
+		if msg.ch != m.eventCh {
+			return m, nil
+		}
 		newModel, cmd := m.handleAgentEvent(msg.event)
 		// Chain: after handling this event, wait for the next one
 		if m.eventCh != nil {
@@ -532,11 +547,19 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return newModel, cmd
 
 	case agentDoneMsg:
+		if msg.ch != nil && msg.ch != m.eventCh {
+			return m, nil
+		}
 		_ = m.transcript.FinishAgentMessage()
 		m.streaming = false
 		m.agentState = agent.StateIdle
 		m.eventCh = nil
 		m.cancel = nil
+		m.activeToolName = ""
+		m.escStage = 0
+		m.escLast = time.Time{}
+		m.ctrlCStage = 0
+		m.ctrlCLast = time.Time{}
 		m.syncLastAssistantMessage()
 
 		// Play notification sound if enabled
@@ -582,6 +605,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if len(m.queued) > 0 {
 			next := m.queued[0]
 			m.queued = m.queued[1:]
+			m.queueClearArmed = false
 			m.addMessage(ChatMessage{
 				Time:    time.Now(),
 				Type:    MsgUser,
@@ -673,6 +697,7 @@ func (m *Model) handleAgentEvent(ev agent.Event) (tea.Model, tea.Cmd) {
 		m.refreshViewport()
 
 	case "tool_start":
+		m.activeToolName = ev.ToolName
 		m.addMessage(ChatMessage{
 			Time:    time.Now(),
 			Type:    MsgTool,
@@ -685,6 +710,9 @@ func (m *Model) handleAgentEvent(ev agent.Event) (tea.Model, tea.Cmd) {
 		m.refreshViewport()
 
 	case "tool_result":
+		if m.activeToolName == ev.ToolName {
+			m.activeToolName = ""
+		}
 		// Truncate tool output for display
 		result := ev.ToolResult
 		lines := strings.Split(result, "\n")
@@ -721,6 +749,7 @@ func (m *Model) handleAgentEvent(ev agent.Event) (tea.Model, tea.Cmd) {
 		}
 
 	case "error":
+		m.activeToolName = ""
 		errText := fmt.Sprintf("Error: %v", ev.Error)
 		if hint := llm.ErrorHint(ev.Error); hint != "" {
 			errText += "\n  hint: " + hint
@@ -733,7 +762,8 @@ func (m *Model) handleAgentEvent(ev agent.Event) (tea.Model, tea.Cmd) {
 		m.refreshViewport()
 
 	case "done":
-		return m, func() tea.Msg { return agentDoneMsg{} }
+		ch := m.eventCh
+		return m, func() tea.Msg { return agentDoneMsg{ch: ch} }
 	}
 
 	return m, nil
@@ -744,9 +774,9 @@ func waitForAgentEvent(ch chan agent.Event) tea.Cmd {
 	return func() tea.Msg {
 		ev, ok := <-ch
 		if !ok {
-			return agentDoneMsg{}
+			return agentDoneMsg{ch: ch}
 		}
-		return agentEventMsg{event: ev}
+		return agentEventMsg{ch: ch, event: ev}
 	}
 }
 
@@ -780,6 +810,12 @@ func (m *Model) startAgentTurn(start func(context.Context, chan agent.Event)) te
 	if m.cancel != nil {
 		m.cancel()
 	}
+	m.queueClearArmed = false
+	m.escStage = 0
+	m.escLast = time.Time{}
+	m.ctrlCStage = 0
+	m.ctrlCLast = time.Time{}
+	m.activeToolName = ""
 	m.turnContext = m.focus.Active()
 	m.agent.SetScope(ircContextToMemoryScope(m.turnContext))
 	ctx, cancel := context.WithCancel(context.Background())
@@ -791,6 +827,150 @@ func (m *Model) startAgentTurn(start func(context.Context, chan agent.Event)) te
 	start(ctx, ch)
 
 	return waitForAgentEvent(ch)
+}
+
+func (m *Model) cancelActiveTurn(message string, clearQueue bool) {
+	if m.cancel != nil {
+		m.cancel()
+	}
+	_ = m.transcript.FinishAgentMessage()
+	m.streaming = false
+	m.agentState = agent.StateIdle
+	m.cancel = nil
+	m.eventCh = nil
+	m.activeToolName = ""
+	m.escStage = 0
+	m.escLast = time.Time{}
+	if clearQueue {
+		m.queued = nil
+		m.queueClearArmed = false
+	}
+	m.addMessage(ChatMessage{
+		Time:    time.Now(),
+		Type:    MsgSystem,
+		Content: message,
+	})
+	m.refreshViewport()
+}
+
+func (m *Model) handleCtrlCKey() (Model, tea.Cmd) {
+	now := time.Now()
+	if !m.ctrlCLast.IsZero() && now.Sub(m.ctrlCLast) > ctrlCGraduationWindow {
+		m.ctrlCStage = 0
+	}
+	m.ctrlCLast = now
+	m.ctrlCStage++
+
+	if m.ctrlCStage >= 3 {
+		if m.streaming {
+			m.cancelActiveTurn("Interrupted.", true)
+		} else if len(m.queued) > 0 {
+			m.queued = nil
+			m.queueClearArmed = false
+		}
+		return *m, tea.Quit
+	}
+
+	if m.ctrlCStage == 1 {
+		if m.streaming {
+			message := "Interrupted. Press Ctrl+C again to clear queued messages; press it a third time to quit."
+			if len(m.queued) > 0 {
+				message = fmt.Sprintf("Interrupted. %d queued message(s) remain. Press Ctrl+C again to clear them; press it a third time to quit.", len(m.queued))
+			}
+			m.cancelActiveTurn(message, false)
+			return *m, nil
+		}
+
+		if len(m.queued) > 0 {
+			m.addMessage(ChatMessage{
+				Time:    now,
+				Type:    MsgSystem,
+				Content: fmt.Sprintf("%d queued message(s) remain. Press Ctrl+C again to clear them; press it a third time to quit.", len(m.queued)),
+			})
+		} else {
+			m.addMessage(ChatMessage{
+				Time:    now,
+				Type:    MsgSystem,
+				Content: "Press Ctrl+C twice more to quit.",
+			})
+		}
+		m.refreshViewport()
+		return *m, nil
+	}
+
+	if len(m.queued) > 0 {
+		cleared := len(m.queued)
+		m.queued = nil
+		m.queueClearArmed = false
+		m.addMessage(ChatMessage{
+			Time:    now,
+			Type:    MsgSystem,
+			Content: fmt.Sprintf("Cleared %d queued message(s). Press Ctrl+C again to quit.", cleared),
+		})
+		m.refreshViewport()
+		return *m, nil
+	}
+
+	m.addMessage(ChatMessage{
+		Time:    now,
+		Type:    MsgSystem,
+		Content: "Press Ctrl+C again to quit.",
+	})
+	m.refreshViewport()
+	return *m, nil
+}
+
+func (m *Model) handleEscKey() {
+	now := time.Now()
+	if !m.escLast.IsZero() && now.Sub(m.escLast) > escGraduationWindow {
+		m.escStage = 0
+	}
+	m.escLast = now
+
+	if m.queueClearArmed && len(m.queued) > 0 {
+		m.queued = nil
+		m.queueClearArmed = false
+		m.escStage = 0
+		m.addMessage(ChatMessage{
+			Time:    now,
+			Type:    MsgSystem,
+			Content: "Cleared queued messages.",
+		})
+		m.refreshViewport()
+		return
+	}
+
+	if !m.streaming || m.cancel == nil {
+		return
+	}
+
+	if m.activeToolName != "" {
+		message := fmt.Sprintf("Tool-only cancel is not wired yet; cancelled the current turn while %s was running.", m.activeToolName)
+		if len(m.queued) > 0 {
+			message = fmt.Sprintf("%s %d queued message(s) remain; press Esc again to clear them.", message, len(m.queued))
+			m.queueClearArmed = true
+		}
+		m.cancelActiveTurn(message, false)
+		return
+	}
+
+	m.escStage++
+	if m.escStage == 1 {
+		m.addMessage(ChatMessage{
+			Time:    now,
+			Type:    MsgSystem,
+			Content: "Press Esc again to cancel the turn.",
+		})
+		m.refreshViewport()
+		return
+	}
+
+	message := "Interrupted by Esc."
+	if len(m.queued) > 0 {
+		message = fmt.Sprintf("Interrupted by Esc. %d queued message(s) remain; press Esc again to clear them.", len(m.queued))
+		m.queueClearArmed = true
+	}
+	m.cancelActiveTurn(message, false)
 }
 
 func (m *Model) syncLastAssistantMessage() {
