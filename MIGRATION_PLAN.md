@@ -1,6 +1,6 @@
 # bitchtea → fantasy + catwalk migration plan (v3)
 
-Status: **DRAFT v3 — incorporates codex's 7 revisions to v2.** All fantasy type/field/callback names verified against `/home/admin/go/pkg/mod/charm.land/fantasy@v0.17.1/` source. Pending one final codex pass before implementation.
+Status: **v3.1 — accepted-with-revisions by codex 2026-04-27 09:09 EDT.** Three deltas applied below: (a) `internal/llm.StreamChat` emits `llm.StreamEvent` (public surface); `internal/agent` translates to `agent.Event` and owns the `ToolCalls` counter — D1 below now reflects this. (b) `Client.SetDebugHook` is nil→nil no-op; `Agent.SetDebugHook` MUST call `a.client.SetDebugHook(hook)` not assign the field. (c) Step 6 test recovery list now names the five files. The "Prompt vs Messages" caveat is dropped — codex verified `Prompt + Messages` semantics against `fantasy/agent.go createPrompt`.
 
 ## Why v3 exists
 
@@ -264,45 +264,57 @@ Watch the Anthropic case: passing `https://api.anthropic.com/v1` (or any `/v1` s
 
 ### D1. fantasy owns the loop
 
-`Agent.SendMessage`'s hand-rolled `for {}` loop dies. Replaced by:
+`Agent.SendMessage`'s hand-rolled `for {}` loop dies. fantasy owns the LLM/tool loop. Inside `internal/llm.Client.StreamChat`, fantasy callbacks emit on `chan<- llm.StreamEvent` (the public surface, source-compatible with the old streamer). The agent layer (`internal/agent/agent.go`) keeps its existing select loop on `llm.StreamEvent`, translates each to an `agent.Event` for the UI, and owns the `ToolCalls` counter mutation. This matches the existing `ChatStreamer` interface and keeps the `internal/llm → internal/agent` boundary clean (no `agent.Event` import inside `internal/llm`).
 
 ```go
-fa := fantasy.NewAgent(model,
-    fantasy.WithSystemPrompt(sys),
-    fantasy.WithTools(toolset...),                         // real, not passthrough
-    fantasy.WithStopConditions(fantasy.StepCountIs(maxSteps)),
-    fantasy.WithPrepareStep(prepStep),
-)
-result, err := fa.Stream(ctx, fantasy.AgentStreamCall{
-    Prompt:   currentUserMessage,                          // <-- string, the new turn
-    Messages: priorHistoryAsFantasyMessages,               // <-- []fantasy.Message, prior turns
-    OnTextDelta: func(id, text string) error {
-        return safeSend(ctx, events, agent.Event{Type: "text", Text: text})
-    },
-    OnReasoningDelta: func(id, text string) error {
-        return safeSend(ctx, events, agent.Event{Type: "thinking", Text: text})
-    },
-    OnToolCall: func(call fantasy.ToolCallContent) error {
-        // owner of: state, tool_start, ToolCalls counter
-        a.ToolCalls[call.ToolName]++
-        if err := safeSend(ctx, events, agent.Event{Type: "state", State: agent.StateToolCall}); err != nil { return err }
-        return safeSend(ctx, events, agent.Event{Type: "tool_start", ToolName: call.ToolName, ToolArgs: call.Input})
-    },
-    OnToolResult: func(res fantasy.ToolResultContent) error {
-        // owner of: tool_result
-        text := ""
-        if t, ok := res.Result.(fantasy.ToolResultOutputContentText); ok { text = t.Text }
-        return safeSend(ctx, events, agent.Event{Type: "tool_result", ToolName: res.ToolName, ToolResult: text})
-    },
-    OnStreamFinish: func(u fantasy.Usage, _ fantasy.FinishReason, _ fantasy.ProviderMetadata) error {
-        a.CostTracker.AddTokenUsage(toLLMUsage(u))
-        return nil
-    },
-    OnError: func(err error) {
-        _ = safeSend(ctx, events, agent.Event{Type: "error", Error: err})
-    },
-})
+// internal/llm/stream.go
+func (c *Client) StreamChat(ctx context.Context, msgs []Message, tools []ToolDef, events chan<- StreamEvent) {
+    defer close(events)
+    model, err := c.ensureModel(ctx)
+    if err != nil { safeSend(ctx, events, StreamEvent{Type: "error", Error: err}); return }
+    prompt, prior := splitForFantasy(msgs)
+    fa := fantasy.NewAgent(model,
+        fantasy.WithTools(translateTools(tools)...),
+        fantasy.WithStopConditions(fantasy.StepCountIs(maxSteps)),
+        fantasy.WithPrepareStep(prepStep),
+    )
+    result, err := fa.Stream(ctx, fantasy.AgentStreamCall{
+        Prompt:   prompt,
+        Messages: prior,
+        OnTextDelta: func(_, text string) error {
+            return safeSend(ctx, events, StreamEvent{Type: "text", Text: text})
+        },
+        OnReasoningDelta: func(_, text string) error {
+            return safeSend(ctx, events, StreamEvent{Type: "thinking", Text: text})
+        },
+        OnToolCall: func(call fantasy.ToolCallContent) error {
+            return safeSend(ctx, events, StreamEvent{
+                Type: "tool_call", ToolName: call.ToolName, ToolArgs: call.Input, ToolCallID: call.ToolCallID,
+            })
+        },
+        OnToolResult: func(res fantasy.ToolResultContent) error {
+            // No StreamEvent for tool_result — agent observes the tool message
+            // when walking result.Steps[] post-Stream. (UI gets tool_result via
+            // the agent.Event translation layer.)
+            return nil
+        },
+        OnStreamFinish: func(u fantasy.Usage, _ fantasy.FinishReason, _ fantasy.ProviderMetadata) error {
+            return safeSend(ctx, events, StreamEvent{Type: "usage", Usage: ptrUsage(toLLMUsage(u))})
+        },
+        OnError: func(err error) {
+            _ = safeSend(ctx, events, StreamEvent{Type: "error", Error: err})
+        },
+    })
+    if err != nil { safeSend(ctx, events, StreamEvent{Type: "error", Error: err}); return }
+    // Walk result.Steps[].Messages and re-emit assistant + tool messages so the
+    // agent layer can rebuild a.messages exactly. Encoding TBD — most likely
+    // a single "done" event whose payload carries the rebuilt []Message, OR an
+    // additional Messages field on StreamEvent for type=="done". Decided in stream.go.
+    safeSend(ctx, events, StreamEvent{Type: "done"})
+}
 ```
+
+The agent layer continues to translate `llm.StreamEvent` → `agent.Event` and mutates `a.ToolCalls` on `tool_call`, exactly like the old loop. No callbacks cross the package boundary.
 
 `safeSend` is context-aware:
 ```go
@@ -551,9 +563,17 @@ func (c *Client) SetModel(model string) { c.mu.Lock(); defer c.mu.Unlock(); c.Mo
 func (c *Client) SetProvider(p string)  { c.mu.Lock(); defer c.mu.Unlock(); c.Provider= p;   c.invalidateLocked() }
 func (c *Client) SetDebugHook(h func(DebugInfo)) {
     c.mu.Lock(); defer c.mu.Unlock()
+    if h == nil && c.DebugHook == nil { return }  // nil->nil no-op
     c.DebugHook = h
     c.invalidateLocked()  // HTTP client rebuilds — provider must rebuild too
 }
+
+// And in internal/agent/agent.go:
+//   func (a *Agent) SetDebugHook(hook func(llm.DebugInfo)) {
+//       a.client.SetDebugHook(hook)  // route through the client so the mutex
+//                                    // and cache invalidation actually fire.
+//   }
+// (Old code assigned a.client.DebugHook directly; that bypassed the mutex.)
 func (c *Client) invalidateLocked() { c.provider = nil; c.model = nil }
 
 func (c *Client) ensureModel(ctx context.Context) (fantasy.LanguageModel, error) {
@@ -812,7 +832,7 @@ Approx 700–900 LoC total.
     - codex (foreigner): `errors.go` (port + `errors.As`).
     - gemini-3.1-pro: `cost.go` (catwalk lookup).
 5. **`go build ./...`** — fix drift between window-1 outputs.
-6. **Port deleted llm tests in parallel with implementation.** Use `git log --oneline -- internal/llm/` + `git show <commit>:internal/llm/*_test.go` to recover. Streaming-parsing, retry/error-hint, cost coverage. Update for any signature drift. (gemini-3.1-flash via acpx.)
+6. **Port deleted llm tests in parallel with implementation.** The deleted files at `96bdf1d^` are: `anthropic_test.go`, `client_test.go`, `cost_test.go`, `errors_test.go`, `phase6_scaffold_test.go`. Recover via `git show 96bdf1d^:internal/llm/<file>`. Anthropic-specific streaming tests likely retire (fantasy owns streaming now); cost + errors port directly; client_test needs rewrite against the new fantasy-backed `Client`. (gemini-3.1-flash via acpx.)
 7. **Window 2 fan-out:**
     - codex (jstamagal): `convert.go` (mechanical part-translation).
     - codex (foreigner): `tools.go` (AgentTool wrapper + schema split).
