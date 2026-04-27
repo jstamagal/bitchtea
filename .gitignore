@@ -10,6 +10,7 @@ bitchtea
 
 # Vendor / cached deps
 charmbracelet/
+butter/
 
 # OS junk
 .DS_Store
