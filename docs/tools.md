@@ -37,7 +37,25 @@ Every tool follows a two-stage pattern:
 - **Executor**: `execBash` (`tools.go:317`)
 - **Behavior**: Executes a command via `exec.CommandContext`. Combines stdout and stderr. Supports cancellation via the `turnCtx`.
 
-## 3. Security Philosophy
+## 3. Fantasy Adapter (`internal/llm/tools.go`)
+
+Tool definitions are exposed to the model via fantasy's `AgentTool`
+interface, not the raw `[]ToolDef` slice. `bitchteaTool` wraps the
+`tools.Registry`:
+
+- `Info()` returns a `fantasy.ToolInfo` built from
+  `Registry.Definitions()` (split into `Parameters` map + `Required`
+  slice via `splitSchema`, which handles both `[]string` and `[]any`
+  shapes coming back from JSON unmarshalling).
+- `Run(ctx, fantasy.ToolCall)` dispatches into `Registry.Execute(ctx,
+  call.Name, call.Input)`. Errors return `fantasy.NewTextErrorResponse`
+  so fantasy keeps streaming; returning a Go error would abort the
+  whole agent loop.
+
+`translateTools(reg)` builds the `[]fantasy.AgentTool` slice handed to
+`fantasy.WithTools(...)` when the agent is constructed in `stream.go`.
+
+## 4. Security Philosophy
 
 Tools are intentionally powerful. `bitchtea` does not impose artificial guardrails (e.g., blocking `rm -rf`). The agent is trusted. Security resides in the user's visibility of the transcript and the ability to cancel turns (`Ctrl+C`).
 
