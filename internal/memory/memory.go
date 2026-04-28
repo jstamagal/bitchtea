@@ -8,6 +8,7 @@ import (
 	"regexp"
 	"sort"
 	"strings"
+	"syscall"
 	"time"
 )
 
@@ -111,6 +112,7 @@ func AppendDaily(sessionDir, workDir string, when time.Time, content string) err
 }
 
 // AppendDailyForScope appends a dated durable-memory checkpoint for a scope.
+// Uses kernel-level flock to prevent interleaved writes from concurrent bitchtea processes.
 func AppendDailyForScope(sessionDir, workDir string, scope Scope, when time.Time, content string) error {
 	content = strings.TrimSpace(content)
 	if content == "" {
@@ -127,6 +129,11 @@ func AppendDailyForScope(sessionDir, workDir string, scope Scope, when time.Time
 		return fmt.Errorf("open daily memory file: %w", err)
 	}
 	defer f.Close()
+
+	if err := syscall.Flock(int(f.Fd()), syscall.LOCK_EX); err != nil {
+		return fmt.Errorf("flock daily memory: %w", err)
+	}
+	defer syscall.Flock(int(f.Fd()), syscall.LOCK_UN) //nolint:errcheck
 
 	entry := fmt.Sprintf("## %s pre-compaction flush\n\n%s\n\n", when.Format(time.RFC3339), content)
 	if _, err := f.WriteString(entry); err != nil {

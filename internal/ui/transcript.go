@@ -7,12 +7,22 @@ import (
 	"regexp"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 )
 
 var ansiEscapePattern = regexp.MustCompile(`\x1b\[[0-9;]*[A-Za-z]`)
 
 // TranscriptLogger writes a human-readable daily conversation log.
+//
+// Multiple bitchtea processes share ~/.bitchtea/logs/<date>.log. Per-process
+// mutexes alone are not sufficient — without kernel-level locking, writes
+// from different processes interleave mid-line. We solve this with:
+//
+//  1. Agent streaming chunks are buffered in streamBuf until FinishAgentMessage
+//     and then written as a single WriteString call (no split prefix+chunk).
+//  2. Every write is bracketed by syscall.Flock(LOCK_EX)/Flock(LOCK_UN) on
+//     the open file descriptor.
 type TranscriptLogger struct {
 	dir          string
 	now          func() time.Time
@@ -20,6 +30,7 @@ type TranscriptLogger struct {
 	currentDate  string
 	file         *os.File
 	streamActive bool
+	streamBuf    strings.Builder
 }
 
 func NewTranscriptLogger(dir string) (*TranscriptLogger, error) {
@@ -39,10 +50,8 @@ func (t *TranscriptLogger) Close() error {
 	if t == nil {
 		return nil
 	}
-
 	t.mu.Lock()
 	defer t.mu.Unlock()
-
 	return t.closeLocked()
 }
 
@@ -50,39 +59,33 @@ func (t *TranscriptLogger) LogMessage(msg ChatMessage) error {
 	if t == nil {
 		return nil
 	}
-
 	t.mu.Lock()
 	defer t.mu.Unlock()
 
-	// Thinking blocks are transient UI state. They mutate in place and should
-	// not leak placeholder text or partial reasoning into the persisted log.
 	if msg.Type == MsgThink {
 		return nil
 	}
-
 	if msg.Type == MsgAgent && strings.TrimSpace(msg.Content) == "" {
 		return nil
 	}
 
 	if t.streamActive && msg.Type != MsgAgent {
-		if err := t.writeStringLocked("\n"); err != nil {
+		if err := t.flushStreamBufLocked(); err != nil {
 			return err
 		}
-		t.streamActive = false
 	}
 
 	formatted := formatTranscriptMessage(msg)
 	if formatted == "" {
 		return nil
 	}
-	return t.writeStringLocked(formatted)
+	return t.writeAtomicLocked(formatted)
 }
 
 func (t *TranscriptLogger) AppendAgentChunk(at time.Time, nick, chunk string) error {
 	if t == nil {
 		return nil
 	}
-
 	t.mu.Lock()
 	defer t.mu.Unlock()
 
@@ -92,42 +95,60 @@ func (t *TranscriptLogger) AppendAgentChunk(at time.Time, nick, chunk string) er
 	}
 
 	if !t.streamActive {
-		if err := t.writeStringLocked(transcriptPrefix(at, nick)); err != nil {
-			return err
-		}
+		t.streamBuf.Reset()
+		t.streamBuf.WriteString(transcriptPrefix(at, nick))
 		t.streamActive = true
 	}
-
-	return t.writeStringLocked(clean)
+	t.streamBuf.WriteString(clean)
+	return nil
 }
 
 func (t *TranscriptLogger) FinishAgentMessage() error {
 	if t == nil {
 		return nil
 	}
-
 	t.mu.Lock()
 	defer t.mu.Unlock()
 
 	if !t.streamActive {
 		return nil
 	}
-	if err := t.writeStringLocked("\n"); err != nil {
-		return err
-	}
-	t.streamActive = false
-	return nil
+	return t.flushStreamBufLocked()
 }
 
-func (t *TranscriptLogger) writeStringLocked(s string) error {
+func (t *TranscriptLogger) flushStreamBufLocked() error {
+	if t.streamBuf.Len() == 0 {
+		t.streamActive = false
+		return nil
+	}
+	t.streamBuf.WriteString("\n")
+	msg := t.streamBuf.String()
+	t.streamBuf.Reset()
+	t.streamActive = false
+	return t.writeAtomicLocked(msg)
+}
+
+// writeAtomicLocked writes s under kernel-level exclusive lock so only one
+// bitchtea process can write at a time.
+func (t *TranscriptLogger) writeAtomicLocked(s string) error {
 	if s == "" {
 		return nil
 	}
 	if err := t.ensureFileLocked(); err != nil {
 		return err
 	}
-	_, err := t.file.WriteString(s)
-	return err
+	if err := syscall.Flock(int(t.file.Fd()), syscall.LOCK_EX); err != nil {
+		return fmt.Errorf("flock transcript: %w", err)
+	}
+	_, writeErr := t.file.WriteString(s)
+	if unlockErr := syscall.Flock(int(t.file.Fd()), syscall.LOCK_UN); unlockErr != nil {
+		// Unlock failure is rare and non-recoverable — prefer returning it
+		// over the write error since the lock must be released.
+		if writeErr == nil {
+			return fmt.Errorf("flock unlock transcript: %w", unlockErr)
+		}
+	}
+	return writeErr
 }
 
 func (t *TranscriptLogger) ensureFileLocked() error {
@@ -135,7 +156,6 @@ func (t *TranscriptLogger) ensureFileLocked() error {
 	if t.file != nil && t.currentDate == today {
 		return nil
 	}
-
 	if err := t.closeLocked(); err != nil {
 		return err
 	}
@@ -199,12 +219,10 @@ func transcriptLine(ts time.Time, prefix, content string) string {
 	if clean == "" {
 		return fmt.Sprintf("[%s] %s\n", ts.Format("15:04"), prefix)
 	}
-
 	lines := strings.Split(clean, "\n")
 	if len(lines) == 1 {
 		return fmt.Sprintf("[%s] %s %s\n", ts.Format("15:04"), prefix, lines[0])
 	}
-
 	var sb strings.Builder
 	sb.WriteString(fmt.Sprintf("[%s] %s %s\n", ts.Format("15:04"), prefix, lines[0]))
 	for _, line := range lines[1:] {

@@ -60,3 +60,4 @@ personal_docs/
 .subagents/*
 _attic/
 *.html
+.aider*

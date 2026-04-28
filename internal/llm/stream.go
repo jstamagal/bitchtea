@@ -3,37 +3,72 @@ package llm
 import (
 	"context"
 	"strings"
+	"time"
 
 	"charm.land/fantasy"
 
 	"github.com/jstamagal/bitchtea/internal/tools"
 )
 
-// maxAgentSteps is the StopCondition cap on a single Stream call. The old
-// hand-rolled loop ran until the model emitted a final text response with no
-// tool calls; fantasy stops earliest of (StepCountIs, no-more-tool-calls).
-// 64 is enough for long tool chains without runaway loops.
+// maxAgentSteps is the StopCondition cap on a single Stream call.
 const maxAgentSteps = 64
 
-// StreamChat runs one full agent turn against fantasy and emits StreamEvents on
-// events. Closes events when the turn ends (success, error, or cancellation).
-//
-// Event order:
-//   - zero-or-more "text" / "thinking" / "tool_call" events as the model streams
-//   - one "usage" event when the stream finishes (per stream — fantasy emits
-//     OnStreamFinish at the end of each step's stream segment)
-//   - one terminal "done" event with Messages populated (rebuilt transcript
-//     from result.Steps[].Messages) OR one "error" event
-//
-// The agent layer translates these to agent.Event for the UI and appends
-// ev.Messages to its own a.messages on "done".
+// retryBackoff is the exponential backoff sequence used when the provider
+// returns a retryable error (429, 5xx, connection refused, timeout).
+// 1s → 2s → 4s → 8s → 16s → 32s → 64s. After exhausting all delays the
+// last error is returned.
+var retryBackoff = []time.Duration{
+	1 * time.Second,
+	2 * time.Second,
+	4 * time.Second,
+	8 * time.Second,
+	16 * time.Second,
+	32 * time.Second,
+	64 * time.Second,
+}
+
+// StreamChat runs one full agent turn against fantasy with exponential backoff
+// retry. Emits StreamEvents on events; closes events when the turn ends.
 func (c *Client) StreamChat(ctx context.Context, msgs []Message, reg *tools.Registry, events chan<- StreamEvent) {
 	defer close(events)
 
+	var lastErr error
+	for attempt := 0; attempt <= len(retryBackoff); attempt++ {
+		if attempt > 0 {
+			delay := retryBackoff[attempt-1]
+			// Tell UI we're retrying so user sees what's happening.
+			safeSend(ctx, events, StreamEvent{
+				Type:  "text",
+				Text:  "\n\n🦍 *retrying after server error… waiting " + delay.String() + "* 🦍",
+			})
+			select {
+			case <-time.After(delay):
+			case <-ctx.Done():
+				safeSend(ctx, events, StreamEvent{Type: "error", Error: ctx.Err()})
+				return
+			}
+		}
+
+		err := c.streamOnce(ctx, msgs, reg, events)
+		if err == nil {
+			return // success — "done" event already sent by streamOnce
+		}
+		lastErr = err
+
+		if !isRetryable(err) {
+			safeSend(ctx, events, StreamEvent{Type: "error", Error: err})
+			return
+		}
+	}
+	safeSend(ctx, events, StreamEvent{Type: "error", Error: lastErr})
+}
+
+// streamOnce performs a single StreamChat attempt. Returns nil on success
+// (which means a "done" event was already sent to events), or an error.
+func (c *Client) streamOnce(ctx context.Context, msgs []Message, reg *tools.Registry, events chan<- StreamEvent) error {
 	model, err := c.ensureModel(ctx)
 	if err != nil {
-		safeSend(ctx, events, StreamEvent{Type: "error", Error: err})
-		return
+		return err
 	}
 
 	prompt, prior, systemPrompt := splitForFantasy(msgs)
@@ -50,6 +85,7 @@ func (c *Client) StreamChat(ctx context.Context, msgs []Message, reg *tools.Regi
 
 	fa := fantasy.NewAgent(model, opts...)
 
+	var streamErr error
 	result, err := fa.Stream(ctx, fantasy.AgentStreamCall{
 		Prompt:   prompt,
 		Messages: prior,
@@ -79,8 +115,6 @@ func (c *Client) StreamChat(ctx context.Context, msgs []Message, reg *tools.Regi
 		},
 
 		OnToolResult: func(res fantasy.ToolResultContent) error {
-			// Tool results land in result.Steps[].Messages; the agent rebuilds
-			// transcript from there. UI sees a tool_result event for live feedback.
 			return safeSend(ctx, events, StreamEvent{
 				Type:       "tool_result",
 				ToolCallID: res.ToolCallID,
@@ -94,13 +128,15 @@ func (c *Client) StreamChat(ctx context.Context, msgs []Message, reg *tools.Regi
 			return safeSend(ctx, events, StreamEvent{Type: "usage", Usage: &usage})
 		},
 
-		OnError: func(streamErr error) {
-			_ = safeSend(ctx, events, StreamEvent{Type: "error", Error: streamErr})
+		OnError: func(err error) {
+			streamErr = err
 		},
 	})
+	if streamErr != nil {
+		return streamErr
+	}
 	if err != nil {
-		safeSend(ctx, events, StreamEvent{Type: "error", Error: err})
-		return
+		return err
 	}
 
 	rebuilt := make([]Message, 0)
@@ -112,14 +148,47 @@ func (c *Client) StreamChat(ctx context.Context, msgs []Message, reg *tools.Regi
 		}
 	}
 	safeSend(ctx, events, StreamEvent{Type: "done", Messages: rebuilt})
+	return nil
 }
 
-// CompleteText runs a non-streaming completion for compaction. It builds a
-// tool-less agent, streams tokens into a buffer, and returns the full text.
-//
-// The agent's hand-rolled compaction loop used to walk events and concatenate
-// "text" deltas itself; centralising that here means callers don't have to
-// know about the StreamEvent surface for one-shot completions.
+// isRetryable returns true when the error is likely transient and a retry
+// after backoff has a reasonable chance of succeeding.
+func isRetryable(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := strings.ToLower(err.Error())
+
+	// Provider-level transient errors.
+	retryable := []string{
+		"rate limit", "rate_limit", "too many requests",
+		"429", "503", "502", "504",
+		"server overloaded", "server error",
+		"internal server error",
+		"service unavailable",
+		"connection refused",
+		"connection reset",
+		"broken pipe",
+		"tls handshake timeout", "tls: handshake",
+		"deadline exceeded",
+		"timed out", "timeout",
+		"eof",
+		"unexpected eof",
+		"no such host",
+		"dial tcp",
+		"i/o timeout",
+		"temporary failure",
+		"try again",
+	}
+	for _, keyword := range retryable {
+		if strings.Contains(msg, keyword) {
+			return true
+		}
+	}
+	return false
+}
+
+// CompleteText runs a non-streaming completion for compaction.
 func (c *Client) CompleteText(ctx context.Context, msgs []Message) (string, error) {
 	model, err := c.ensureModel(ctx)
 	if err != nil {
@@ -150,9 +219,6 @@ func (c *Client) CompleteText(ctx context.Context, msgs []Message) (string, erro
 	return out.String(), nil
 }
 
-// safeSend is a context-aware channel send. A canceled context returns
-// ctx.Err() instead of blocking forever; callbacks bubble that back to fantasy
-// to abort cleanly.
 func safeSend(ctx context.Context, ch chan<- StreamEvent, ev StreamEvent) error {
 	select {
 	case ch <- ev:
@@ -162,9 +228,6 @@ func safeSend(ctx context.Context, ch chan<- StreamEvent, ev StreamEvent) error 
 	}
 }
 
-// toolResultText extracts the text payload from a fantasy tool result for the
-// "tool_result" StreamEvent. Non-text outputs collapse to an empty string —
-// the canonical record lives in result.Steps[].Messages anyway.
 func toolResultText(out fantasy.ToolResultOutputContent) string {
 	switch v := out.(type) {
 	case fantasy.ToolResultOutputContentText:

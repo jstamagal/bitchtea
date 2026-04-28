@@ -7,6 +7,8 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"sync"
+	"syscall"
 	"time"
 
 	"github.com/jstamagal/bitchtea/internal/llm"
@@ -28,10 +30,15 @@ type Entry struct {
 	ID         string         `json:"id"`
 }
 
-// Session manages reading/writing JSONL session files
+// Session manages reading/writing JSONL session files.
+//
+// mu serialises writes to the JSONL file. While UI updates happen on the
+// Bubble Tea goroutine, autonomous-turn flushes and compaction can trigger
+// concurrent calls from agent goroutines sharing the same Session.
 type Session struct {
 	Path    string
 	Entries []Entry
+	mu      sync.Mutex
 }
 
 // Checkpoint captures lightweight autonomous-turn state without mutating
@@ -96,8 +103,13 @@ func Load(path string) (*Session, error) {
 	return s, nil
 }
 
-// Append adds an entry and writes it to the file
+// Append adds an entry and writes it to the file. Uses internal mutex to
+// serialise concurrent goroutine access from the same process, and flock to
+// prevent interleaved writes from concurrent bitchtea processes.
 func (s *Session) Append(entry Entry) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
 	entry.Timestamp = time.Now()
 	if entry.ID == "" {
 		entry.ID = fmt.Sprintf("%d", time.Now().UnixNano())
@@ -120,6 +132,11 @@ func (s *Session) Append(entry Entry) error {
 		return fmt.Errorf("open session file: %w", err)
 	}
 	defer f.Close()
+
+	if err := syscall.Flock(int(f.Fd()), syscall.LOCK_EX); err != nil {
+		return fmt.Errorf("flock session: %w", err)
+	}
+	defer syscall.Flock(int(f.Fd()), syscall.LOCK_UN) //nolint:errcheck
 
 	_, err = f.Write(append(data, '\n'))
 	return err
