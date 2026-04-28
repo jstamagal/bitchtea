@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"os/exec"
 	"strings"
 	"sync"
@@ -29,10 +28,17 @@ type terminalSession struct {
 	emu    *vt.SafeEmulator
 	cancel context.CancelFunc
 	done   chan struct{}
+	copyWg sync.WaitGroup // tracks io.Copy goroutines
 
 	mu        sync.Mutex
 	exitError error
 	closed    bool
+
+	// emuMu serializes ALL access to the emulator (Write, Read, String,
+	// Close). SafeEmulator's internal mutex only covers Write, but
+	// String/Read/Close also touch the underlying buffer — so concurrent
+	// snapshot + Write or Close + Read races without this outer lock.
+	emuMu sync.Mutex
 }
 
 func newTerminalManager(workDir string) *terminalManager {
@@ -98,8 +104,39 @@ func (m *terminalManager) Start(ctx context.Context, argsJSON string) (string, e
 	m.terms[id] = session
 	m.mu.Unlock()
 
-	go io.Copy(session.emu, pty) //nolint:errcheck
-	go io.Copy(pty, session.emu) //nolint:errcheck
+	session.copyWg.Add(2)
+	go func() {
+		buf := make([]byte, 4096)
+		for {
+			n, readErr := session.pty.Read(buf)
+			if n > 0 {
+				session.emuMu.Lock()
+				session.emu.Write(buf[:n]) //nolint:errcheck
+				session.emuMu.Unlock()
+			}
+			if readErr != nil {
+				break
+			}
+		}
+		session.copyWg.Done()
+	}()
+	go func() {
+		// emu.Read() blocks on its internal pipe; emuMu must NOT be held
+		// across it or snapshot/close will deadlock. The Write-vs-String
+		// race is prevented by emuMu; the Close-vs-Read race on the
+		// e.closed flag is a known bug in vt.SafeEmulator (upstream).
+		buf := make([]byte, 4096)
+		for {
+			n, readErr := session.emu.Read(buf)
+			if n > 0 {
+				_, _ = session.pty.Write(buf[:n])
+			}
+			if readErr != nil {
+				break
+			}
+		}
+		session.copyWg.Done()
+	}()
 	go session.wait()
 
 	sleepContext(ctx, time.Duration(args.DelayMS)*time.Millisecond)
@@ -310,8 +347,18 @@ func (s *terminalSession) close() {
 	if s.cmd.Process != nil && s.running() {
 		_ = s.cmd.Process.Kill()
 	}
-	_ = s.pty.Close()
+
+	// Close the emulator's internal pipe writer. This will cause
+	// emu.Read() (blocked in io.Copy(pty, emu)) to return io.EOF,
+	// and subsequent emu.Write() calls to return io.ErrClosedPipe,
+	// which makes io.Copy(emu, pty) exit too.
 	_ = s.emu.Close()
+
+	// Wait for process to exit and close pty from wait() goroutine.
+	<-s.done
+
+	// Wait for both io.Copy goroutines to drain after emulator closed.
+	s.copyWg.Wait()
 }
 
 func (s *terminalSession) running() bool {
@@ -333,17 +380,23 @@ func (s *terminalSession) snapshot(ansi bool) string {
 	exitErr := s.exitError
 	s.mu.Unlock()
 
+	s.emuMu.Lock()
+	w, h := s.emu.Width(), s.emu.Height()
+	var screen string
+	if ansi {
+		screen = s.emu.Render()
+	} else {
+		screen = s.emu.String()
+	}
+	s.emuMu.Unlock()
+
 	var sb strings.Builder
-	fmt.Fprintf(&sb, "terminal session %s (%dx%d) %s", s.id, s.emu.Width(), s.emu.Height(), state)
+	fmt.Fprintf(&sb, "terminal session %s (%dx%d) %s", s.id, w, h, state)
 	if exitErr != nil {
 		fmt.Fprintf(&sb, " (%v)", exitErr)
 	}
 	sb.WriteString("\n--- screen ---\n")
-	if ansi {
-		sb.WriteString(s.emu.Render())
-	} else {
-		sb.WriteString(s.emu.String())
-	}
+	sb.WriteString(screen)
 	return strings.TrimRight(sb.String(), "\n")
 }
 
