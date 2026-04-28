@@ -601,19 +601,26 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.errMsg(fmt.Sprintf("checkpoint save failed: %v", err))
 		}
 
-		// Process queued messages first
+		// Process queued messages: batch all of them into one turn so the agent
+		// sees the full context of what was said, not one orphaned message at a time.
 		if len(m.queued) > 0 {
-			next := m.queued[0]
-			m.queued = m.queued[1:]
+			var combined strings.Builder
+			for i, msg := range m.queued {
+				if i > 0 {
+					combined.WriteString("\n")
+				}
+				combined.WriteString(fmt.Sprintf("[queued msg %d]: %s", i+1, msg))
+			}
+			m.queued = nil
 			m.queueClearArmed = false
 			m.addMessage(ChatMessage{
 				Time:    time.Now(),
 				Type:    MsgUser,
 				Nick:    m.config.UserNick,
-				Content: next,
+				Content: combined.String(),
 			})
 			m.refreshViewport()
-			return m, m.sendToAgent(next)
+			return m, m.sendToAgent(combined.String())
 		}
 
 		if followUp := m.agent.MaybeQueueFollowUp(); followUp != nil {
