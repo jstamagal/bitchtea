@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	neturl "net/url"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -41,6 +42,7 @@ var slashCommandRegistry = registerSlashCommands(
 	slashCommandSpec{names: []string{"/theme"}, handler: handleThemeCommand},
 	slashCommandSpec{names: []string{"/memory"}, handler: handleMemoryCommand},
 	slashCommandSpec{names: []string{"/sessions", "/ls"}, handler: handleSessionsCommand},
+	slashCommandSpec{names: []string{"/resume"}, handler: handleResumeCommand},
 	slashCommandSpec{names: []string{"/tree"}, handler: handleTreeCommand},
 	slashCommandSpec{names: []string{"/fork"}, handler: handleForkCommand},
 	slashCommandSpec{names: []string{"/baseurl"}, handler: handleBaseURLCommand},
@@ -87,6 +89,7 @@ const helpCommandText = "Commands:\n" +
 	"  /tokens             Token usage estimate\n" +
 	"  /memory             Show MEMORY.md contents\n" +
 	"  /sessions           List saved sessions\n" +
+	"  /resume <number>    Resume a session by number\n" +
 	"  /tree               Show session tree\n" +
 	"  /fork               Fork session\n" +
 	"  /debug on|off       Toggle verbose API logging\n" +
@@ -442,25 +445,83 @@ func handleMemoryCommand(m Model, _ string, _ []string) (Model, tea.Cmd) {
 	return m, nil
 }
 
-func handleSessionsCommand(m Model, _ string, _ []string) (Model, tea.Cmd) {
+func handleSessionsCommand(m Model, _ string, parts []string) (Model, tea.Cmd) {
 	sessions, err := session.List(m.config.SessionDir)
 	if err != nil || len(sessions) == 0 {
 		m.sysMsg("No saved sessions.")
 		return m, nil
 	}
+
+	const pageSize = 20
+	page := 1
+	if len(parts) >= 2 {
+		if _, err := fmt.Sscanf(parts[1], "%d", &page); err != nil || page < 1 {
+			page = 1
+		}
+	}
+
+	totalPages := (len(sessions) + pageSize - 1) / pageSize
+	if page > totalPages {
+		page = totalPages
+	}
+
+	start := (page - 1) * pageSize
+	end := start + pageSize
+	if end > len(sessions) {
+		end = len(sessions)
+	}
+
 	var sb strings.Builder
-	sb.WriteString("Sessions:\n")
-	limit := len(sessions)
-	if limit > 15 {
-		limit = 15
+	if totalPages > 1 {
+		sb.WriteString(fmt.Sprintf("Sessions (page %d/%d):\n", page, totalPages))
+	} else {
+		sb.WriteString("Sessions:\n")
 	}
-	for i, sess := range sessions[:limit] {
-		sb.WriteString(fmt.Sprintf("  %d. %s\n", i+1, session.Info(sess)))
+	for i, sess := range sessions[start:end] {
+		sb.WriteString(fmt.Sprintf("  %d. %s\n", start+i+1, session.Info(sess)))
 	}
-	if len(sessions) > 15 {
-		sb.WriteString(fmt.Sprintf("  ... and %d more\n", len(sessions)-15))
+	if totalPages > 1 && page < totalPages {
+		sb.WriteString(fmt.Sprintf("  ... use /sessions %d for next page\n", page+1))
 	}
+	sb.WriteString(fmt.Sprintf("  Resume: /resume <number>\n"))
 	m.sysMsg(sb.String())
+	return m, nil
+}
+
+func handleResumeCommand(m Model, _ string, parts []string) (Model, tea.Cmd) {
+	if len(parts) < 2 {
+		m.sysMsg("Usage: /resume <number>  (use /sessions to list)")
+		return m, nil
+	}
+
+	var num int
+	if _, err := fmt.Sscanf(parts[1], "%d", &num); err != nil || num < 1 {
+		m.sysMsg(fmt.Sprintf("Invalid session number: %s", parts[1]))
+		return m, nil
+	}
+
+	sessions, err := session.List(m.config.SessionDir)
+	if err != nil || len(sessions) == 0 {
+		m.sysMsg("No saved sessions.")
+		return m, nil
+	}
+	if num > len(sessions) {
+		m.sysMsg(fmt.Sprintf("Session %d not found. %d sessions available.", num, len(sessions)))
+		return m, nil
+	}
+
+	if m.streaming && m.agent != nil {
+		m.cancelActiveTurn("Session resume", true)
+	}
+
+	sess, err := session.Load(sessions[num-1])
+	if err != nil {
+		m.sysMsg(fmt.Sprintf("Error loading session: %v", err))
+		return m, nil
+	}
+
+	m.ResumeSession(sess)
+	m.sysMsg(fmt.Sprintf("Resumed session %d: %s", num, filepath.Base(sessions[num-1])))
 	return m, nil
 }
 
