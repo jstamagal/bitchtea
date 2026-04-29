@@ -116,7 +116,11 @@ func (p *ToolPanel) Render(height int) string {
 		lines = append(lines, strings.Repeat("─", ToolPanelWidth-4))
 
 		// Show last N that fit
-		start := len(p.Tools) - (height - len(lines) - 2)
+		avail := height - len(lines) - 2
+		if avail < 0 {
+			avail = 0
+		}
+		start := len(p.Tools) - avail
 		if start < 0 {
 			start = 0
 		}
@@ -147,6 +151,9 @@ func (p *ToolPanel) Render(height int) string {
 
 	// Truncate to fit height
 	maxLines := height - 2 // account for border
+	if maxLines < 0 {
+		maxLines = 0
+	}
 	if len(lines) > maxLines {
 		lines = lines[:maxLines]
 	}
