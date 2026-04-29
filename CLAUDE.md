@@ -13,12 +13,13 @@ go test -race ./...
 go vet ./...
 ```
 
-Build the actual binaries:
+Build the main binary:
 
 ```bash
 go build -o bitchtea .
-go build -o daemon ./cmd/daemon
 ```
+
+`cmd/trace` is a developer scratchpad for exercising the tools registry against real filesystem/bash behavior — build it with `go build ./cmd/trace` and run only when investigating tool bugs. It is not shipped.
 
 Run a single test or package:
 
@@ -34,24 +35,25 @@ The project targets Go 1.26 (see `go.mod`). Keep shell commands non-interactive.
 bitchtea is a BitchX-styled TUI coding assistant built on the Charm stack (Bubble Tea, Lipgloss, Glamour). The runtime splits across a small set of packages with a strict acyclic dependency graph:
 
 ```
-main -> config, session, ui
-ui   -> agent, config, session, sound
-agent-> config, llm, tools, memory
+main    -> agent, config, llm, session, tools, ui
+ui      -> agent, config, llm, session, sound
+agent   -> config, llm, memory, tools     (also agent/event subpkg)
 session -> llm
-tools -> llm
+llm     -> tools
+tools   -> memory
 ```
 
-Keep it acyclic. A change that adds an upward edge (e.g., `llm -> agent`) is wrong.
+Keep it acyclic. A change that adds an upward edge (e.g., `llm -> agent`, or `tools -> llm`) is wrong — `llm` already depends on `tools`, so the reverse direction would cycle.
 
 ### Runtime model
 
 - `main.go` parses flags, runs `config.MigrateDataPaths()`, applies `~/.bitchtearc` via `config.ParseRC` + `ApplyRCSetCommands`, resolves a profile, optionally restores a session, then either runs `runHeadless` or boots Bubble Tea with `ui.NewModel(cfg)`.
 - `internal/ui/model.go` is the Bubble Tea `Model`. It owns input handling, slash-command dispatch (`handleCommand`), tool-panel state, signal handling (`SignalMsg`), and routing of `agentEventMsg` events back into the viewport. **`Update()` must stay non-blocking** — long work belongs in `tea.Cmd`s/goroutines that send messages back.
-- `internal/agent/agent.go` runs the LLM/tool loop: stream prompt → emit `Event`s (`text`, `tool_start`, `tool_result`, `state`, `error`, `done`) → execute tool calls → feed results back → repeat until the turn ends. The agent also tracks IRC-style `MemoryScope` and a `bootstrapMsgCount` for compaction.
-- `internal/llm` has a single `Client` plus separate codepaths for OpenAI (`client.go`) and Anthropic (`anthropic.go`) streaming, behind the `ChatStreamer` interface. Retry, error hints, and cost tracking live alongside.
-- `internal/tools/tools.go` defines and executes the built-in tool surface (`read`, `write`, `edit`, `bash`). Tool behavior is intentionally powerful — do not add artificial guardrails that break the coding-assistant workflow.
-- `internal/session/session.go` writes one JSON line per `session.Entry` to `~/.bitchtea/sessions/`. Append-only matters: resume, list, fork, and tree all assume it. If you change the format, migrate it deliberately.
-- `internal/daemon` is a separate binary (`cmd/daemon`) that runs heartbeat and janitor loops. **`compactModel` is hardcoded to `claude-opus-4-6` / `anthropic` and must NOT be downgraded** — see the comment in `daemon.go`.
+- `internal/agent/agent.go` runs the LLM/tool loop: stream prompt → emit `event.Event`s (`text`, `tool_start`, `tool_result`, `state`, `error`, `done`) → execute tool calls → feed results back → repeat until the turn ends. The agent holds a single `messages []llm.Message` slice for the whole session and a current `MemoryScope` (root / `#channel` / `query`) used to route memory reads/writes — the message history itself is **not** yet isolated per IRC context (see "In flight" below). `Compact()` flushes older messages to per-day memory files via `internal/memory` before truncating; `bootstrapMsgCount` marks the boundary that compaction must not cross.
+- `internal/llm` exposes a single `Client` (`client.go`) and a `ChatStreamer` interface; `stream.go` is the unified streaming loop and `providers.go` holds per-provider config (OpenAI-compatible vs Anthropic). `convert.go`, `cost.go`, `errors.go`, and `tools.go` handle message conversion, cost tracking, error classification, and tool-schema plumbing.
+- `internal/tools/tools.go` defines and executes the built-in tool surface: `read`, `write`, `edit`, `bash`, `search_memory`, the `terminal_*` PTY family (`start`/`send`/`keys`/`snapshot`/`wait`/`resize`/`close`), and `preview_image`. Terminal state lives in `terminal.go`; image handling in `image.go`. Tool behavior is intentionally powerful — do not add artificial guardrails that break the coding-assistant workflow.
+- `internal/session/session.go` writes one JSON line per `session.Entry` to `~/.bitchtea/sessions/`. Append-only matters: resume, list, fork, and tree all assume it. If you change the format, migrate it deliberately. Channel/membership state has its own file (`membership.go`) alongside the session log.
+- `internal/memory` provides the scoped memory store (`RootScope`, `ChannelScope`, `QueryScope`) used by both `search_memory` and agent compaction. Files live under `~/.bitchtea/memory/` keyed by workspace + scope, with daily append files for compacted history.
 
 ### Provider detection and profiles
 
@@ -63,6 +65,15 @@ Keep it acyclic. A change that adds an upward edge (e.g., `llm -> agent`) is wro
 - `AGENTS.md` and `CLAUDE.md` are discovered upward from the working directory and injected as agent context (see `internal/agent/context.go`).
 - `@file` tokens inline file contents into the prompt.
 - `MEMORY.md` (per-workspace) is gitignored and consumed via `/memory`.
+
+### In flight (don't describe these as done)
+
+These are open architectural items tracked in `bd` — read the current state from the code, not from intuitions about what the IRC framing implies:
+
+- **Per-context histories** (`bt-x1o`, P0): `/join #chan` and `/query nick` only re-label the UI today; the agent still streams against one shared `messages` slice. Don't write code or docs that assume isolated histories until this lands.
+- **`write_memory` tool** (`bt-vhs`, P0) is not yet implemented — only `search_memory` exists in the tool surface.
+- **Daemon removal** (`bt-76w`, P2): the old `_attic` daemon was deleted during compaction. There is currently **no daemon binary, no `cmd/daemon`, no `internal/daemon` package**, and no hardcoded compaction model. A future Phase 7 epic (`bt-p7`, P3) may rebuild it, but until then do not reintroduce daemon assumptions.
+- **Fantasy migration** (Phases 2–4, epics `bt-p2`/`bt-p3`/`bt-p4`): tools today are still untyped `Registry.Execute(name, argsJSON)` and the agent boundary still uses `llm.Message`. Typed `fantasy.NewAgentTool` wrappers and fantasy-native messages are the *target*, not the present state — don't write code as if the migration is complete.
 
 ## Adding a Slash Command
 
@@ -88,9 +99,9 @@ Do not block inside command handlers — return `tea.Cmd`s.
 
 ## Docs Split
 
-- `README.md` is for users.
-- `CONTRIBUTING.md` is for maintainers (deeper detail than this file).
-- If docs drift, move implementation detail out of `README.md` rather than duplicating it.
+- `README.md` is the user-facing entrypoint.
+- `docs/` holds longer-form maintainer docs (`architecture.md`, `agent-loop.md`, `streaming.md`, `tools.md`, `memory.md`, `sessions.md`, `commands.md`, `cli-flags.md`, `signals-and-keys.md`, `getting-started.md`, `user-guide.md`, `development.md`, `glossary.md`, `troubleshooting.md`). Prefer adding deeper detail there rather than expanding `README.md` or this file.
+- `AGENTS.md` is read by agents at startup (alongside `CLAUDE.md`) — keep agent-facing instructions there if they're for *running* the assistant, not for working on the repo.
 
 
 <!-- BEGIN BEADS INTEGRATION v:1 profile:minimal hash:ca08a54f -->

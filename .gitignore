@@ -61,3 +61,6 @@ personal_docs/
 _attic/
 *.html
 .aider*
+GEMINI.md
+CLAUDE.md
+AGENTS.md
