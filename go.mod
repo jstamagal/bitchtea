@@ -14,6 +14,8 @@ require (
 	github.com/charmbracelet/x/vt v0.0.0-20260427100455-1ea3e7f8134f
 	github.com/charmbracelet/x/xpty v0.1.4-0.20260427100455-1ea3e7f8134f
 	github.com/hajimehoshi/go-mp3 v0.3.4
+	github.com/modelcontextprotocol/go-sdk v1.6.0
+	golang.org/x/sys v0.43.0
 	golang.org/x/term v0.41.0
 )
 
@@ -83,7 +85,6 @@ require (
 	github.com/mattn/go-localereader v0.0.1 // indirect
 	github.com/mattn/go-runewidth v0.0.23 // indirect
 	github.com/microcosm-cc/bluemonday v1.0.27 // indirect
-	github.com/modelcontextprotocol/go-sdk v1.6.0 // indirect
 	github.com/muesli/ansi v0.0.0-20230316100256-276c6243b2f6 // indirect
 	github.com/muesli/cancelreader v0.2.2 // indirect
 	github.com/muesli/reflow v0.3.0 // indirect
@@ -110,7 +111,6 @@ require (
 	golang.org/x/net v0.52.0 // indirect
 	golang.org/x/oauth2 v0.36.0 // indirect
 	golang.org/x/sync v0.20.0 // indirect
-	golang.org/x/sys v0.43.0 // indirect
 	golang.org/x/text v0.36.0 // indirect
 	golang.org/x/time v0.15.0 // indirect
 	google.golang.org/api v0.271.0 // indirect

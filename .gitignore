@@ -1,7 +1,7 @@
-# Binaries
-daemon
-bitchtea
-90skid
+# Binaries (root-only; do not match cmd/daemon or internal/daemon source dirs)
+/daemon
+/bitchtea
+/90skid
 *.exe
 /dist/
 

@@ -19,6 +19,10 @@ Control the launch from the terminal.
 
 - **`-h, --help`**: Show usage and flag descriptions.
 
+## 🛠️ SUBCOMMANDS
+
+- **`bitchtea daemon <start|status|stop>`**: Manage the optional background daemon (Phase 7 scaffold; manual launch only — `start` runs in the foreground until SIGINT/SIGTERM). See `docs/phase-7-process-model.md`.
+
 ## 🌍 ENVIRONMENT VARIABLES
 
 - **`OPENAI_API_KEY`**: Key for OpenAI models.

@@ -26,6 +26,14 @@ type cliOptions struct {
 }
 
 func main() {
+	// Dispatch `bitchtea daemon ...` before any flag parsing — the daemon
+	// CLI is intentionally orthogonal to the TUI startup path. This lets us
+	// keep --resume / --profile / etc. simple and avoids accidental flag
+	// collisions.
+	if len(os.Args) >= 2 && os.Args[1] == "daemon" {
+		os.Exit(runDaemon(os.Args[2:], os.Stdout, os.Stderr))
+	}
+
 	if err := config.MigrateDataPaths(); err != nil {
 		fmt.Fprintf(os.Stderr, "bitchtea: data migration warning: %v\n", err)
 	}
@@ -362,6 +370,7 @@ func printUsage() {
 	fmt.Println(`bitchtea — putting the BITCH back in your terminal
 
 Usage: bitchtea [flags]
+       bitchtea daemon <start|status|stop>
 
 Flags:
   -m, --model <name>     Model to use (default: gpt-4o)
