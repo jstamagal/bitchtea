@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/url"
 	"os"
 	"os/user"
 	"path/filepath"
@@ -23,7 +24,8 @@ type Config struct {
 	APIKey   string
 	BaseURL  string
 	Model    string
-	Provider string
+	Provider string // wire format / dialect: "openai" or "anthropic"
+	Service  string // upstream service identity: "openai", "anthropic", "ollama", "openrouter", "zai-openai", ... or "custom"
 	Profile  string // The name of the loaded profile, if any
 
 	// Agent behavior
@@ -57,6 +59,7 @@ func DefaultConfig() Config {
 		BaseURL:  envOr("OPENAI_BASE_URL", "https://api.openai.com/v1"),
 		Model:    envOr("BITCHTEA_MODEL", "gpt-4o"),
 		Provider: envOr("BITCHTEA_PROVIDER", "openai"),
+		Service:  "openai",
 
 		AutoNextSteps: false,
 		AutoNextIdea:  false,
@@ -79,6 +82,7 @@ func DetectProvider(cfg *Config) {
 		cfg.APIKey = key
 		cfg.BaseURL = envOr("ANTHROPIC_BASE_URL", "https://api.anthropic.com/v1")
 		cfg.Provider = "anthropic"
+		cfg.Service = "anthropic"
 		if cfg.Model == "gpt-4o" {
 			cfg.Model = "claude-sonnet-4-20250514"
 		}
@@ -86,6 +90,7 @@ func DetectProvider(cfg *Config) {
 		cfg.APIKey = key
 		cfg.Provider = builtinProfiles["openrouter"].Provider
 		cfg.BaseURL = builtinProfiles["openrouter"].BaseURL
+		cfg.Service = builtinProfiles["openrouter"].Service
 		cfg.Profile = "openrouter"
 		if cfg.Model == "gpt-4o" {
 			cfg.Model = builtinProfiles["openrouter"].Model
@@ -94,6 +99,7 @@ func DetectProvider(cfg *Config) {
 		cfg.APIKey = key
 		cfg.Provider = builtinProfiles["zai-openai"].Provider
 		cfg.BaseURL = builtinProfiles["zai-openai"].BaseURL
+		cfg.Service = builtinProfiles["zai-openai"].Service
 		cfg.Profile = "zai-openai"
 		if cfg.Model == "gpt-4o" {
 			cfg.Model = builtinProfiles["zai-openai"].Model
@@ -101,6 +107,7 @@ func DetectProvider(cfg *Config) {
 	} else if key := os.Getenv("OPENAI_API_KEY"); key != "" && cfg.APIKey == "" {
 		cfg.APIKey = key
 		cfg.Provider = "openai"
+		cfg.Service = "openai"
 	}
 }
 
@@ -111,36 +118,30 @@ func envOr(key, fallback string) string {
 	return fallback
 }
 
-// Profile is a saved connection configuration
+// Profile is a saved connection configuration.
+//
+// Provider encodes the wire format / dialect ("openai" or "anthropic"). Service
+// encodes the upstream service identity ("openai", "anthropic", "ollama",
+// "openrouter", "zai-openai", ... or "custom"). See docs/phase-9-service-identity.md.
+//
+// Service uses omitempty so old profiles without the field round-trip cleanly,
+// and is filled in lazily on load via deriveService when missing.
 type Profile struct {
 	Name     string `json:"name"`
 	Provider string `json:"provider"`
+	Service  string `json:"service,omitempty"`
 	BaseURL  string `json:"base_url"`
 	APIKey   string `json:"api_key"`
 	Model    string `json:"model"`
 }
 
-// TODO(Phase6): The Provider field in Profile (and Config) currently encodes
-// the wire format ("openai" or "anthropic"), not the actual upstream service.
-// As a result every Ollama/OpenRouter/aihubmix/etc. profile carries
-// Provider:"openai" even though they are distinct services with different
-// capabilities, quirks, and required headers.
-//
-// Known breakage caused by this:
-//   - OpenRouter reasoning params (extended thinking) cannot be gated on
-//     service identity; URL sniffing in llm/client.go is used as a workaround.
-//   - Ollama's stream_options.include_usage is silently ignored; cannot be
-//     suppressed without URL sniffing.
-//   - Anthropic prompt caching (cache_control blocks) cannot be activated
-//     for proxies that forward the Anthropic wire format (e.g. zai-anthropic)
-//     without knowing whether we're talking to native Anthropic or a proxy.
-//   - ProfileAllowsEmptyAPIKey uses URL-prefix matching to detect Ollama.
-//
-// Phase 6 fix: add a Service/Identity field (e.g. "ollama", "openrouter",
-// "anthropic", "openai") alongside Provider (wire format). All per-service
-// behaviour should gate on Service, not Provider.
+// builtinProfileSpec is the in-memory definition of a built-in profile.
+// Provider is the wire format; Service is the upstream service identity used
+// for per-service behavior gates (cache_control, reasoning forwarding, empty
+// API key allowance, etc.).
 type builtinProfileSpec struct {
 	Provider  string
+	Service   string
 	BaseURL   string
 	Model     string
 	APIKeyEnv []string
@@ -149,89 +150,104 @@ type builtinProfileSpec struct {
 var builtinProfiles = map[string]builtinProfileSpec{
 	"ollama": {
 		Provider: "openai",
+		Service:  "ollama",
 		BaseURL:  "http://localhost:11434/v1",
 		Model:    "llama3.2",
 	},
 	"openrouter": {
 		Provider:  "openai",
+		Service:   "openrouter",
 		BaseURL:   "https://openrouter.ai/api/v1",
 		Model:     "anthropic/claude-sonnet-4",
 		APIKeyEnv: []string{"OPENROUTER_API_KEY"},
 	},
 	"aihubmix": {
 		Provider:  "openai",
+		Service:   "aihubmix",
 		BaseURL:   "https://aihubmix.com/v1",
 		Model:     "gpt-4o",
 		APIKeyEnv: []string{"AIHUBMIX_API_KEY"},
 	},
 	"avian": {
 		Provider:  "openai",
+		Service:   "avian",
 		BaseURL:   "https://api.avian.io/v1",
 		Model:     "llama3",
 		APIKeyEnv: []string{"AVIAN_API_KEY"},
 	},
 	"copilot": {
 		Provider:  "openai",
+		Service:   "copilot",
 		BaseURL:   "https://api.githubcopilot.com",
 		Model:     "gpt-4o",
 		APIKeyEnv: []string{"GITHUB_TOKEN", "COPILOT_API_KEY"},
 	},
 	"cortecs": {
 		Provider:  "openai",
+		Service:   "cortecs",
 		BaseURL:   "https://api.cortecs.ai/v1",
 		Model:     "cortecs-model",
 		APIKeyEnv: []string{"CORTECS_API_KEY"},
 	},
 	"huggingface": {
 		Provider:  "openai",
+		Service:   "huggingface",
 		BaseURL:   "https://router.huggingface.co/v1",
 		Model:     "meta-llama/Llama-3.1-8B-Instruct",
 		APIKeyEnv: []string{"HUGGINGFACE_API_KEY"},
 	},
 	"ionet": {
 		Provider:  "openai",
+		Service:   "ionet",
 		BaseURL:   "https://api.intelligence.io.solutions/api/v1",
 		Model:     "io-net-model",
 		APIKeyEnv: []string{"IONET_API_KEY"},
 	},
 	"nebius": {
 		Provider:  "openai",
+		Service:   "nebius",
 		BaseURL:   "https://api.tokenfactory.nebius.com/v1",
 		Model:     "meta-llama/Meta-Llama-3.1-70B-Instruct",
 		APIKeyEnv: []string{"NEBIUS_API_KEY"},
 	},
 	"synthetic": {
 		Provider:  "openai",
+		Service:   "synthetic",
 		BaseURL:   "https://api.synthetic.new/openai/v1",
 		Model:     "synthetic-model",
 		APIKeyEnv: []string{"SYNTHETIC_API_KEY"},
 	},
 	"venice": {
 		Provider:  "openai",
+		Service:   "venice",
 		BaseURL:   "https://api.venice.ai/api/v1",
 		Model:     "venice-model",
 		APIKeyEnv: []string{"VENICE_API_KEY"},
 	},
 	"vercel": {
 		Provider:  "openai",
+		Service:   "vercel",
 		BaseURL:   "https://ai-gateway.vercel.sh/v1",
 		Model:     "openai:gpt-4o",
 		APIKeyEnv: []string{"VERCEL_API_KEY"},
 	},
 	"xai": {
 		Provider:  "openai",
+		Service:   "xai",
 		BaseURL:   "https://api.x.ai/v1",
 		Model:     "grok-beta",
 		APIKeyEnv: []string{"XAI_API_KEY"},
 	},
 	"zai-openai": {
 		Provider:  "openai",
+		Service:   "zai-openai",
 		BaseURL:   "https://api.z.ai/api/coding/paas/v4",
 		Model:     "GLM-4.7",
 		APIKeyEnv: []string{"ZAI_API_KEY"},
 	},
 	"zai-anthropic": {
 		Provider:  "anthropic",
+		Service:   "zai-anthropic",
 		BaseURL:   "https://api.z.ai/api/anthropic",
 		Model:     "GLM-4.7",
 		APIKeyEnv: []string{"ZAI_API_KEY"},
@@ -275,6 +291,9 @@ func LoadProfile(name string) (*Profile, error) {
 	if err := json.Unmarshal(data, &p); err != nil {
 		return nil, fmt.Errorf("parse profile %q: %w", name, err)
 	}
+	if p.Service == "" {
+		p.Service = deriveService(p)
+	}
 	return &p, nil
 }
 
@@ -313,6 +332,9 @@ func ApplyProfile(cfg *Config, p *Profile) {
 	if p.Provider != "" {
 		cfg.Provider = p.Provider
 	}
+	if p.Service != "" {
+		cfg.Service = p.Service
+	}
 	if p.BaseURL != "" {
 		cfg.BaseURL = p.BaseURL
 	}
@@ -327,10 +349,9 @@ func ApplyProfile(cfg *Config, p *Profile) {
 // ProfileAllowsEmptyAPIKey reports whether the selected transport can start
 // without credentials. Today that means local Ollama-compatible endpoints.
 //
-// TODO(Phase6): This function sniffs the base URL to recognise Ollama because
-// cfg.Provider is always "openai" for every OpenAI-compat service. When
-// fantasy/catwalk introduces a proper service-identity field (e.g. "ollama"),
-// replace the URL-prefix check with: cfg.Service == "ollama".
+// TODO(bt-p9): Once Service is reliably populated end-to-end, replace the
+// URL-prefix sniffing with: cfg.Service == "ollama". Phase 9 (bt-p9-builtins)
+// added the field; gating switchover lands in a sibling ticket.
 func ProfileAllowsEmptyAPIKey(cfg Config) bool {
 	if cfg.Provider != "openai" {
 		return false
@@ -367,6 +388,9 @@ func loadSavedProfile(name string) (*Profile, error) {
 	if err := json.Unmarshal(data, &p); err != nil {
 		return nil, fmt.Errorf("parse profile %q: %w", name, err)
 	}
+	if p.Service == "" {
+		p.Service = deriveService(p)
+	}
 	return &p, nil
 }
 
@@ -379,6 +403,7 @@ func builtinProfile(name string) (*Profile, bool) {
 	p := &Profile{
 		Name:     name,
 		Provider: spec.Provider,
+		Service:  spec.Service,
 		BaseURL:  spec.BaseURL,
 		Model:    spec.Model,
 	}
@@ -389,6 +414,38 @@ func builtinProfile(name string) (*Profile, bool) {
 		}
 	}
 	return p, true
+}
+
+// deriveService computes a default Service identity for a profile loaded from
+// disk that lacks the field. The lookup order is:
+//  1. profile name matches a built-in key,
+//  2. base URL host matches a built-in's host,
+//  3. fall back to "custom".
+//
+// This is the lazy migration path described in docs/phase-9-service-identity.md.
+// It does not rewrite the file; the next /profile save will persist the field.
+func deriveService(p Profile) string {
+	if spec, ok := builtinProfiles[p.Name]; ok {
+		return spec.Service
+	}
+	if host := hostOf(p.BaseURL); host != "" {
+		for _, spec := range builtinProfiles {
+			if hostOf(spec.BaseURL) == host {
+				return spec.Service
+			}
+		}
+	}
+	return "custom"
+}
+
+// hostOf returns the lowercased host of a URL string, or "" if it can't be
+// parsed or has no host.
+func hostOf(rawURL string) string {
+	u, err := url.Parse(strings.TrimSpace(rawURL))
+	if err != nil {
+		return ""
+	}
+	return strings.ToLower(u.Host)
 }
 
 // MigrateDataPaths moves data from the old XDG locations to ~/.bitchtea/ if

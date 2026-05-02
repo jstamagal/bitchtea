@@ -122,6 +122,9 @@ func applySetToConfig(cfg *Config, key, value string) bool {
 	case "provider":
 		if value == "openai" || value == "anthropic" {
 			cfg.Provider = value
+			// User opted into a custom transport; per-service gates can no
+			// longer trust the previous Service identity. See bt-p9 design.
+			cfg.Service = "custom"
 			cfg.Profile = ""
 		}
 	case "model":
@@ -137,6 +140,9 @@ func applySetToConfig(cfg *Config, key, value string) bool {
 	case "baseurl":
 		if value != "" {
 			cfg.BaseURL = value
+			// User pointed the base URL elsewhere; service identity may no
+			// longer match. Mark as custom rather than leave a stale value.
+			cfg.Service = "custom"
 			cfg.Profile = ""
 		}
 	case "nick":

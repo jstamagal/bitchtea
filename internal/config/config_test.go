@@ -1,7 +1,10 @@
 package config
 
 import (
+	"encoding/json"
 	"os"
+	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -280,6 +283,266 @@ func TestMigrateDataPathsSkipsIfNewExists(t *testing.T) {
 	// New should still have its own file
 	if _, err := os.Stat(newSessions + "/new.jsonl"); err != nil {
 		t.Fatal("new file should still exist")
+	}
+}
+
+// TestBuiltinProfilesServiceIdentity asserts that every built-in profile
+// carries Provider as the wire format and Service as its upstream identity.
+// See docs/phase-9-service-identity.md for the mapping source of truth.
+func TestBuiltinProfilesServiceIdentity(t *testing.T) {
+	// Clear API-key env vars so builtinProfile() doesn't populate APIKey
+	// from the host environment.
+	for _, env := range []string{
+		"OPENROUTER_API_KEY", "AIHUBMIX_API_KEY", "AVIAN_API_KEY",
+		"GITHUB_TOKEN", "COPILOT_API_KEY", "CORTECS_API_KEY",
+		"HUGGINGFACE_API_KEY", "IONET_API_KEY", "NEBIUS_API_KEY",
+		"SYNTHETIC_API_KEY", "VENICE_API_KEY", "VERCEL_API_KEY",
+		"XAI_API_KEY", "ZAI_API_KEY",
+	} {
+		t.Setenv(env, "")
+	}
+
+	cases := []struct {
+		name            string
+		wantProvider    string
+		wantService     string
+	}{
+		{"ollama", "openai", "ollama"},
+		{"openrouter", "openai", "openrouter"},
+		{"aihubmix", "openai", "aihubmix"},
+		{"avian", "openai", "avian"},
+		{"copilot", "openai", "copilot"},
+		{"cortecs", "openai", "cortecs"},
+		{"huggingface", "openai", "huggingface"},
+		{"ionet", "openai", "ionet"},
+		{"nebius", "openai", "nebius"},
+		{"synthetic", "openai", "synthetic"},
+		{"venice", "openai", "venice"},
+		{"vercel", "openai", "vercel"},
+		{"xai", "openai", "xai"},
+		{"zai-openai", "openai", "zai-openai"},
+		{"zai-anthropic", "anthropic", "zai-anthropic"},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			p, ok := builtinProfile(tc.name)
+			if !ok {
+				t.Fatalf("built-in profile %q not found", tc.name)
+			}
+			if p.Provider != tc.wantProvider {
+				t.Errorf("Provider: want %q, got %q", tc.wantProvider, p.Provider)
+			}
+			if p.Service != tc.wantService {
+				t.Errorf("Service: want %q, got %q", tc.wantService, p.Service)
+			}
+		})
+	}
+}
+
+// TestDefaultConfigService asserts the zero-env default Config carries
+// Service="openai" matching the default OpenAI BaseURL.
+func TestDefaultConfigService(t *testing.T) {
+	cfg := DefaultConfig()
+	if cfg.Service != "openai" {
+		t.Fatalf("expected Service=openai, got %q", cfg.Service)
+	}
+}
+
+// TestDetectProviderSetsService verifies env-detection branches set Service
+// to the upstream identity, not just Provider.
+func TestDetectProviderSetsService(t *testing.T) {
+	cases := []struct {
+		name        string
+		env         map[string]string
+		wantSvc     string
+		wantProv    string
+	}{
+		{
+			name:     "anthropic",
+			env:      map[string]string{"ANTHROPIC_API_KEY": "sk-ant"},
+			wantSvc:  "anthropic",
+			wantProv: "anthropic",
+		},
+		{
+			name:     "openrouter",
+			env:      map[string]string{"OPENROUTER_API_KEY": "sk-or"},
+			wantSvc:  "openrouter",
+			wantProv: "openai",
+		},
+		{
+			name:     "zai",
+			env:      map[string]string{"ZAI_API_KEY": "sk-zai"},
+			wantSvc:  "zai-openai",
+			wantProv: "openai",
+		},
+		{
+			name:     "openai",
+			env:      map[string]string{"OPENAI_API_KEY": "sk-oa"},
+			wantSvc:  "openai",
+			wantProv: "openai",
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			// Clear all detection env vars first.
+			for _, k := range []string{"ANTHROPIC_API_KEY", "OPENROUTER_API_KEY", "ZAI_API_KEY", "OPENAI_API_KEY", "BITCHTEA_MODEL"} {
+				t.Setenv(k, "")
+			}
+			for k, v := range tc.env {
+				t.Setenv(k, v)
+			}
+			cfg := DefaultConfig()
+			cfg.APIKey = "" // DefaultConfig may have read OPENAI_API_KEY
+			DetectProvider(&cfg)
+			if cfg.Service != tc.wantSvc {
+				t.Errorf("Service: want %q, got %q", tc.wantSvc, cfg.Service)
+			}
+			if cfg.Provider != tc.wantProv {
+				t.Errorf("Provider: want %q, got %q", tc.wantProv, cfg.Provider)
+			}
+		})
+	}
+}
+
+// TestProfileServiceLazyMigrationByName loads a profile JSON without a
+// "service" field whose name matches a built-in; the loader should derive
+// Service from the built-in mapping.
+func TestProfileServiceLazyMigrationByName(t *testing.T) {
+	dir := t.TempDir()
+	origDir := ProfilesDir
+	ProfilesDir = func() string { return dir }
+	defer func() { ProfilesDir = origDir }()
+
+	raw := `{"name":"openrouter","provider":"openai","base_url":"https://openrouter.ai/api/v1","api_key":"sk-x","model":"foo"}`
+	if err := os.WriteFile(filepath.Join(dir, "openrouter.json"), []byte(raw), 0600); err != nil {
+		t.Fatalf("write fixture: %v", err)
+	}
+
+	p, err := LoadProfile("openrouter")
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	if p.Service != "openrouter" {
+		t.Fatalf("expected lazy-derived Service=openrouter, got %q", p.Service)
+	}
+}
+
+// TestProfileServiceLazyMigrationByHost loads a profile whose name does not
+// match a built-in, but whose BaseURL host matches one. Service should be
+// derived from the host match.
+func TestProfileServiceLazyMigrationByHost(t *testing.T) {
+	dir := t.TempDir()
+	origDir := ProfilesDir
+	ProfilesDir = func() string { return dir }
+	defer func() { ProfilesDir = origDir }()
+
+	raw := `{"name":"my-or","provider":"openai","base_url":"https://openrouter.ai/api/v1","api_key":"sk-x","model":"foo"}`
+	if err := os.WriteFile(filepath.Join(dir, "my-or.json"), []byte(raw), 0600); err != nil {
+		t.Fatalf("write fixture: %v", err)
+	}
+
+	p, err := LoadProfile("my-or")
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	if p.Service != "openrouter" {
+		t.Fatalf("expected host-derived Service=openrouter, got %q", p.Service)
+	}
+}
+
+// TestProfileServiceLazyMigrationFallback loads a profile whose name and host
+// do not match any built-in; Service should fall back to "custom".
+func TestProfileServiceLazyMigrationFallback(t *testing.T) {
+	dir := t.TempDir()
+	origDir := ProfilesDir
+	ProfilesDir = func() string { return dir }
+	defer func() { ProfilesDir = origDir }()
+
+	raw := `{"name":"weird","provider":"openai","base_url":"https://example.com/v1","api_key":"sk-x","model":"foo"}`
+	if err := os.WriteFile(filepath.Join(dir, "weird.json"), []byte(raw), 0600); err != nil {
+		t.Fatalf("write fixture: %v", err)
+	}
+
+	p, err := LoadProfile("weird")
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	if p.Service != "custom" {
+		t.Fatalf("expected fallback Service=custom, got %q", p.Service)
+	}
+}
+
+// TestProfileServiceOmitemptyOnMarshal asserts that a Profile with empty
+// Service marshals to JSON without a "service" key, preserving compatibility
+// with old binaries.
+func TestProfileServiceOmitemptyOnMarshal(t *testing.T) {
+	p := Profile{
+		Name:     "foo",
+		Provider: "openai",
+		BaseURL:  "https://example.com/v1",
+		APIKey:   "sk-x",
+		Model:    "m",
+	}
+	data, err := json.Marshal(p)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	if strings.Contains(string(data), "service") {
+		t.Fatalf("expected no \"service\" key in JSON, got %s", data)
+	}
+}
+
+// TestProfileServicePersistsOnMarshal asserts that a Profile with a non-empty
+// Service marshals it into the JSON output.
+func TestProfileServicePersistsOnMarshal(t *testing.T) {
+	p := Profile{
+		Name:     "openrouter",
+		Provider: "openai",
+		Service:  "openrouter",
+		BaseURL:  "https://openrouter.ai/api/v1",
+		APIKey:   "sk-x",
+		Model:    "m",
+	}
+	data, err := json.Marshal(p)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	if !strings.Contains(string(data), `"service":"openrouter"`) {
+		t.Fatalf("expected \"service\":\"openrouter\" in JSON, got %s", data)
+	}
+}
+
+// TestApplyProfileCopiesService verifies ApplyProfile lifts Service onto the
+// target Config when the profile carries one.
+func TestApplyProfileCopiesService(t *testing.T) {
+	cfg := Config{Service: "openai"}
+	p := &Profile{Provider: "openai", Service: "openrouter", BaseURL: "https://openrouter.ai/api/v1"}
+	ApplyProfile(&cfg, p)
+	if cfg.Service != "openrouter" {
+		t.Fatalf("expected Service=openrouter, got %q", cfg.Service)
+	}
+}
+
+// TestApplySetClobbersServiceForCustom verifies that setting provider or
+// baseurl via the rc/`/set` machinery downgrades Service to "custom" so
+// per-service gates don't trust a stale identity.
+func TestApplySetClobbersServiceForCustom(t *testing.T) {
+	cfg := Config{Provider: "openai", Service: "openrouter"}
+	if !ApplySet(&cfg, "baseurl", "https://example.com/v1") {
+		t.Fatal("ApplySet baseurl returned false")
+	}
+	if cfg.Service != "custom" {
+		t.Fatalf("expected Service=custom after baseurl change, got %q", cfg.Service)
+	}
+
+	cfg = Config{Provider: "openai", Service: "openrouter"}
+	if !ApplySet(&cfg, "provider", "anthropic") {
+		t.Fatal("ApplySet provider returned false")
+	}
+	if cfg.Service != "custom" {
+		t.Fatalf("expected Service=custom after provider change, got %q", cfg.Service)
 	}
 }
 
