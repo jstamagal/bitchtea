@@ -536,6 +536,9 @@ func (r *Registry) execEdit(argsJSON string) (string, error) {
 	applied := 0
 
 	for _, edit := range args.Edits {
+		if edit.OldText == "" {
+			return "", fmt.Errorf("edit: oldText must not be empty (use the write tool to create a new file or replace its contents)")
+		}
 		if !strings.Contains(content, edit.OldText) {
 			return "", fmt.Errorf("oldText not found in %s: %q", args.Path, truncate(edit.OldText, 80))
 		}

@@ -137,6 +137,44 @@ func TestEditFileNonUnique(t *testing.T) {
 	}
 }
 
+func TestEditFileEmptyOldText(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "empty.txt")
+	os.WriteFile(path, []byte("foo bar\n"), 0644)
+
+	reg := NewRegistry(dir, t.TempDir())
+
+	_, err := reg.Execute(context.Background(), "edit", `{"path":"empty.txt","edits":[{"oldText":"","newText":"injected"}]}`)
+	if err == nil {
+		t.Fatal("expected error for empty oldText")
+	}
+	msg := err.Error()
+	if !strings.Contains(msg, "oldText") || !strings.Contains(msg, "empty") || !strings.Contains(msg, "write") {
+		t.Fatalf("error message %q should mention oldText, empty, and write", msg)
+	}
+
+	data, _ := os.ReadFile(path)
+	if string(data) != "foo bar\n" {
+		t.Fatalf("file should be unchanged, got: %q", string(data))
+	}
+}
+
+func TestEditFileNotFound(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "missing.txt")
+	os.WriteFile(path, []byte("foo bar\n"), 0644)
+
+	reg := NewRegistry(dir, t.TempDir())
+
+	_, err := reg.Execute(context.Background(), "edit", `{"path":"missing.txt","edits":[{"oldText":"nonexistent","newText":"x"}]}`)
+	if err == nil {
+		t.Fatal("expected error for oldText not found")
+	}
+	if !strings.Contains(err.Error(), "not found") {
+		t.Fatalf("expected 'not found' error, got: %v", err)
+	}
+}
+
 func TestBash(t *testing.T) {
 	dir := t.TempDir()
 	reg := NewRegistry(dir, t.TempDir())
