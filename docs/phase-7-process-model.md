@@ -187,6 +187,27 @@ The daemon is opt-in and additive. If it's not running:
 
 If the user submits a job (e.g. via a future `/compact-bg`) and no daemon is up: the TUI writes to `mail/` anyway and prints `queued for daemon (not currently running)`. Next daemon start drains the queue. This is the intended behavior — the mailbox is durable.
 
+## End-to-end test
+
+The daemon ships with an integration smoke that spawns the real binary
+against a `t.TempDir()`-anchored HOME and exercises a full submit →
+dispatch → done/ round trip. To run it locally:
+
+```
+go test -run TestDaemonE2E ./internal/daemon/
+```
+
+The test builds `cmd/daemon` into a tempdir, submits a `session-checkpoint`
+job, polls `done/` at 50ms intervals (10s budget), then SIGTERMs the
+daemon and asserts a graceful exit within 5s. Wall-clock on a developer
+laptop is roughly 5–7s; the dominant cost is the daemon's default 5s
+mailbox poll. The test never touches `~/.bitchtea/`.
+
+In-process failure-mode tests (stale lock recovery, lock contention,
+crash recovery, dispatcher hook) live in
+`internal/daemon/integration_test.go` and run in well under a second
+each — those are part of the default `go test ./...` run.
+
 ## Open questions
 
 - **Mail retention in `done/`**: 100 entries is a guess. Real number depends on how chatty `bt-p7-session-jobs` makes the daemon. Revisit after first measurement.
