@@ -25,12 +25,26 @@ import (
 // flipped this from []llm.Message to []fantasy.Message; conversion to the
 // legacy llm.Message shape happens at the streamer boundary (sendMessage,
 // Compact) via the adapter helpers in internal/llm.
+// ContextKey is the canonical string key for a per-context message history.
+// Channel contexts use "#name", direct contexts use the target name.
+type ContextKey = string
+
+// DefaultContextKey is the context key for the initial default context.
+const DefaultContextKey = "#main"
+
 type Agent struct {
 	client   *llm.Client
 	streamer llm.ChatStreamer
 	tools    *tools.Registry
 	config   *config.Config
 	messages []fantasy.Message
+
+	// Per-context message histories. Each context gets its own conversation
+	// slice so /join and /query isolate conversations. The bootstrap prefix
+	// (system prompt, context files, persona) is duplicated in each slice.
+	contextMsgs     map[ContextKey][]fantasy.Message
+	contextSavedIdx map[ContextKey]int // per-context session-save watermark
+	currentContext  ContextKey
 
 	bootstrapMsgCount int
 
@@ -153,6 +167,15 @@ func NewAgentWithStreamer(cfg *config.Config, streamer llm.ChatStreamer) *Agent 
 	a.bootstrapMsgCount = len(a.messages)
 	a.pushBootstrapToClient()
 
+	// Initialize per-context storage with the default context.
+	a.currentContext = DefaultContextKey
+	a.contextMsgs = map[ContextKey][]fantasy.Message{
+		DefaultContextKey: a.messages,
+	}
+	a.contextSavedIdx = map[ContextKey]int{
+		DefaultContextKey: 0,
+	}
+
 	return a
 }
 
@@ -211,71 +234,96 @@ func (a *Agent) sendMessage(ctx context.Context, userMsg string, kind followUpKi
 	// on FantasySliceToLLM) and round-trips text + tool calls + tool results.
 	go a.streamer.StreamChat(ctx, llm.FantasySliceToLLM(a.messages), a.tools, streamEvents)
 
-	for ev := range streamEvents {
-		switch ev.Type {
-		case "text":
-			textAccum.WriteString(ev.Text)
-			if safeText := streamSanitizer.Consume(ev.Text); safeText != "" {
-				events <- Event{Type: "text", Text: safeText}
+	// Use select to watch both streamEvents and ctx.Done(), so we exit
+	// immediately when the context is cancelled (e.g., by ctrl+c) rather
+	// than blocking until fantasy closes the channel. Without this, a
+	// cancelled turn leaks the goroutine — sendMessage blocks on the range
+	// loop forever because streamEvents only closes when StreamChat returns,
+	// and fantasy may not exit promptly on ctx cancellation.
+	streamDone := false
+	for !streamDone {
+		select {
+		case ev, ok := <-streamEvents:
+			if !ok {
+				streamDone = true
+				break
+			}
+			switch ev.Type {
+			case "text":
+				textAccum.WriteString(ev.Text)
+				if safeText := streamSanitizer.Consume(ev.Text); safeText != "" {
+					events <- Event{Type: "text", Text: safeText}
+				}
+
+			case "thinking":
+				events <- Event{Type: "thinking", Text: ev.Text}
+
+			case "usage":
+				if ev.Usage != nil {
+					a.CostTracker.AddTokenUsage(*ev.Usage)
+					gotUsage = true
+				}
+
+			case "tool_call":
+				a.ToolCalls[ev.ToolName]++
+				events <- Event{Type: "state", State: StateToolCall}
+				events <- Event{
+					Type:     "tool_start",
+					ToolName: ev.ToolName,
+					ToolArgs: ev.ToolArgs,
+				}
+
+			case "tool_result":
+				events <- Event{
+					Type:       "tool_result",
+					ToolName:   ev.ToolName,
+					ToolResult: ev.Text,
+				}
+
+			case "error":
+				if errors.Is(ev.Error, context.Canceled) {
+					a.lastTurnState = turnStateCanceled
+				} else {
+					a.lastTurnState = turnStateErrored
+				}
+				events <- Event{Type: "state", State: StateIdle}
+				events <- Event{Type: "error", Error: ev.Error}
+				events <- Event{Type: "done"}
+				return
+
+			case "done":
+				if safeText := streamSanitizer.Flush(); safeText != "" {
+					events <- Event{Type: "text", Text: safeText}
+				}
+				appendedAssistant := false
+				// ev.Messages comes back from the streamer as legacy []llm.Message
+				// (fantasy → llm projection inside streamOnce). Lift each one back
+				// into fantasy parts before splicing so the canonical history
+				// stays fantasy-native.
+				for _, m := range ev.Messages {
+					if m.Role == "assistant" {
+						m.Content = sanitizeAssistantText(m.Content)
+						appendedAssistant = true
+					}
+					a.messages = append(a.messages, llm.LLMToFantasy(m))
+				}
+				if !appendedAssistant && textAccum.Len() > 0 {
+					a.messages = append(a.messages,
+						newAssistantMessage(sanitizeAssistantText(textAccum.String())),
+					)
+				}
 			}
 
-		case "thinking":
-			events <- Event{Type: "thinking", Text: ev.Text}
-
-		case "usage":
-			if ev.Usage != nil {
-				a.CostTracker.AddTokenUsage(*ev.Usage)
-				gotUsage = true
-			}
-
-		case "tool_call":
-			a.ToolCalls[ev.ToolName]++
-			events <- Event{Type: "state", State: StateToolCall}
-			events <- Event{
-				Type:     "tool_start",
-				ToolName: ev.ToolName,
-				ToolArgs: ev.ToolArgs,
-			}
-
-		case "tool_result":
-			events <- Event{
-				Type:       "tool_result",
-				ToolName:   ev.ToolName,
-				ToolResult: ev.Text,
-			}
-
-		case "error":
-			if errors.Is(ev.Error, context.Canceled) {
-				a.lastTurnState = turnStateCanceled
-			} else {
-				a.lastTurnState = turnStateErrored
-			}
+		case <-ctx.Done():
+			// Context was cancelled (ctrl+c / signal). Drain streamEvents
+			// in the background so the StreamChat goroutine can close the
+			// channel and exit without blocking.
+			go func() { for range streamEvents {} }()
+			a.lastTurnState = turnStateCanceled
 			events <- Event{Type: "state", State: StateIdle}
-			events <- Event{Type: "error", Error: ev.Error}
+			events <- Event{Type: "error", Error: ctx.Err()}
 			events <- Event{Type: "done"}
 			return
-
-		case "done":
-			if safeText := streamSanitizer.Flush(); safeText != "" {
-				events <- Event{Type: "text", Text: safeText}
-			}
-			appendedAssistant := false
-			// ev.Messages comes back from the streamer as legacy []llm.Message
-			// (fantasy → llm projection inside streamOnce). Lift each one back
-			// into fantasy parts before splicing so the canonical history
-			// stays fantasy-native.
-			for _, m := range ev.Messages {
-				if m.Role == "assistant" {
-					m.Content = sanitizeAssistantText(m.Content)
-					appendedAssistant = true
-				}
-				a.messages = append(a.messages, llm.LLMToFantasy(m))
-			}
-			if !appendedAssistant && textAccum.Len() > 0 {
-				a.messages = append(a.messages,
-					newAssistantMessage(sanitizeAssistantText(textAccum.String())),
-				)
-			}
 		}
 	}
 

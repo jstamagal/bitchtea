@@ -7,6 +7,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"charm.land/fantasy"
 
@@ -152,6 +153,91 @@ func TestSendMessageExecutesToolCallWithoutNetwork(t *testing.T) {
 	}
 	if streamer.calls != 1 {
 		t.Fatalf("expected 1 streamer call (fantasy owns the loop), got %d", streamer.calls)
+	}
+}
+
+func TestSendMessageExitsOnContextCancel(t *testing.T) {
+	cfg := config.DefaultConfig()
+	cfg.WorkDir = t.TempDir()
+	cfg.SessionDir = t.TempDir()
+
+	// hangingStreamer sends a tool_call then blocks forever on a channel
+	// that is never closed — simulating a tool that hangs (e.g., a long
+	// bash command or a terminal_wait that never matches). The only way
+	// for sendMessage to exit is via ctx.Done() in the select loop.
+	hang := make(chan struct{})
+	t.Cleanup(func() { close(hang) }) // prevent goroutine leak in test
+
+	streamer := &fakeStreamer{
+		responses: []func(chan<- llm.StreamEvent){
+			func(events chan<- llm.StreamEvent) {
+				events <- llm.StreamEvent{
+					Type:       "tool_call",
+					ToolCallID: "call_1",
+					ToolName:   "bash",
+					ToolArgs:   `{"command":"sleep 100"}`,
+				}
+				// Block forever — streamEvents is never closed by us.
+				<-hang
+			},
+		},
+	}
+
+	ag := NewAgentWithStreamer(&cfg, streamer)
+	eventCh := make(chan Event, 32)
+
+	ctx, cancel := context.WithCancel(context.Background())
+
+	done := make(chan struct{})
+	go func() {
+		ag.SendMessage(ctx, "run a slow command", eventCh)
+		close(done)
+	}()
+
+	// Let the streamer start and send the tool_call.
+	time.Sleep(50 * time.Millisecond)
+
+	// Cancel the context — this is the ctrl+c equivalent.
+	cancel()
+
+	// sendMessage must return promptly. If it's stuck on `for ev := range
+	// streamEvents` without watching ctx.Done(), this timeout fires.
+	select {
+	case <-done:
+		// sendMessage returned — the fix works.
+	case <-time.After(2 * time.Second):
+		t.Fatal("sendMessage did not return after context cancellation; goroutine likely stuck on streamEvents")
+	}
+
+	// Drain events and verify the expected error+done sequence.
+	var gotState, gotError, gotDone bool
+	for ev := range eventCh {
+		switch ev.Type {
+		case "state":
+			if ev.State == StateIdle {
+				gotState = true
+			}
+		case "error":
+			gotError = true
+			if ev.Error != context.Canceled {
+				t.Fatalf("expected context.Canceled, got %v", ev.Error)
+			}
+		case "done":
+			gotDone = true
+		}
+	}
+
+	if !gotState {
+		t.Fatal("expected state:idle event")
+	}
+	if !gotError {
+		t.Fatal("expected error event with context.Canceled")
+	}
+	if !gotDone {
+		t.Fatal("expected done event")
+	}
+	if ag.lastTurnState != turnStateCanceled {
+		t.Fatalf("expected turnStateCanceled, got %d", ag.lastTurnState)
 	}
 }
 
