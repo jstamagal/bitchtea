@@ -17,6 +17,7 @@ import (
 
 	"github.com/jstamagal/bitchtea/internal/config"
 	"github.com/jstamagal/bitchtea/internal/daemon"
+	"github.com/jstamagal/bitchtea/internal/daemon/jobs"
 )
 
 func main() {
@@ -39,8 +40,9 @@ func main() {
 	logger := log.New(io.MultiWriter(os.Stderr, logFile), "daemon: ", log.LstdFlags)
 
 	if err := daemon.Run(context.Background(), daemon.RunOptions{
-		BaseDir: base,
-		Logger:  logger,
+		BaseDir:  base,
+		Logger:   logger,
+		Dispatch: jobs.Handle,
 	}); err != nil {
 		if err == daemon.ErrLocked {
 			fmt.Fprintln(os.Stderr, "bitchtea-daemon: another daemon is already running")

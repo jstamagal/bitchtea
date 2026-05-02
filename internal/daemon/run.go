@@ -7,9 +7,17 @@ import (
 	"log"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 )
+
+// Dispatcher is the function the run loop calls for every dequeued job.
+// internal/daemon/jobs.Handle satisfies this signature; the indirection
+// keeps the daemon scaffold from importing the jobs package directly,
+// avoiding a forward dependency in the (small) chance another consumer
+// wants to wire in a different registry.
+type Dispatcher func(ctx context.Context, job Job) Result
 
 // RunOptions controls a single daemon process. All fields are optional; the
 // zero value picks sane defaults but does not redirect logs anywhere helpful.
@@ -18,6 +26,11 @@ type RunOptions struct {
 	PollEvery   time.Duration // mailbox poll cadence; defaults to 5s
 	DrainBudget time.Duration // grace period for in-flight work on shutdown; defaults to 30s
 	Logger      *log.Logger   // log destination; defaults to stderr
+	// Dispatch is invoked for every dequeued job. When nil the loop falls
+	// back to the scaffold "no handler registered" failure — preserved so
+	// older tests and callers keep their semantics. Real callers (cmd/daemon)
+	// pass internal/daemon/jobs.Handle here.
+	Dispatch Dispatcher
 }
 
 // Run executes the daemon main loop synchronously: acquires the lock, sets
@@ -98,7 +111,7 @@ func Run(ctx context.Context, opts RunOptions) error {
 	// the poll loop. The combined fsnotify+5s-poll setup from the design is
 	// future work — bt-p7-cli ships the simpler poll-only variant. Real-time
 	// notification is a wakeup-cost optimization, not a correctness one.
-	processOnce(loopCtx, mailbox, logger)
+	processOnce(loopCtx, mailbox, logger, opts.Dispatch)
 
 	for {
 		select {
@@ -109,17 +122,23 @@ func Run(ctx context.Context, opts RunOptions) error {
 			logger.Printf("stopped")
 			return nil
 		case <-ticker.C:
-			processOnce(loopCtx, mailbox, logger)
+			processOnce(loopCtx, mailbox, logger, opts.Dispatch)
 		}
 	}
 }
 
-// processOnce reads mail/, hands each job to the (currently absent) handler
-// registry, and moves the job to failed/ because no handler exists yet.
-// TODO(bt-p7-session-jobs): replace the unconditional Fail with a real
-// dispatch that runs handlers, enforces deadlines, and writes Results to
-// done/.
-func processOnce(_ context.Context, mailbox *Mailbox, logger *log.Logger) {
+// processOnce reads mail/ and dispatches each job through the handler
+// registry. On success the result is written to done/<id>.json; on
+// handler error or unknown kind, the job moves to failed/<id>.json with
+// the diagnostic in Result.Error.
+//
+// When opts.Dispatch is nil (legacy callers, or the scaffold tests),
+// every job is failed with "no handler registered" — preserving the
+// pre-bt-p7-session-jobs behavior. When Dispatch is non-nil but returns
+// an error Result with a "no handler" message, the job is also moved to
+// failed/ so the on-disk distinction between "ran and failed" and "never
+// had a handler" survives.
+func processOnce(ctx context.Context, mailbox *Mailbox, logger *log.Logger, dispatch Dispatcher) {
 	jobs, parseErrs, err := mailbox.List()
 	if err != nil {
 		logger.Printf("list mailbox: %v", err)
@@ -132,9 +151,35 @@ func processOnce(_ context.Context, mailbox *Mailbox, logger *log.Logger) {
 		// operator should remove it; auto-deletion would silently lose data.
 	}
 	for _, j := range jobs {
-		// TODO(bt-p7-session-jobs): dispatch to handler registry here.
-		reason := fmt.Sprintf("no handler registered for kind=%q (bt-p7-session-jobs)", j.Kind)
-		logger.Printf("rejecting job %s: %s", j.ID, reason)
+		if dispatch == nil {
+			reason := fmt.Sprintf("no handler registered for kind=%q (bt-p7-session-jobs)", j.Kind)
+			logger.Printf("rejecting job %s: %s", j.ID, reason)
+			if err := mailbox.Fail(j.ID, reason); err != nil {
+				logger.Printf("move job %s to failed/: %v", j.ID, err)
+			}
+			continue
+		}
+		result := dispatch(ctx, j)
+		if result.Success {
+			logger.Printf("job %s (kind=%s) succeeded", j.ID, j.Kind)
+			if err := mailbox.Complete(j.ID, result); err != nil {
+				logger.Printf("move job %s to done/: %v", j.ID, err)
+			}
+			continue
+		}
+		// Failure path: the dispatcher already filled in Result.Error.
+		// Forward-compat: if the handler reports "no handler registered"
+		// we keep the same diagnostic in failed/ so callers grepping the
+		// scaffold sentinel keep working.
+		reason := result.Error
+		if reason == "" {
+			reason = "handler returned success=false with no error message"
+		}
+		if strings.Contains(reason, "no handler registered") {
+			logger.Printf("rejecting job %s: %s", j.ID, reason)
+		} else {
+			logger.Printf("job %s (kind=%s) failed: %s", j.ID, j.Kind, reason)
+		}
 		if err := mailbox.Fail(j.ID, reason); err != nil {
 			logger.Printf("move job %s to failed/: %v", j.ID, err)
 		}
