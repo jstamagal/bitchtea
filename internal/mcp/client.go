@@ -2,6 +2,7 @@ package mcp
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -39,6 +40,42 @@ type Result struct {
 	IsError           bool            `json:"isError,omitempty"`
 }
 
+// Resource is the bitchtea-internal view of an MCP resource.
+type Resource struct {
+	URI         string `json:"uri"`
+	Name        string `json:"name"`
+	Description string `json:"description,omitempty"`
+	MIMEType    string `json:"mimeType,omitempty"`
+}
+
+// ResourceContents holds the data returned by a resource read.
+type ResourceContents struct {
+	URI      string `json:"uri"`
+	MIMEType string `json:"mimeType,omitempty"`
+	Text     string `json:"text,omitempty"`
+	Blob     string `json:"blob,omitempty"` // base64-encoded
+}
+
+// Prompt is the bitchtea-internal view of an MCP prompt.
+type Prompt struct {
+	Name        string           `json:"name"`
+	Description string           `json:"description,omitempty"`
+	Arguments   []PromptArgument `json:"arguments,omitempty"`
+}
+
+// PromptArgument describes a single argument a prompt accepts.
+type PromptArgument struct {
+	Name        string `json:"name"`
+	Description string `json:"description,omitempty"`
+	Required    bool   `json:"required,omitempty"`
+}
+
+// PromptMessage is a single message returned by GetPrompt.
+type PromptMessage struct {
+	Role    string `json:"role"`
+	Content string `json:"content"`
+}
+
 // Server is the lifecycle/dispatch interface the Manager talks to. There
 // is one implementation per transport (stdio, http) plus a fakeServer in
 // tests.
@@ -60,6 +97,10 @@ type Server interface {
 	Stop(ctx context.Context) error
 	ListTools(ctx context.Context) ([]Tool, error)
 	CallTool(ctx context.Context, name string, args json.RawMessage) (Result, error)
+	ListResources(ctx context.Context) ([]Resource, error)
+	ReadResource(ctx context.Context, uri string) ([]ResourceContents, error)
+	ListPrompts(ctx context.Context) ([]Prompt, error)
+	GetPrompt(ctx context.Context, name string, args map[string]string) ([]PromptMessage, error)
 	Name() string
 }
 
@@ -85,6 +126,10 @@ func NewServer(cfg ServerConfig) (Server, error) {
 type sdkClient interface {
 	ListTools(ctx context.Context, params *mcpsdk.ListToolsParams) (*mcpsdk.ListToolsResult, error)
 	CallTool(ctx context.Context, params *mcpsdk.CallToolParams) (*mcpsdk.CallToolResult, error)
+	ListResources(ctx context.Context, params *mcpsdk.ListResourcesParams) (*mcpsdk.ListResourcesResult, error)
+	ReadResource(ctx context.Context, params *mcpsdk.ReadResourceParams) (*mcpsdk.ReadResourceResult, error)
+	ListPrompts(ctx context.Context, params *mcpsdk.ListPromptsParams) (*mcpsdk.ListPromptsResult, error)
+	GetPrompt(ctx context.Context, params *mcpsdk.GetPromptParams) (*mcpsdk.GetPromptResult, error)
 	Close() error
 }
 
@@ -153,6 +198,107 @@ func (b *baseServer) CallTool(ctx context.Context, name string, args json.RawMes
 		return Result{}, err
 	}
 	return resultFromSDK(res), nil
+}
+
+func (b *baseServer) ListResources(ctx context.Context) ([]Resource, error) {
+	b.mu.Lock()
+	s := b.session
+	b.mu.Unlock()
+	if s == nil {
+		return nil, fmt.Errorf("mcp: server %q not started", b.cfg.Name)
+	}
+	res, err := s.ListResources(ctx, nil)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]Resource, 0, len(res.Resources))
+	for _, r := range res.Resources {
+		out = append(out, Resource{
+			URI:         r.URI,
+			Name:        r.Name,
+			Description: r.Description,
+			MIMEType:    r.MIMEType,
+		})
+	}
+	return out, nil
+}
+
+func (b *baseServer) ReadResource(ctx context.Context, uri string) ([]ResourceContents, error) {
+	b.mu.Lock()
+	s := b.session
+	b.mu.Unlock()
+	if s == nil {
+		return nil, fmt.Errorf("mcp: server %q not started", b.cfg.Name)
+	}
+	res, err := s.ReadResource(ctx, &mcpsdk.ReadResourceParams{URI: uri})
+	if err != nil {
+		return nil, err
+	}
+	out := make([]ResourceContents, 0, len(res.Contents))
+	for _, c := range res.Contents {
+		rc := ResourceContents{URI: c.URI, MIMEType: c.MIMEType}
+		if c.Text != "" {
+			rc.Text = c.Text
+		}
+		if len(c.Blob) > 0 {
+			rc.Blob = base64Encode(c.Blob)
+		}
+		out = append(out, rc)
+	}
+	return out, nil
+}
+
+func (b *baseServer) ListPrompts(ctx context.Context) ([]Prompt, error) {
+	b.mu.Lock()
+	s := b.session
+	b.mu.Unlock()
+	if s == nil {
+		return nil, fmt.Errorf("mcp: server %q not started", b.cfg.Name)
+	}
+	res, err := s.ListPrompts(ctx, nil)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]Prompt, 0, len(res.Prompts))
+	for _, p := range res.Prompts {
+		prompt := Prompt{
+			Name:        p.Name,
+			Description: p.Description,
+		}
+		for _, a := range p.Arguments {
+			prompt.Arguments = append(prompt.Arguments, PromptArgument{
+				Name:        a.Name,
+				Description: a.Description,
+				Required:    a.Required,
+			})
+		}
+		out = append(out, prompt)
+	}
+	return out, nil
+}
+
+func (b *baseServer) GetPrompt(ctx context.Context, name string, args map[string]string) ([]PromptMessage, error) {
+	b.mu.Lock()
+	s := b.session
+	b.mu.Unlock()
+	if s == nil {
+		return nil, fmt.Errorf("mcp: server %q not started", b.cfg.Name)
+	}
+	res, err := s.GetPrompt(ctx, &mcpsdk.GetPromptParams{Name: name, Arguments: args})
+	if err != nil {
+		return nil, err
+	}
+	out := make([]PromptMessage, 0, len(res.Messages))
+	for _, m := range res.Messages {
+		pm := PromptMessage{Role: string(m.Role)}
+		if tc, ok := m.Content.(*mcpsdk.TextContent); ok {
+			pm.Content = tc.Text
+		} else {
+			pm.Content = fmt.Sprintf("[mcp non-text content: %T]", m.Content)
+		}
+		out = append(out, pm)
+	}
+	return out, nil
 }
 
 // resultFromSDK collapses the SDK's []Content slice into a single string
@@ -279,3 +425,7 @@ func mergeEnv(extra map[string]string) []string {
 // getEnv is a var so a future test can stub it. Production behavior is
 // the same as os.Environ.
 var getEnv = os.Environ
+
+func base64Encode(b []byte) string {
+	return base64.StdEncoding.EncodeToString(b)
+}

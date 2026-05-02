@@ -18,6 +18,11 @@ const (
 	DefaultPerServerStartTimeout = 5 * time.Second
 	DefaultManagerStartTimeout   = 10 * time.Second
 	DefaultStopTimeout           = 5 * time.Second
+
+	// DefaultMaxResourceBytes caps the total size of a single resource read.
+	// Resources larger than this are rejected with an error. The bound exists
+	// so a misbehaving MCP server cannot OOM the agent.
+	DefaultMaxResourceBytes = 1 << 20 // 1 MiB
 )
 
 // NamespacedTool pairs a server-relative Tool with the prefixed name the
@@ -66,6 +71,8 @@ type Manager struct {
 	ManagerStartTimeout time.Duration
 	// Aggregate cap on Stop.
 	StopTimeout time.Duration
+	// MaxResourceBytes caps total size of a single resource read.
+	MaxResourceBytes int
 
 	// newServer is overridable by tests so they can swap in fakeServer
 	// for the otherwise-config-driven NewServer.
@@ -87,12 +94,13 @@ func NewManager(cfg Config, auth Authorizer, audit AuditHook) *Manager {
 		audit = DefaultAuditHook()
 	}
 	return &Manager{
-		cfg:                   cfg,
-		auth:                  auth,
-		audit:                 audit,
+		cfg:                cfg,
+		auth:               auth,
+		audit:              audit,
 		PerServerStartTimeout: DefaultPerServerStartTimeout,
 		ManagerStartTimeout:   DefaultManagerStartTimeout,
 		StopTimeout:           DefaultStopTimeout,
+		MaxResourceBytes:      DefaultMaxResourceBytes,
 		newServer:             NewServer,
 		entries:               map[string]*entry{},
 	}
@@ -340,6 +348,76 @@ func (m *Manager) CallTool(ctx context.Context, namespacedName string, args json
 	m.audit.OnToolEnd(ctx, end)
 
 	return res, err
+}
+
+// ListAllResources collects resources from every running server.
+// Errors from individual servers are joined but do NOT prevent other
+// servers' resources from being returned.
+func (m *Manager) ListAllResources(ctx context.Context) (map[string][]Resource, error) {
+	servers := m.Servers()
+	var (
+		out  = make(map[string][]Resource)
+		errs []error
+	)
+	for _, srv := range servers {
+		resources, err := srv.ListResources(ctx)
+		if err != nil {
+			errs = append(errs, fmt.Errorf("mcp: server %q list_resources: %w", srv.Name(), err))
+			continue
+		}
+		out[srv.Name()] = resources
+	}
+	return out, errors.Join(errs...)
+}
+
+// ReadResource reads a resource from the named server. The read is
+// bounded by MaxResourceBytes — if the total size of all returned
+// contents exceeds the cap, an error is returned instead.
+func (m *Manager) ReadResource(ctx context.Context, server, uri string) ([]ResourceContents, error) {
+	srv := m.lookupServer(server)
+	if srv == nil {
+		return nil, fmt.Errorf("mcp: server %q not running", server)
+	}
+	contents, err := srv.ReadResource(ctx, uri)
+	if err != nil {
+		return nil, err
+	}
+	var total int
+	for _, c := range contents {
+		total += len(c.Text) + len(c.Blob)
+	}
+	if m.MaxResourceBytes > 0 && total > m.MaxResourceBytes {
+		return nil, fmt.Errorf("mcp: server %q resource %q: content size %d exceeds limit %d", server, uri, total, m.MaxResourceBytes)
+	}
+	return contents, nil
+}
+
+// ListAllPrompts collects prompts from every running server.
+func (m *Manager) ListAllPrompts(ctx context.Context) (map[string][]Prompt, error) {
+	servers := m.Servers()
+	var (
+		out  = make(map[string][]Prompt)
+		errs []error
+	)
+	for _, srv := range servers {
+		prompts, err := srv.ListPrompts(ctx)
+		if err != nil {
+			errs = append(errs, fmt.Errorf("mcp: server %q list_prompts: %w", srv.Name(), err))
+			continue
+		}
+		out[srv.Name()] = prompts
+	}
+	return out, errors.Join(errs...)
+}
+
+// GetPrompt fetches a prompt from the named server with the supplied
+// arguments.
+func (m *Manager) GetPrompt(ctx context.Context, server, prompt string, args map[string]string) ([]PromptMessage, error) {
+	srv := m.lookupServer(server)
+	if srv == nil {
+		return nil, fmt.Errorf("mcp: server %q not running", server)
+	}
+	return srv.GetPrompt(ctx, prompt, args)
 }
 
 func (m *Manager) lookupServer(name string) Server {

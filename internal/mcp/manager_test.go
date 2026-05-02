@@ -21,7 +21,13 @@ import (
 type fakeServer struct {
 	name string
 	// Tools returned from ListTools.
-	tools []Tool
+	tools     []Tool
+	resources []Resource
+	prompts   []Prompt
+	// resourceData maps URI -> contents for ReadResource.
+	resourceData map[string][]ResourceContents
+	// promptData maps name -> messages for GetPrompt.
+	promptData map[string][]PromptMessage
 
 	// hooks
 	startErr  error
@@ -68,6 +74,32 @@ func (f *fakeServer) CallTool(_ context.Context, name string, args json.RawMessa
 		return f.callFn(name, args)
 	}
 	return Result{Content: "ok"}, nil
+}
+
+func (f *fakeServer) ListResources(_ context.Context) ([]Resource, error) {
+	return f.resources, nil
+}
+
+func (f *fakeServer) ReadResource(_ context.Context, uri string) ([]ResourceContents, error) {
+	if f.resourceData != nil {
+		if contents, ok := f.resourceData[uri]; ok {
+			return contents, nil
+		}
+	}
+	return nil, fmt.Errorf("resource not found: %s", uri)
+}
+
+func (f *fakeServer) ListPrompts(_ context.Context) ([]Prompt, error) {
+	return f.prompts, nil
+}
+
+func (f *fakeServer) GetPrompt(_ context.Context, name string, args map[string]string) ([]PromptMessage, error) {
+	if f.promptData != nil {
+		if msgs, ok := f.promptData[name]; ok {
+			return msgs, nil
+		}
+	}
+	return nil, fmt.Errorf("prompt not found: %s", name)
 }
 
 // recordingAuthorizer records every Authorize call and lets a test
@@ -392,6 +424,183 @@ func TestSplitNamespacedName(t *testing.T) {
 		if ok != c.ok || (ok && (s != c.server || tl != c.tool)) {
 			t.Errorf("Split(%q)=(%q,%q,%v) want (%q,%q,%v)", c.in, s, tl, ok, c.server, c.tool, c.ok)
 		}
+	}
+}
+
+// ListAllResources collects resources from every running server.
+func TestManager_ListAllResources(t *testing.T) {
+	a := &fakeServer{
+		name: "fs",
+		resources: []Resource{
+			{URI: "file:///a.txt", Name: "a.txt", MIMEType: "text/plain"},
+			{URI: "file:///b.txt", Name: "b.txt", MIMEType: "text/plain"},
+		},
+	}
+	b := &fakeServer{
+		name: "db",
+		resources: []Resource{
+			{URI: "db://schema", Name: "schema", MIMEType: "application/json"},
+		},
+	}
+	m, _ := managerWithFakes(t, nil, nil, a, b)
+	if err := m.Start(context.Background()); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+
+	res, err := m.ListAllResources(context.Background())
+	if err != nil {
+		t.Fatalf("ListAllResources: %v", err)
+	}
+	if len(res["fs"]) != 2 {
+		t.Fatalf("fs resources: got %d, want 2", len(res["fs"]))
+	}
+	if len(res["db"]) != 1 {
+		t.Fatalf("db resources: got %d, want 1", len(res["db"]))
+	}
+}
+
+// ReadResource returns contents when under the size cap.
+func TestManager_ReadResource(t *testing.T) {
+	srv := &fakeServer{
+		name: "fs",
+		resourceData: map[string][]ResourceContents{
+			"file:///data.txt": {{URI: "file:///data.txt", Text: "hello", MIMEType: "text/plain"}},
+		},
+	}
+	m, _ := managerWithFakes(t, nil, nil, srv)
+	if err := m.Start(context.Background()); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+
+	contents, err := m.ReadResource(context.Background(), "fs", "file:///data.txt")
+	if err != nil {
+		t.Fatalf("ReadResource: %v", err)
+	}
+	if len(contents) != 1 || contents[0].Text != "hello" {
+		t.Fatalf("contents: %+v", contents)
+	}
+}
+
+// ReadResource rejects content exceeding MaxResourceBytes.
+func TestManager_ReadResource_ExceedsLimit(t *testing.T) {
+	big := make([]byte, DefaultMaxResourceBytes+1)
+	for i := range big {
+		big[i] = 'x'
+	}
+	srv := &fakeServer{
+		name: "fs",
+		resourceData: map[string][]ResourceContents{
+			"file:///big.txt": {{URI: "file:///big.txt", Text: string(big), MIMEType: "text/plain"}},
+		},
+	}
+	m, _ := managerWithFakes(t, nil, nil, srv)
+	m.MaxResourceBytes = 100
+	if err := m.Start(context.Background()); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+
+	_, err := m.ReadResource(context.Background(), "fs", "file:///big.txt")
+	if err == nil {
+		t.Fatal("expected error for oversized resource")
+	}
+}
+
+// ReadResource from an unknown server returns an error.
+func TestManager_ReadResource_UnknownServer(t *testing.T) {
+	m, _ := managerWithFakes(t, nil, nil)
+	if err := m.Start(context.Background()); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	_, err := m.ReadResource(context.Background(), "missing", "file:///x")
+	if err == nil {
+		t.Fatal("expected error for unknown server")
+	}
+}
+
+// ListAllPrompts collects prompts from every running server.
+func TestManager_ListAllPrompts(t *testing.T) {
+	a := &fakeServer{
+		name: "fs",
+		prompts: []Prompt{
+			{Name: "review", Description: "Code review", Arguments: []PromptArgument{{Name: "file", Required: true}}},
+		},
+	}
+	b := &fakeServer{
+		name: "db",
+		prompts: []Prompt{
+			{Name: "query", Description: "Run query"},
+			{Name: "schema", Description: "Show schema"},
+		},
+	}
+	m, _ := managerWithFakes(t, nil, nil, a, b)
+	if err := m.Start(context.Background()); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+
+	res, err := m.ListAllPrompts(context.Background())
+	if err != nil {
+		t.Fatalf("ListAllPrompts: %v", err)
+	}
+	if len(res["fs"]) != 1 {
+		t.Fatalf("fs prompts: got %d, want 1", len(res["fs"]))
+	}
+	if len(res["db"]) != 2 {
+		t.Fatalf("db prompts: got %d, want 2", len(res["db"]))
+	}
+}
+
+// GetPrompt fetches a prompt from a running server.
+func TestManager_GetPrompt(t *testing.T) {
+	srv := &fakeServer{
+		name: "fs",
+		promptData: map[string][]PromptMessage{
+			"review": {{Role: "user", Content: "Review this code"}},
+		},
+	}
+	m, _ := managerWithFakes(t, nil, nil, srv)
+	if err := m.Start(context.Background()); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+
+	msgs, err := m.GetPrompt(context.Background(), "fs", "review", map[string]string{"file": "main.go"})
+	if err != nil {
+		t.Fatalf("GetPrompt: %v", err)
+	}
+	if len(msgs) != 1 || msgs[0].Content != "Review this code" {
+		t.Fatalf("messages: %+v", msgs)
+	}
+}
+
+// GetPrompt from an unknown server returns an error.
+func TestManager_GetPrompt_UnknownServer(t *testing.T) {
+	m, _ := managerWithFakes(t, nil, nil)
+	if err := m.Start(context.Background()); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	_, err := m.GetPrompt(context.Background(), "missing", "review", nil)
+	if err == nil {
+		t.Fatal("expected error for unknown server")
+	}
+}
+
+// ListAllResources from unhealthy servers is excluded.
+func TestManager_ListAllResources_ExcludesUnhealthy(t *testing.T) {
+	good := &fakeServer{name: "good", resources: []Resource{{URI: "x", Name: "x"}}}
+	bad := &fakeServer{name: "bad", startErr: errors.New("nope")}
+	m, _ := managerWithFakes(t, nil, nil, good, bad)
+	if err := m.Start(context.Background()); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+
+	res, err := m.ListAllResources(context.Background())
+	if err != nil {
+		t.Fatalf("ListAllResources: %v", err)
+	}
+	if _, ok := res["bad"]; ok {
+		t.Fatal("expected bad server excluded from resources")
+	}
+	if len(res["good"]) != 1 {
+		t.Fatalf("good resources: got %d, want 1", len(res["good"]))
 	}
 }
 

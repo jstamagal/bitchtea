@@ -55,6 +55,22 @@ func (f *fakeMCPServer) CallTool(_ context.Context, name string, args json.RawMe
 	return mcp.Result{Content: "default-ok"}, nil
 }
 
+func (f *fakeMCPServer) ListResources(_ context.Context) ([]mcp.Resource, error) {
+	return nil, nil
+}
+
+func (f *fakeMCPServer) ReadResource(_ context.Context, uri string) ([]mcp.ResourceContents, error) {
+	return nil, nil
+}
+
+func (f *fakeMCPServer) ListPrompts(_ context.Context) ([]mcp.Prompt, error) {
+	return nil, nil
+}
+
+func (f *fakeMCPServer) GetPrompt(_ context.Context, name string, args map[string]string) ([]mcp.PromptMessage, error) {
+	return nil, nil
+}
+
 // newManagerWithFakes builds a started *mcp.Manager backed by the supplied
 // fakes. The factory swap mirrors managerWithFakes in the mcp package's
 // own tests.
