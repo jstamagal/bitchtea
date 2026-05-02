@@ -5,6 +5,50 @@ Status: design only. Implementation tracked under epic `bt-p6` (`bt-p6-client`,
 is the contract those tasks must satisfy. Sibling task `bt-p6-security` owns
 the deeper audit/permission detail; this doc only stakes out the interface.
 
+## Security Checklist
+
+Read this first. Every item is a hard rule, enforced by `internal/mcp` or
+the MCP client manager. If a future PR breaks one of these, the change is
+wrong even if tests pass.
+
+- **Disabled by default.** No `mcp.json` in the workspace = zero MCP code
+  paths exercised. A user who has never heard of MCP must never see an
+  MCP-flavored error, tool name, or transcript line.
+- **Three opt-in layers, all required.** (1) `<WorkDir>/.bitchtea/mcp.json`
+  exists, (2) top-level `enabled: true`, (3) per-server `enabled: true`
+  (default). Failing any layer silences the corresponding scope.
+- **Per-workspace, never global.** Global profiles and `~/.bitchtearc`
+  must never enable MCP implicitly. The only enable site is the workspace
+  file.
+- **No inline secrets.** `mcp.json` is loaded with a screen for known
+  token prefixes (`sk-`, `ghp_`, `github_pat_`, `gho_`, `sk-ant-`,
+  `xoxb-`, `xoxp-`, `AKIA`, `AIza`). A literal hit anywhere in
+  `command`, `args`, `url`, `env`, or `headers` refuses the whole file.
+  This is a heuristic, not a vault — but it catches every obvious paste.
+- **Env-only secret resolution.** The single sanctioned form is
+  `${env:VARNAME}`. No `$VAR`, no shell expansion, no defaulting.
+  A reference to an unset variable is a load-time error and the server
+  is skipped (we do NOT silently substitute the empty string).
+- **Tool args and results flow through transcript unredacted.** Same
+  treatment as `bash` output. If a user passes a token *as a tool
+  argument*, it shows up — that is expected behavior, not a bug.
+- **Resolved env maps and HTTP headers NEVER reach transcript or
+  session JSONL.** Use `mcp.RedactServer` / `mcp.RedactString` at every
+  emit site. Connection config is structurally invisible to logging.
+- **Tool side effects are real.** MCP tools can write files, run
+  commands, hit remote APIs, charge money, page on-call humans, and
+  destroy data. Built-in tools at least live in this repo and have been
+  audited; a third-party MCP server is *its author's* code running with
+  *your* environment. Treat enabling a server as installing software.
+- **Permission hook is consulted on every call.** Even reconnect
+  retries. Built-in tools never go through it. v1 default is allow-all
+  (the trust gate is enabling MCP at all); a stricter `Authorizer`
+  lands in a follow-up task.
+- **A failing MCP server cannot crash the agent loop.** Connect
+  timeouts, mid-turn server death, schema errors, and HTTP non-2xx all
+  surface as a tool error returned to the model — never a Go panic and
+  never a silent hang.
+
 ## Goals
 
 1. Let the user point bitchtea at one or more Model Context Protocol servers
