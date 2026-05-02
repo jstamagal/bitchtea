@@ -30,7 +30,7 @@ func ErrorHint(err error) string {
 		}
 		switch pe.StatusCode {
 		case 401:
-			return "auth failed — check /apikey"
+			return "auth failed — check /set apikey"
 		case 403:
 			return "access denied — your API key may lack permissions for this model"
 		case 404:
@@ -53,11 +53,11 @@ func ErrorHint(err error) string {
 	msg := strings.ToLower(err.Error())
 	switch {
 	case strings.Contains(msg, "no such host"):
-		return "DNS lookup failed — check /baseurl"
+		return "DNS lookup failed — check /set baseurl"
 	case strings.Contains(msg, "connection refused"):
 		return "connection refused — is the local server running?"
 	case strings.Contains(msg, "x509") || strings.Contains(msg, "certificate") || strings.Contains(msg, "tls"):
-		return "TLS error — check /baseurl or your network proxy"
+		return "TLS error — check /set baseurl or your network proxy"
 	case strings.Contains(msg, "deadline exceeded") || strings.Contains(msg, "timed out"):
 		return "request timed out — model may be slow or network unstable"
 	}
