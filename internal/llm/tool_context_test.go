@@ -2,6 +2,7 @@ package llm
 
 import (
 	"context"
+	"fmt"
 	"sync"
 	"testing"
 	"time"
@@ -157,4 +158,90 @@ func TestToolContextManager_ConcurrentAccess(t *testing.T) {
 
 	// No panic = pass. CancelAll to clean up stragglers.
 	mgr.CancelAll()
+}
+
+func TestToolContextManager_ConcurrentCancelAndNew(t *testing.T) {
+	turnCtx, turnCancel := context.WithCancel(context.Background())
+	defer turnCancel()
+
+	mgr := NewToolContextManager(turnCtx)
+
+	var wg sync.WaitGroup
+	// Spawn tools and cancel them concurrently.
+	for i := 0; i < 100; i++ {
+		wg.Add(2)
+		id := fmt.Sprintf("tool-%d", i)
+		go func() {
+			defer wg.Done()
+			ctx, cleanup := mgr.NewToolContext(id)
+			defer cleanup()
+			// Simulate work: wait until context is cancelled or 10ms.
+			select {
+			case <-ctx.Done():
+			case <-time.After(10 * time.Millisecond):
+			}
+		}()
+		go func() {
+			defer wg.Done()
+			// Small delay to let NewToolContext run first sometimes.
+			time.Sleep(time.Microsecond)
+			mgr.CancelTool(id) // may or may not exist
+		}()
+	}
+	wg.Wait()
+	mgr.CancelAll()
+}
+
+func TestToolContextManager_ConcurrentCancelAllAndNew(t *testing.T) {
+	turnCtx, turnCancel := context.WithCancel(context.Background())
+	defer turnCancel()
+
+	mgr := NewToolContextManager(turnCtx)
+
+	var wg sync.WaitGroup
+	// Goroutines creating tools.
+	for i := 0; i < 50; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			_, cleanup := mgr.NewToolContext(time.Now().String())
+			defer cleanup()
+		}()
+	}
+	// Goroutines calling CancelAll.
+	for i := 0; i < 10; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			mgr.CancelAll()
+		}()
+	}
+	wg.Wait()
+}
+
+func TestToolContextManager_CancelDuringUse(t *testing.T) {
+	turnCtx, turnCancel := context.WithCancel(context.Background())
+	defer turnCancel()
+
+	mgr := NewToolContextManager(turnCtx)
+
+	// Create a tool context and hold it while cancelling.
+	ctx, cleanup := mgr.NewToolContext("long-tool")
+	defer cleanup()
+
+	var wg sync.WaitGroup
+	// Worker using the context.
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		<-ctx.Done()
+	}()
+	// Canceller.
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		time.Sleep(time.Millisecond)
+		mgr.CancelTool("long-tool")
+	}()
+	wg.Wait()
 }

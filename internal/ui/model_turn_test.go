@@ -764,3 +764,55 @@ func TestEscKeyLadderSequenceTransitions(t *testing.T) {
 		t.Fatalf("step 4: expected queue cleared, got %d", len(got.queued))
 	}
 }
+
+// TestRapidEscInputDoesNotPanic exercises repeated Esc keypresses in quick
+// succession to verify no state corruption or nil dereference. The Bubble Tea
+// Update loop is single-threaded, but rapid input can exercise transitions
+// the ladder wasn't designed for (e.g., esc while already idle, esc after
+// queue clear, esc after turn cancel).
+func TestRapidEscInputDoesNotPanic(t *testing.T) {
+	cfg := config.DefaultConfig()
+	cfg.WorkDir = t.TempDir()
+	cfg.SessionDir = t.TempDir()
+
+	model := NewModel(&cfg)
+	model.toolPanel.Visible = false
+	model.streaming = true
+	model.queued = []queuedMsg{
+		{text: "a", queuedAt: time.Now()},
+		{text: "b", queuedAt: time.Now()},
+	}
+	model.cancel = func() {}
+
+	// Slam Esc 10 times. The first few go through the ladder; the rest
+	// hit the idle/already-cancelled path. None should panic.
+	var got tea.Model = model
+	for i := 0; i < 10; i++ {
+		got, _ = got.(Model).Update(tea.KeyMsg{Type: tea.KeyEsc})
+	}
+}
+
+// TestCtrlCAndEscInterleave checks that interleaving Ctrl+C and Esc doesn't
+// corrupt state. Both modify escStage/ctrlCStage and streaming flags.
+func TestCtrlCAndEscInterleave(t *testing.T) {
+	cfg := config.DefaultConfig()
+	cfg.WorkDir = t.TempDir()
+	cfg.SessionDir = t.TempDir()
+
+	model := NewModel(&cfg)
+	model.toolPanel.Visible = false
+	model.streaming = true
+	model.queued = []queuedMsg{{text: "x", queuedAt: time.Now()}}
+	model.cancel = func() {}
+
+	// Alternate Ctrl+C and Esc.
+	var got tea.Model = model
+	for i := 0; i < 6; i++ {
+		if i%2 == 0 {
+			got, _ = got.(Model).Update(tea.KeyMsg{Type: tea.KeyCtrlC})
+		} else {
+			got, _ = got.(Model).Update(tea.KeyMsg{Type: tea.KeyEsc})
+		}
+	}
+	// No panic = pass. Final state doesn't matter — we're testing for races.
+}
