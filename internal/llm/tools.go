@@ -34,12 +34,23 @@ func (t *bitchteaTool) Run(ctx context.Context, call fantasy.ToolCall) (fantasy.
 func (t *bitchteaTool) ProviderOptions() fantasy.ProviderOptions     { return nil }
 func (t *bitchteaTool) SetProviderOptions(_ fantasy.ProviderOptions) {}
 
-// translateTools builds one *bitchteaTool per Registry definition. Called per
-// stream-call (cheap — definitions are static, only the Required slice varies).
+// translateTools builds one fantasy.AgentTool per Registry definition. Called
+// per stream-call (cheap — definitions are static, only the Required slice
+// varies).
+//
+// Phase 2 migration (bt-p2-*) ports tools one at a time from the generic
+// bitchteaTool adapter to typed fantasy.NewAgentTool wrappers. The typed
+// wrappers live in their own files (e.g. typed_edit.go) and are dispatched
+// here by tool name. Anything not yet ported keeps flowing through
+// bitchteaTool — half-migration is expected until bt-p2-switch lands.
 func translateTools(reg *tools.Registry) []fantasy.AgentTool {
 	defs := reg.Definitions()
 	out := make([]fantasy.AgentTool, 0, len(defs))
 	for _, d := range defs {
+		if typed := typedToolFor(d.Function.Name, reg); typed != nil {
+			out = append(out, typed)
+			continue
+		}
 		params, required := splitSchema(d.Function.Parameters)
 		out = append(out, &bitchteaTool{
 			info: fantasy.ToolInfo{
@@ -53,6 +64,18 @@ func translateTools(reg *tools.Registry) []fantasy.AgentTool {
 		})
 	}
 	return out
+}
+
+// typedToolFor returns the typed fantasy wrapper for name, or nil if no typed
+// wrapper exists yet (in which case translateTools falls back to the generic
+// bitchteaTool adapter). New typed wrappers (bt-p2-read-write,
+// bt-p2-bash-memory) wire themselves in here.
+func typedToolFor(name string, reg *tools.Registry) fantasy.AgentTool {
+	switch name {
+	case "edit":
+		return editTool(reg)
+	}
+	return nil
 }
 
 // splitSchema converts the OpenAI-style object schema from Registry.Definitions
