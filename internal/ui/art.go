@@ -101,5 +101,5 @@ const MOTD = "" +
 	"\033[0;90m  ─────────────────────────────────────────────────────────────\033[0m\n" +
 	"\033[0;37m  Type a message to start coding. Use \033[1;33m/help\033[0;37m for commands.\033[0m\n" +
 	"\033[0;37m  \033[1;33m/model\033[0;37m to switch models. \033[1;33m/quit\033[0;37m to exit. Don't be a wimp.\033[0m\n" +
-	"\033[0;37m  Use \033[1;33m@filename\033[0;37m to include file contents. \033[1;33m/auto-next\033[0;37m for autopilot.\033[0m\n" +
+	"\033[0;37m  Use \033[1;33m@filename\033[0;37m to include file contents. \033[1;33m/set auto-next on\033[0;37m for autopilot.\033[0m\n" +
 	"\033[0;90m  ─────────────────────────────────────────────────────────────\033[0m\n"

@@ -14,7 +14,6 @@ import (
 	"github.com/jstamagal/bitchtea/internal/config"
 	"github.com/jstamagal/bitchtea/internal/llm"
 	"github.com/jstamagal/bitchtea/internal/session"
-	"github.com/jstamagal/bitchtea/internal/sound"
 )
 
 type slashCommandHandler func(Model, string, []string) (Model, tea.Cmd)
@@ -34,10 +33,7 @@ var slashCommandRegistry = registerSlashCommands(
 	slashCommandSpec{names: []string{"/compact"}, handler: handleCompactCommand},
 	slashCommandSpec{names: []string{"/copy"}, handler: handleCopyCommand},
 	slashCommandSpec{names: []string{"/tokens"}, handler: handleTokensCommand},
-	slashCommandSpec{names: []string{"/auto-next"}, handler: handleAutoNextCommand},
-	slashCommandSpec{names: []string{"/auto-idea"}, handler: handleAutoIdeaCommand},
 	slashCommandSpec{names: []string{"/debug"}, handler: handleDebugCommand},
-	slashCommandSpec{names: []string{"/sound"}, handler: handleSoundCommand},
 	slashCommandSpec{names: []string{"/activity"}, handler: handleActivityCommand},
 	slashCommandSpec{names: []string{"/mp3"}, handler: handleMP3Command},
 	slashCommandSpec{names: []string{"/theme"}, handler: handleThemeCommand},
@@ -295,26 +291,6 @@ func handleTokensCommand(m Model, _ string, _ []string) (Model, tea.Cmd) {
 	return m, nil
 }
 
-func handleAutoNextCommand(m Model, _ string, _ []string) (Model, tea.Cmd) {
-	m.config.AutoNextSteps = !m.config.AutoNextSteps
-	status := "OFF"
-	if m.config.AutoNextSteps {
-		status = "ON"
-	}
-	m.sysMsg(fmt.Sprintf("Auto-next-steps: %s", status))
-	return m, nil
-}
-
-func handleAutoIdeaCommand(m Model, _ string, _ []string) (Model, tea.Cmd) {
-	m.config.AutoNextIdea = !m.config.AutoNextIdea
-	status := "OFF"
-	if m.config.AutoNextIdea {
-		status = "ON"
-	}
-	m.sysMsg(fmt.Sprintf("Auto-next-idea: %s", status))
-	return m, nil
-}
-
 func handleDebugCommand(m Model, _ string, parts []string) (Model, tea.Cmd) {
 	if len(parts) < 2 {
 		status := "OFF"
@@ -372,17 +348,6 @@ func handleActivityCommand(m Model, _ string, parts []string) (Model, tea.Cmd) {
 		m.errMsg("Usage: /activity [clear]")
 		return m, nil
 	}
-}
-
-func handleSoundCommand(m Model, _ string, _ []string) (Model, tea.Cmd) {
-	m.config.NotificationSound = !m.config.NotificationSound
-	status := "OFF"
-	if m.config.NotificationSound {
-		status = "ON"
-		sound.Play(m.config.SoundType)
-	}
-	m.sysMsg(fmt.Sprintf("Notification sound: %s", status))
-	return m, nil
 }
 
 func handleMP3Command(m Model, _ string, parts []string) (Model, tea.Cmd) {

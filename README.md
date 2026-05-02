@@ -128,9 +128,7 @@ BITCHTEA_PROVIDER      Force provider (openai, anthropic)
 | `/sessions` | List saved sessions | Safe |
 | `/tree` | Show session tree | Safe |
 | `/fork` | Fork the current session | Safe |
-| `/auto-next` | Toggle auto-next-steps | Moderate: changes turn behavior |
-| `/auto-idea` | Toggle auto-next-idea | Moderate: changes turn behavior |
-| `/sound` | Toggle completion bell | Safe |
+| `/set <key> [value]` | Show or change settings (`sound`, `auto-next`, `auto-idea`, `provider`, `model`, `baseurl`, `apikey`, `nick`, `profile`). Off by default; turn on with `/set auto-next on`. | Moderate when toggling auto-next/auto-idea (changes turn behavior) |
 | `/mp3 [rescan\|play\|pause\|next\|prev]` | Toggle the MP3 panel and control playback from `~/.bitchtea/mp3` | Safe |
 | `/help` | Show help | Safe |
 | `/quit` | Exit | Safe |

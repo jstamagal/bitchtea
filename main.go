@@ -349,9 +349,7 @@ Commands (inside the TUI):
   /sessions              List saved sessions
   /tree                  Show session tree
   /fork                  Fork session
-  /auto-next             Toggle auto-next-steps
-  /auto-idea             Toggle auto-next-idea
-  /sound                 Toggle completion bell
+  /set <key> [value]     Show/change settings (sound, auto-next, auto-idea, etc.)
   /mp3 [cmd]             Toggle MP3 panel and player
   /help                  Show help
   /quit                  Exit

@@ -62,6 +62,30 @@ func TestHandleCommandUnknownCommandStillErrors(t *testing.T) {
 	}
 }
 
+// TestRemovedRootCommandsAreNotRegistered guards against re-introducing root
+// commands that are now expected to live behind /set. /auto-next, /auto-idea,
+// and /sound were removed because they were thin toggle wrappers around
+// /set auto-next, /set auto-idea, and /set sound respectively.
+func TestRemovedRootCommandsAreNotRegistered(t *testing.T) {
+	for _, name := range []string{"/auto-next", "/auto-idea", "/sound"} {
+		if _, ok := lookupSlashCommand(name); ok {
+			t.Errorf("%s should no longer be a root slash command — use /set instead", name)
+		}
+	}
+
+	m := newTestModel(t)
+	for _, cmd := range []string{"/auto-next", "/auto-idea", "/sound"} {
+		result, _ := m.handleCommand(cmd)
+		msg := lastMsg(result)
+		if msg.Type != MsgError {
+			t.Fatalf("%s should return MsgError after removal, got %v: %q", cmd, msg.Type, msg.Content)
+		}
+		if !strings.Contains(msg.Content, "Unknown command") {
+			t.Fatalf("%s should error with 'Unknown command', got %q", cmd, msg.Content)
+		}
+	}
+}
+
 // --- IRC routing commands ---
 // --- IRC routing commands ---
 
