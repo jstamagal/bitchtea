@@ -794,7 +794,7 @@ func handleMsgCommand(m Model, input string, parts []string) (Model, tea.Cmd) {
 		return m, nil
 	}
 	if m.streaming {
-		m.queued = append(m.queued, fmt.Sprintf("[to:%s] %s", nick, text))
+		m.queued = append(m.queued, queuedMsg{text: fmt.Sprintf("[to:%s] %s", nick, text), queuedAt: time.Now()})
 		m.sysMsg(fmt.Sprintf("Queued /msg to %s (agent busy).", nick))
 		return m, nil
 	}

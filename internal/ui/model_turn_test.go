@@ -64,12 +64,12 @@ func TestUpUnqueuesLastQueuedMessage(t *testing.T) {
 	cfg.SessionDir = t.TempDir()
 
 	model := NewModel(&cfg)
-	model.queued = []string{"first", "second"}
+	model.queued = []queuedMsg{{text: "first", queuedAt: time.Now()}, {text: "second", queuedAt: time.Now()}}
 
 	updated, _ := model.Update(tea.KeyMsg{Type: tea.KeyUp})
 	got := updated.(Model)
 
-	if len(got.queued) != 1 || got.queued[0] != "first" {
+	if len(got.queued) != 1 || got.queued[0].text != "first" {
 		t.Fatalf("expected last queued message to be removed, got %#v", got.queued)
 	}
 	if got.input.Value() != "second" {
@@ -84,7 +84,7 @@ func TestCtrlCCancelsTurnWithoutClearingQueue(t *testing.T) {
 
 	model := NewModel(&cfg)
 	model.streaming = true
-	model.queued = []string{"first", "second"}
+	model.queued = []queuedMsg{{text: "first", queuedAt: time.Now()}, {text: "second", queuedAt: time.Now()}}
 	canceled := false
 	model.cancel = func() { canceled = true }
 
@@ -118,7 +118,7 @@ func TestSecondCtrlCClearsQueueAfterCancellingTurn(t *testing.T) {
 
 	model := NewModel(&cfg)
 	model.streaming = true
-	model.queued = []string{"first", "second"}
+	model.queued = []queuedMsg{{text: "first", queuedAt: time.Now()}, {text: "second", queuedAt: time.Now()}}
 	model.cancel = func() {}
 
 	updated, _ := model.Update(tea.KeyMsg{Type: tea.KeyCtrlC})
@@ -146,7 +146,7 @@ func TestThirdCtrlCQuitsWithinWindow(t *testing.T) {
 
 	model := NewModel(&cfg)
 	model.streaming = true
-	model.queued = []string{"first", "second"}
+	model.queued = []queuedMsg{{text: "first", queuedAt: time.Now()}, {text: "second", queuedAt: time.Now()}}
 	model.cancel = func() {}
 
 	updated, _ := model.Update(tea.KeyMsg{Type: tea.KeyCtrlC})
@@ -190,7 +190,7 @@ func TestCancelledTurnDoneDoesNotDrainQueue(t *testing.T) {
 	oldCh := make(chan agent.Event)
 	model.eventCh = oldCh
 	model.streaming = true
-	model.queued = []string{"next"}
+	model.queued = []queuedMsg{{text: "next", queuedAt: time.Now()}}
 	model.cancel = func() {}
 
 	updated, _ := model.Update(tea.KeyMsg{Type: tea.KeyCtrlC})
@@ -201,7 +201,7 @@ func TestCancelledTurnDoneDoesNotDrainQueue(t *testing.T) {
 	if cmd != nil {
 		t.Fatal("expected stale done after ctrl+c to produce no command")
 	}
-	if len(got.queued) != 1 || got.queued[0] != "next" {
+	if len(got.queued) != 1 || got.queued[0].text != "next" {
 		t.Fatalf("expected stale done after ctrl+c to leave queue alone, got %#v", got.queued)
 	}
 	if got.streaming {
@@ -216,7 +216,7 @@ func TestFirstEscDuringStreamingPromptsForTurnCancel(t *testing.T) {
 
 	model := NewModel(&cfg)
 	model.streaming = true
-	model.queued = []string{"first", "second"}
+	model.queued = []queuedMsg{{text: "first", queuedAt: time.Now()}, {text: "second", queuedAt: time.Now()}}
 	canceled := false
 	model.cancel = func() { canceled = true }
 
@@ -244,7 +244,7 @@ func TestSecondEscCancelsTurnWithoutClearingQueue(t *testing.T) {
 
 	model := NewModel(&cfg)
 	model.streaming = true
-	model.queued = []string{"first", "second"}
+	model.queued = []queuedMsg{{text: "first", queuedAt: time.Now()}, {text: "second", queuedAt: time.Now()}}
 	canceled := false
 	model.cancel = func() { canceled = true }
 
@@ -276,7 +276,7 @@ func TestThirdEscClearsQueueAfterTurnCancel(t *testing.T) {
 
 	model := NewModel(&cfg)
 	model.streaming = true
-	model.queued = []string{"first", "second"}
+	model.queued = []queuedMsg{{text: "first", queuedAt: time.Now()}, {text: "second", queuedAt: time.Now()}}
 	model.cancel = func() {}
 
 	updated, _ := model.Update(tea.KeyMsg{Type: tea.KeyEsc})
@@ -299,7 +299,7 @@ func TestEscSequenceResetsAfterTimeout(t *testing.T) {
 
 	model := NewModel(&cfg)
 	model.streaming = true
-	model.queued = []string{"first"}
+	model.queued = []queuedMsg{{text: "first", queuedAt: time.Now()}}
 	canceled := false
 	model.cancel = func() { canceled = true }
 	model.escStage = 1
@@ -327,7 +327,7 @@ func TestFirstEscDuringRunningToolFallsBackToTurnCancel(t *testing.T) {
 	model := NewModel(&cfg)
 	model.streaming = true
 	model.activeToolName = "bash"
-	model.queued = []string{"next"}
+	model.queued = []queuedMsg{{text: "next", queuedAt: time.Now()}}
 	canceled := false
 	model.cancel = func() { canceled = true }
 
@@ -383,7 +383,7 @@ func TestStaleAgentDoneIsIgnoredAfterChannelReplacement(t *testing.T) {
 	newCh := make(chan agent.Event)
 	model.eventCh = newCh
 	model.streaming = true
-	model.queued = []string{"next"}
+	model.queued = []queuedMsg{{text: "next", queuedAt: time.Now()}}
 
 	updated, cmd := model.Update(agentDoneMsg{ch: oldCh})
 	got := updated.(Model)
@@ -394,7 +394,7 @@ func TestStaleAgentDoneIsIgnoredAfterChannelReplacement(t *testing.T) {
 	if !got.streaming {
 		t.Fatal("expected stale done to leave current streaming state alone")
 	}
-	if len(got.queued) != 1 || got.queued[0] != "next" {
+	if len(got.queued) != 1 || got.queued[0].text != "next" {
 		t.Fatalf("expected stale done to leave queue alone, got %#v", got.queued)
 	}
 	if got.eventCh != newCh {
@@ -546,5 +546,61 @@ func TestHandleAgentEventUpdatesThinkingPlaceholder(t *testing.T) {
 	}
 	if last.Content != "plan: inspect file" {
 		t.Fatalf("expected accumulated thinking content, got %q", last.Content)
+	}
+}
+
+func TestAgentDoneDiscardsStaleQueuedMessages(t *testing.T) {
+	cfg := config.DefaultConfig()
+	cfg.WorkDir = t.TempDir()
+	cfg.SessionDir = t.TempDir()
+
+	model := NewModel(&cfg)
+	model.agent = agent.NewAgentWithStreamer(&cfg, stubStreamer{})
+	model.eventCh = make(chan agent.Event)
+	model.streaming = true
+	model.queued = []queuedMsg{
+		{text: "old message", queuedAt: time.Now().Add(-3 * time.Minute)},
+		{text: "another old one", queuedAt: time.Now().Add(-2*time.Minute - 30*time.Second)},
+	}
+
+	updated, cmd := model.Update(agentDoneMsg{})
+	got := updated.(Model)
+
+	if cmd != nil {
+		t.Fatal("expected stale queue discard to produce no command")
+	}
+	if len(got.queued) != 0 {
+		t.Fatalf("expected stale queue to be cleared, got %#v", got.queued)
+	}
+	if len(got.messages) == 0 {
+		t.Fatal("expected discard warning message")
+	}
+	last := got.messages[len(got.messages)-1]
+	if last.Type != MsgSystem || !strings.Contains(last.Content, "Discarded") {
+		t.Fatalf("expected discard warning, got %#v", last)
+	}
+}
+
+func TestAgentDoneDrainsFreshQueuedMessages(t *testing.T) {
+	cfg := config.DefaultConfig()
+	cfg.WorkDir = t.TempDir()
+	cfg.SessionDir = t.TempDir()
+
+	model := NewModel(&cfg)
+	model.agent = agent.NewAgentWithStreamer(&cfg, stubStreamer{})
+	model.eventCh = make(chan agent.Event)
+	model.streaming = true
+	model.queued = []queuedMsg{
+		{text: "fresh message", queuedAt: time.Now()},
+	}
+
+	updated, cmd := model.Update(agentDoneMsg{})
+	got := updated.(Model)
+
+	if cmd == nil {
+		t.Fatal("expected fresh queue to produce a send command")
+	}
+	if len(got.queued) != 0 {
+		t.Fatalf("expected fresh queue to be drained, got %#v", got.queued)
 	}
 }

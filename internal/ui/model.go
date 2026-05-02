@@ -34,7 +34,19 @@ type agentDoneMsg struct {
 const (
 	escGraduationWindow   = 1500 * time.Millisecond
 	ctrlCGraduationWindow = 3 * time.Second
+
+	// queueStaleThreshold is how long queued messages can sit before they're
+	// considered stale. When the agent finishes a turn, any queue older than
+	// this is discarded rather than sent as out-of-date context.
+	queueStaleThreshold = 2 * time.Minute
 )
+
+// queuedMsg holds a message typed while the agent was busy, along with the
+// time it was queued so staleness can be detected on drain.
+type queuedMsg struct {
+	text     string
+	queuedAt time.Time
+}
 
 // SignalMsg wraps an OS signal for the bubbletea message loop
 type SignalMsg struct {
@@ -112,7 +124,7 @@ type Model struct {
 	historyIdx int
 
 	// Queued messages (steering - typed while agent is working)
-	queued          []string
+	queued          []queuedMsg
 	queueClearArmed bool
 	escStage        int
 	escLast         time.Time
@@ -418,7 +430,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case "up":
 			if strings.TrimSpace(m.input.Value()) == "" && len(m.queued) > 0 {
 				lastIdx := len(m.queued) - 1
-				input := m.queued[lastIdx]
+				input := m.queued[lastIdx].text
 				m.queued = m.queued[:lastIdx]
 				m.input.SetValue(input)
 				m.input.SetCursor(len(input))
@@ -477,7 +489,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 			// If agent is busy, queue the message (steering)
 			if m.streaming {
-				m.queued = append(m.queued, input)
+				m.queued = append(m.queued, queuedMsg{text: input, queuedAt: time.Now()})
 				m.addMessage(ChatMessage{
 					Time:    time.Now(),
 					Type:    MsgSystem,
@@ -558,6 +570,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.streaming = false
 			m.queued = nil
 		}
+		m.queued = nil
 		if m.mp3 != nil {
 			m.mp3.stop()
 		}
@@ -635,13 +648,28 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 		// Process queued messages: batch all of them into one turn so the agent
 		// sees the full context of what was said, not one orphaned message at a time.
+		// But first check for staleness — if the queue has been sitting for longer
+		// than the threshold, the conversation has moved on and the messages are
+		// no longer useful context.
 		if len(m.queued) > 0 {
+			if time.Since(m.queued[0].queuedAt) > queueStaleThreshold {
+				cleared := len(m.queued)
+				m.queued = nil
+				m.queueClearArmed = false
+				m.addMessage(ChatMessage{
+					Time:    time.Now(),
+					Type:    MsgSystem,
+					Content: fmt.Sprintf("Discarded %d queued message(s) older than %v — context changed. Re-send if still relevant.", cleared, queueStaleThreshold),
+				})
+				m.refreshViewport()
+				return m, nil
+			}
 			var combined strings.Builder
 			for i, msg := range m.queued {
 				if i > 0 {
 					combined.WriteString("\n")
 				}
-				combined.WriteString(fmt.Sprintf("[queued msg %d]: %s", i+1, msg))
+				combined.WriteString(fmt.Sprintf("[queued msg %d]: %s", i+1, msg.text))
 			}
 			m.queued = nil
 			m.queueClearArmed = false

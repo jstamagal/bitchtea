@@ -12,7 +12,7 @@ func TestRestartCommandClearsHistoryAndDisplay(t *testing.T) {
 	// Seed some chat display + agent state.
 	m.addMessage(ChatMessage{Time: time.Now(), Type: MsgUser, Nick: "tj", Content: "hello"})
 	m.addMessage(ChatMessage{Time: time.Now(), Type: MsgAgent, Nick: "bt", Content: "hi"})
-	m.queued = append(m.queued, "queued msg")
+	m.queued = append(m.queued, queuedMsg{text: "queued msg", queuedAt: time.Now()})
 	bootstrapBefore := m.agent.MessageCount()
 	originalSession := m.session
 
