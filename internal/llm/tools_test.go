@@ -47,6 +47,64 @@ func TestTranslateToolsExtractsFantasyParameterShape(t *testing.T) {
 	}
 }
 
+func TestBitchteaToolRunUnknownToolReturnsErrorResponseNotGoError(t *testing.T) {
+	reg := tools.NewRegistry(t.TempDir(), t.TempDir())
+	tool := &bitchteaTool{
+		info: fantasy.ToolInfo{Name: "definitely_not_a_real_tool"},
+		reg:  reg,
+	}
+
+	resp, err := tool.Run(context.Background(), fantasy.ToolCall{
+		ID:    "call_unknown",
+		Name:  "definitely_not_a_real_tool",
+		Input: `{}`,
+	})
+	if err != nil {
+		t.Fatalf("Run must never return a Go error (would abort the fantasy stream); got %v", err)
+	}
+	if !resp.IsError {
+		t.Fatalf("expected IsError=true on tool failure, got %+v", resp)
+	}
+	if resp.Type != "text" {
+		t.Fatalf("expected text response type, got %q", resp.Type)
+	}
+	if !strings.Contains(resp.Content, "definitely_not_a_real_tool") {
+		t.Fatalf("error response must preserve underlying error text, got %q", resp.Content)
+	}
+}
+
+func TestBitchteaToolRunCancelledContextReturnsErrorResponseNotGoError(t *testing.T) {
+	reg := tools.NewRegistry(t.TempDir(), t.TempDir())
+	tool := &bitchteaTool{
+		info: fantasy.ToolInfo{Name: "bash"},
+		reg:  reg,
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel() // cancel before invocation so bash exits immediately
+
+	resp, err := tool.Run(ctx, fantasy.ToolCall{
+		ID:    "call_bash",
+		Name:  "bash",
+		Input: `{"command":"sleep 30","timeout":30}`,
+	})
+	if err != nil {
+		t.Fatalf("Run must never return a Go error on ctx cancel (would abort the fantasy stream); got %v", err)
+	}
+	// Current behavior (pre-bt-p8): cancellation surfaces as the bash tool's
+	// error string wrapped in NewTextErrorResponse. There is no synthetic
+	// "user cancelled this tool call" message yet.
+	if !resp.IsError {
+		t.Fatalf("expected IsError=true on cancelled ctx, got %+v", resp)
+	}
+	if resp.Type != "text" {
+		t.Fatalf("expected text response type, got %q", resp.Type)
+	}
+	if resp.Content == "" {
+		t.Fatalf("expected non-empty error content on cancelled ctx, got %+v", resp)
+	}
+}
+
 func TestSplitSchemaAcceptsAlreadySplitPropertyMap(t *testing.T) {
 	params, required := splitSchema(map[string]any{
 		"path": map[string]any{"type": "string"},
