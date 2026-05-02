@@ -281,6 +281,7 @@ func buildSystemPrompt(cfg *config.Config, toolDefs []tools.ToolDef) string {
 	))
 	sb.WriteString("\n")
 	writeToolPrompt(&sb, toolDefs)
+	writeMemoryPrompt(&sb)
 	sb.WriteString("════════════════════════════\n")
 	sb.WriteString("🧠 PERSONA / STYLE\n")
 	sb.WriteString("════════════════════════════\n")
@@ -290,11 +291,22 @@ func buildSystemPrompt(cfg *config.Config, toolDefs []tools.ToolDef) string {
 	return sb.String()
 }
 
+func writeMemoryPrompt(sb *strings.Builder) {
+	sb.WriteString("════════════════════════════\n")
+	sb.WriteString("MEMORY WORKFLOW\n")
+	sb.WriteString("════════════════════════════\n")
+	sb.WriteString("- Before substantive work or when prior decision/history matters: call search_memory first; do not guess.\n")
+	sb.WriteString("- After finishing meaningful work (a decision, a fix, a conclusion, a preference learned): call write_memory with a clear title and concise content. Skip trivia and small talk.\n")
+	sb.WriteString("- Scope: omit (or 'current') for work tied to the active channel/query — usually correct. Use scope='root' only for global facts that apply everywhere. Use scope='channel'/'query' with name=… to write into a different context than the active one.\n")
+	sb.WriteString("- daily=true for ephemeral session events worth archiving by date; default (hot file) for durable knowledge you'll want surfaced again.\n")
+	sb.WriteString("- Consolidate: search before writing so you extend existing notes instead of duplicating them. Don't write what's already remembered.\n")
+	sb.WriteString("\n")
+}
+
 func writeToolPrompt(sb *strings.Builder, toolDefs []tools.ToolDef) {
 	sb.WriteString("TOOLS ARE LIVE FUNCTION CALLS\n")
 	sb.WriteString("- Tool schemas are attached to the provider request. Use actual tool calls; do not print fake JSON.\n")
 	sb.WriteString("- If code/files matter: read before edit; edit only exact unique text; write only for new files or full rewrites.\n")
-	sb.WriteString("- If prior decision/history matters: call search_memory before guessing.\n")
 	sb.WriteString("- If shell output is enough: use bash. If a program needs follow-up input, a REPL, an editor, or a TUI: use terminal_start, terminal_keys, terminal_wait, terminal_snapshot, terminal_resize, terminal_close.\n")
 	sb.WriteString("- For vim/vi: prefer terminal_keys. Quit safely with keys [\"esc\", \"esc\", \":q!\", \"enter\"] or save with [\"esc\", \":wq\", \"enter\"].\n")
 	sb.WriteString("- Summarize tool results in 1-2 useful lines unless KING asks for raw output.\n")

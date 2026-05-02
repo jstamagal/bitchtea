@@ -309,11 +309,18 @@ func TestBuildSystemPromptMentionsSearchMemory(t *testing.T) {
 
 	reg := tools.NewRegistry(cfg.WorkDir, t.TempDir())
 	prompt := buildSystemPrompt(&cfg, reg.Definitions())
-	if !strings.Contains(prompt, "search_memory") {
-		t.Fatalf("expected search_memory in system prompt, got %q", prompt)
-	}
-	if !strings.Contains(prompt, "prior decision") {
-		t.Fatalf("expected recall guidance in system prompt, got %q", prompt)
+	for _, want := range []string{
+		"search_memory",
+		"write_memory",
+		"prior decision",
+		"MEMORY WORKFLOW",
+		"scope='root'",
+		"daily=true",
+		"Consolidate",
+	} {
+		if !strings.Contains(prompt, want) {
+			t.Fatalf("expected %q in system prompt, got %q", want, prompt)
+		}
 	}
 }
 
