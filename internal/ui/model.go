@@ -209,9 +209,14 @@ func NewModel(cfg *config.Config) Model {
 // ResumeSession loads a previous session's messages into the chat display.
 // Focus state is already restored in NewModel via LoadFocusManager; this call
 // records the session and replays the display messages only.
+//
+// Phase 3: the agent's canonical message history is fantasy-native, so we
+// restore via session.FantasyFromEntries — which round-trips v1 entries
+// verbatim (preserving reasoning/media parts) and lifts v0 entries into
+// fantasy parts the same way the in-flight conversion does.
 func (m *Model) ResumeSession(sess *session.Session) {
 	m.session = sess
-	messages := session.MessagesFromEntries(sess.Entries)
+	messages := session.FantasyFromEntries(sess.Entries)
 	if len(messages) > 0 {
 		m.agent.RestoreMessages(messages)
 		m.lastSavedMsgIdx = len(messages)
@@ -598,11 +603,14 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 
 		// Save new messages to session (incremental), stamping the turn context.
+		// Phase 3: write fantasy-native v1 entries via EntryFromFantasy. The
+		// dual-write writer also populates the legacy fields so a downgraded
+		// binary can keep reading the JSONL file.
 		if m.session != nil {
 			msgs := m.agent.Messages()
 			ctxLabel := m.turnContext.Label()
 			for i := m.lastSavedMsgIdx; i < len(msgs); i++ {
-				e := session.EntryFromMessageWithBootstrap(
+				e := session.EntryFromFantasyWithBootstrap(
 					msgs[i],
 					i < m.agent.BootstrapMessageCount(),
 				)

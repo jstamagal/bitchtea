@@ -8,6 +8,8 @@ import (
 	"sync"
 	"testing"
 
+	"charm.land/fantasy"
+
 	"github.com/jstamagal/bitchtea/internal/config"
 	"github.com/jstamagal/bitchtea/internal/llm"
 	"github.com/jstamagal/bitchtea/internal/tools"
@@ -355,9 +357,9 @@ func TestRestoreMessagesRefreshesSystemPromptToolDefinitions(t *testing.T) {
 	cfg.SessionDir = t.TempDir()
 
 	agent := NewAgentWithStreamer(&cfg, &fakeStreamer{})
-	agent.RestoreMessages([]llm.Message{
-		{Role: "system", Content: "old stale prompt"},
-		{Role: "user", Content: "hello"},
+	agent.RestoreMessages([]fantasy.Message{
+		fantasyTextMessage("system", "old stale prompt"),
+		fantasyTextMessage("user", "hello"),
 	})
 
 	prompt := agent.SystemPrompt()
@@ -510,21 +512,23 @@ func TestSendMessageSplicesRealMessagesAndSanitizesAssistant(t *testing.T) {
 	}
 	msgs := ag.Messages()
 	asst := msgs[len(msgs)-2]
-	if asst.Role != "assistant" {
+	if asst.Role != fantasy.MessageRoleAssistant {
 		t.Fatalf("expected assistant role at -2, got %q", asst.Role)
 	}
-	if strings.Contains(asst.Content, autoNextDoneToken) {
-		t.Fatalf("assistant content not sanitized, got %q", asst.Content)
+	asstText := msgText(asst)
+	if strings.Contains(asstText, autoNextDoneToken) {
+		t.Fatalf("assistant content not sanitized, got %q", asstText)
 	}
-	if asst.Content != "shipped." {
-		t.Fatalf("expected sanitized 'shipped.', got %q", asst.Content)
+	if asstText != "shipped." {
+		t.Fatalf("expected sanitized 'shipped.', got %q", asstText)
 	}
-	if len(asst.ToolCalls) != 1 {
-		t.Fatalf("expected ToolCalls preserved on assistant message, got %+v", asst.ToolCalls)
+	asstCalls := msgToolCalls(asst)
+	if len(asstCalls) != 1 {
+		t.Fatalf("expected ToolCalls preserved on assistant message, got %+v", asstCalls)
 	}
 	tool := msgs[len(msgs)-1]
-	if tool.Role != "tool" || tool.ToolCallID != "c1" || tool.Content != "file body" {
-		t.Fatalf("tool message not preserved: %+v", tool)
+	if tool.Role != fantasy.MessageRoleTool || msgToolCallID(tool) != "c1" || msgText(tool) != "file body" {
+		t.Fatalf("tool message not preserved: role=%q tool_call_id=%q text=%q", tool.Role, msgToolCallID(tool), msgText(tool))
 	}
 	if got := ag.LastAssistantDisplayContent(); got != "shipped." {
 		t.Fatalf("LastAssistantDisplayContent = %q", got)

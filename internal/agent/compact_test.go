@@ -8,6 +8,8 @@ import (
 	"testing"
 	"time"
 
+	"charm.land/fantasy"
+
 	"github.com/jstamagal/bitchtea/internal/config"
 	"github.com/jstamagal/bitchtea/internal/llm"
 	"github.com/jstamagal/bitchtea/internal/tools"
@@ -15,16 +17,16 @@ import (
 
 // helpers ----------------------------------------------------------------
 
-// makeMessages builds a slice of n messages with a system prompt at [0].
-func makeMessages(n int) []llm.Message {
-	msgs := make([]llm.Message, 0, n)
-	msgs = append(msgs, llm.Message{Role: "system", Content: "You are a helpful assistant."})
+// makeMessages builds a slice of n fantasy messages with a system prompt at [0].
+func makeMessages(n int) []fantasy.Message {
+	msgs := make([]fantasy.Message, 0, n)
+	msgs = append(msgs, fantasyTextMessage("system", "You are a helpful assistant."))
 	for i := 1; i < n; i++ {
 		role := "user"
 		if i%2 == 0 {
 			role = "assistant"
 		}
-		msgs = append(msgs, llm.Message{Role: role, Content: "message " + strings.Repeat("x", i)})
+		msgs = append(msgs, fantasyTextMessage(role, "message "+strings.Repeat("x", i)))
 	}
 	return msgs
 }
@@ -103,9 +105,9 @@ func TestCompactRetainsSystemPromptAndLastFour(t *testing.T) {
 	agent.messages = msgs
 
 	// Save the last 4 messages before compaction.
-	last4 := make([]llm.Message, 4)
+	last4 := make([]fantasy.Message, 4)
 	copy(last4, msgs[len(msgs)-4:])
-	origSystem := msgs[0].Content
+	origSystem := msgText(msgs[0])
 
 	if err := agent.Compact(context.Background()); err != nil {
 		t.Fatalf("Compact returned error: %v", err)
@@ -117,17 +119,17 @@ func TestCompactRetainsSystemPromptAndLastFour(t *testing.T) {
 	}
 
 	// [0] must be the original system prompt.
-	if agent.messages[0].Content != origSystem {
+	if msgText(agent.messages[0]) != origSystem {
 		t.Fatalf("system prompt changed after compact")
 	}
 
 	// [1] must contain the summary.
-	if !strings.Contains(agent.messages[1].Content, summaryText) {
-		t.Fatalf("summary message missing summary text; got %q", agent.messages[1].Content)
+	if !strings.Contains(msgText(agent.messages[1]), summaryText) {
+		t.Fatalf("summary message missing summary text; got %q", msgText(agent.messages[1]))
 	}
 
 	// [2] must be the assistant acknowledgement.
-	if agent.messages[2].Role != "assistant" {
+	if agent.messages[2].Role != fantasy.MessageRoleAssistant {
 		t.Fatalf("expected assistant ack at index 2, got role %q", agent.messages[2].Role)
 	}
 
@@ -135,9 +137,9 @@ func TestCompactRetainsSystemPromptAndLastFour(t *testing.T) {
 	for i := 0; i < 4; i++ {
 		got := agent.messages[3+i]
 		want := last4[i]
-		if got.Role != want.Role || got.Content != want.Content {
+		if got.Role != want.Role || msgText(got) != msgText(want) {
 			t.Fatalf("message at index %d differs: got {%s,%q}, want {%s,%q}",
-				3+i, got.Role, got.Content, want.Role, want.Content)
+				3+i, got.Role, msgText(got), want.Role, msgText(want))
 		}
 	}
 }
@@ -154,14 +156,15 @@ func TestCompactSummaryInsertedProperly(t *testing.T) {
 
 	// The summary message should be at index 1 with the correct prefix.
 	sumMsg := agent.messages[1]
-	if sumMsg.Role != "user" {
+	if sumMsg.Role != fantasy.MessageRoleUser {
 		t.Fatalf("expected summary message role 'user', got %q", sumMsg.Role)
 	}
-	if !strings.HasPrefix(sumMsg.Content, "[Previous conversation summary]:") {
-		t.Fatalf("summary message missing prefix; got %q", sumMsg.Content)
+	sumText := msgText(sumMsg)
+	if !strings.HasPrefix(sumText, "[Previous conversation summary]:") {
+		t.Fatalf("summary message missing prefix; got %q", sumText)
 	}
-	if !strings.Contains(sumMsg.Content, summaryText) {
-		t.Fatalf("summary message missing streamer output; got %q", sumMsg.Content)
+	if !strings.Contains(sumText, summaryText) {
+		t.Fatalf("summary message missing streamer output; got %q", sumText)
 	}
 }
 
@@ -206,8 +209,8 @@ func TestCompactFlushesDailyMemoryBeforeSummaryRewrite(t *testing.T) {
 	if !strings.Contains(content, "Keep IRC routing semantics") {
 		t.Fatalf("expected durable memory flush content, got %q", content)
 	}
-	if !strings.Contains(agent.messages[1].Content, "Conversation compacted cleanly.") {
-		t.Fatalf("expected compacted summary in message history, got %q", agent.messages[1].Content)
+	if got := msgText(agent.messages[1]); !strings.Contains(got, "Conversation compacted cleanly.") {
+		t.Fatalf("expected compacted summary in message history, got %q", got)
 	}
 }
 
@@ -219,26 +222,9 @@ func TestCompactPreservesToolMetadata(t *testing.T) {
 	msgs := makeMessages(10)
 
 	// Modify message at index 7 (within last 4: indices 6,7,8,9) to have tool calls.
-	msgs[7] = llm.Message{
-		Role:    "assistant",
-		Content: "",
-		ToolCalls: []llm.ToolCall{
-			{
-				ID:   "call_abc",
-				Type: "function",
-				Function: llm.FunctionCall{
-					Name:      "read",
-					Arguments: `{"path":"main.go"}`,
-				},
-			},
-		},
-	}
+	msgs[7] = fantasyAssistantWithToolCall("", "call_abc", "read", `{"path":"main.go"}`)
 	// Modify message at index 8 to be a tool result.
-	msgs[8] = llm.Message{
-		Role:       "tool",
-		Content:    "package main\n\nfunc main() {}",
-		ToolCallID: "call_abc",
-	}
+	msgs[8] = fantasyToolResult("call_abc", "package main\n\nfunc main() {}")
 
 	agent.messages = msgs
 
@@ -253,22 +239,23 @@ func TestCompactPreservesToolMetadata(t *testing.T) {
 
 	// The tool call message should be at index 4 (3 + offset 1 within last4).
 	toolMsg := agent.messages[4]
-	if len(toolMsg.ToolCalls) != 1 {
-		t.Fatalf("expected 1 tool call, got %d", len(toolMsg.ToolCalls))
+	calls := msgToolCalls(toolMsg)
+	if len(calls) != 1 {
+		t.Fatalf("expected 1 tool call, got %d", len(calls))
 	}
-	if toolMsg.ToolCalls[0].ID != "call_abc" {
-		t.Fatalf("tool call ID not preserved: got %q", toolMsg.ToolCalls[0].ID)
+	if calls[0].ID != "call_abc" {
+		t.Fatalf("tool call ID not preserved: got %q", calls[0].ID)
 	}
-	if toolMsg.ToolCalls[0].Function.Name != "read" {
-		t.Fatalf("tool call function name not preserved: got %q", toolMsg.ToolCalls[0].Function.Name)
+	if calls[0].Function.Name != "read" {
+		t.Fatalf("tool call function name not preserved: got %q", calls[0].Function.Name)
 	}
 
 	// The tool result message should be at index 5.
 	resultMsg := agent.messages[5]
-	if resultMsg.ToolCallID != "call_abc" {
-		t.Fatalf("tool result ToolCallID not preserved: got %q", resultMsg.ToolCallID)
+	if msgToolCallID(resultMsg) != "call_abc" {
+		t.Fatalf("tool result ToolCallID not preserved: got %q", msgToolCallID(resultMsg))
 	}
-	if resultMsg.Role != "tool" {
+	if resultMsg.Role != fantasy.MessageRoleTool {
 		t.Fatalf("tool result role not preserved: got %q", resultMsg.Role)
 	}
 }
@@ -347,8 +334,8 @@ func TestSetScopeInjectsHotMemoryOnce(t *testing.T) {
 	if len(ag.messages) != baseCount+2 {
 		t.Fatalf("expected 2 injected messages after SetScope, got %d (base=%d)", len(ag.messages)-baseCount, baseCount)
 	}
-	if !strings.Contains(ag.messages[baseCount].Content, "terraform for infra") {
-		t.Fatalf("expected HOT.md content injected, got %q", ag.messages[baseCount].Content)
+	if got := msgText(ag.messages[baseCount]); !strings.Contains(got, "terraform for infra") {
+		t.Fatalf("expected HOT.md content injected, got %q", got)
 	}
 
 	// Second SetScope call with same scope should NOT reinject.

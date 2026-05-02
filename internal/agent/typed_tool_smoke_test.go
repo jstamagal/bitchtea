@@ -173,8 +173,8 @@ func TestPhase2TypedToolSmoke_ReadFileEndToEnd(t *testing.T) {
 	if len(tail) < 4 {
 		t.Fatalf("expected at least 4 trailing messages (user, assistant+toolcall, tool, assistant), got %d: %+v", len(tail), tail)
 	}
-	if tail[0].Role != "user" || !strings.Contains(tail[0].Content, "read smoke.txt") {
-		t.Fatalf("expected first new message to be the user prompt, got role=%q content=%q", tail[0].Role, tail[0].Content)
+	if tail[0].Role != fantasy.MessageRoleUser || !strings.Contains(msgText(tail[0]), "read smoke.txt") {
+		t.Fatalf("expected first new message to be the user prompt, got role=%q content=%q", tail[0].Role, msgText(tail[0]))
 	}
 
 	var foundAssistantToolCall bool
@@ -182,15 +182,15 @@ func TestPhase2TypedToolSmoke_ReadFileEndToEnd(t *testing.T) {
 	var foundFinalAssistant bool
 	for _, m := range tail[1:] {
 		switch m.Role {
-		case "assistant":
-			if len(m.ToolCalls) == 1 && m.ToolCalls[0].Function.Name == "read" {
+		case fantasy.MessageRoleAssistant:
+			if calls := msgToolCalls(m); len(calls) == 1 && calls[0].Function.Name == "read" {
 				foundAssistantToolCall = true
 			}
-			if strings.Contains(m.Content, "ack") {
+			if strings.Contains(msgText(m), "ack") {
 				foundFinalAssistant = true
 			}
-		case "tool":
-			if m.ToolCallID == "call_smoke_read" && strings.Contains(m.Content, fileBody) {
+		case fantasy.MessageRoleTool:
+			if msgToolCallID(m) == "call_smoke_read" && strings.Contains(msgText(m), fileBody) {
 				foundToolResult = true
 			}
 		}

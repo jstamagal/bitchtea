@@ -409,13 +409,51 @@ func TestResumeV1ToolCallPopulatesPanelStats(t *testing.T) {
 		t.Fatalf("expected 3 non-system agent messages, got %d", len(msgs)-start)
 	}
 	asst := msgs[start+1]
-	if asst.Role != "assistant" || len(asst.ToolCalls) != 1 || asst.ToolCalls[0].ID != "call_ls" {
+	if asst.Role != fantasy.MessageRoleAssistant {
+		t.Errorf("v1 tool_call did not survive: expected assistant role, got %q", asst.Role)
+	}
+	asstToolCalls := extractToolCalls(asst)
+	if len(asstToolCalls) != 1 || asstToolCalls[0].ToolCallID != "call_ls" {
 		t.Errorf("v1 tool_call did not survive into agent history: %+v", asst)
 	}
 	tr := msgs[start+2]
-	if tr.Role != "tool" || tr.ToolCallID != "call_ls" {
+	if tr.Role != fantasy.MessageRoleTool || extractToolCallID(tr) != "call_ls" {
 		t.Errorf("v1 tool result did not survive into agent history: %+v", tr)
 	}
+}
+
+// extractToolCalls returns ToolCallParts inside a fantasy.Message in source
+// order. Used by the resume tests to check the assistant tool-call shape
+// after the Phase 3 swap to fantasy-native agent.messages.
+func extractToolCalls(m fantasy.Message) []fantasy.ToolCallPart {
+	var out []fantasy.ToolCallPart
+	for _, part := range m.Content {
+		switch p := part.(type) {
+		case fantasy.ToolCallPart:
+			out = append(out, p)
+		case *fantasy.ToolCallPart:
+			if p != nil {
+				out = append(out, *p)
+			}
+		}
+	}
+	return out
+}
+
+// extractToolCallID returns the ToolCallID from the first ToolResultPart in
+// a tool-role fantasy.Message.
+func extractToolCallID(m fantasy.Message) string {
+	for _, part := range m.Content {
+		switch p := part.(type) {
+		case fantasy.ToolResultPart:
+			return p.ToolCallID
+		case *fantasy.ToolResultPart:
+			if p != nil {
+				return p.ToolCallID
+			}
+		}
+	}
+	return ""
 }
 
 // TestResumeV1LegacyLossyEntry resumes a session containing a v1 entry that
@@ -506,6 +544,7 @@ func TestResumeV1MultiTextFlattens(t *testing.T) {
 	}
 }
 
-// Compile-time assertion: ensure llm package is referenced (some tests in
-// this file inspect llm.ToolCall via agent.Messages()).
+// Compile-time assertion: keep the legacy llm import alive in case future
+// resume tests need to compare against llm.Message — convert from the
+// fantasy.Message canonical shape via llm.FantasySliceToLLM at the call site.
 var _ = llm.Message{}

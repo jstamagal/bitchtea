@@ -229,7 +229,7 @@ func collectHeadlessPrompt(flagPrompt string) (string, error) {
 func runHeadless(cfg *config.Config, sess *session.Session, prompt string) error {
 	ag := agent.NewAgent(cfg)
 	if sess != nil {
-		ag.RestoreMessages(session.MessagesFromEntries(sess.Entries))
+		ag.RestoreMessages(session.FantasyFromEntries(sess.Entries))
 	}
 
 	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)

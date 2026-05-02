@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"charm.land/fantasy"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/jstamagal/bitchtea/internal/agent"
 	"github.com/jstamagal/bitchtea/internal/config"
@@ -412,10 +413,10 @@ func TestAgentDoneWritesCheckpointInsteadOfMemoryFile(t *testing.T) {
 	model := NewModel(&cfg)
 	model.session = &session.Session{Path: filepath.Join(sessionDir, "test.jsonl")}
 	model.agent = agent.NewAgentWithStreamer(&cfg, nil)
-	model.agent.RestoreMessages([]llm.Message{
-		{Role: "system", Content: "system prompt"},
-		{Role: "user", Content: "do the thing"},
-		{Role: "assistant", Content: "implemented the thing"},
+	model.agent.RestoreMessages([]fantasy.Message{
+		{Role: fantasy.MessageRoleSystem, Content: []fantasy.MessagePart{fantasy.TextPart{Text: "system prompt"}}},
+		{Role: fantasy.MessageRoleUser, Content: []fantasy.MessagePart{fantasy.TextPart{Text: "do the thing"}}},
+		{Role: fantasy.MessageRoleAssistant, Content: []fantasy.MessagePart{fantasy.TextPart{Text: "implemented the thing"}}},
 	})
 	model.agent.TurnCount = 3
 	model.agent.ToolCalls["read"] = 2

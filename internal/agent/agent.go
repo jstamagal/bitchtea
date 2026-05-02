@@ -11,18 +11,25 @@ import (
 	"strings"
 	"time"
 
+	"charm.land/fantasy"
+
 	"github.com/jstamagal/bitchtea/internal/config"
 	"github.com/jstamagal/bitchtea/internal/llm"
 	"github.com/jstamagal/bitchtea/internal/tools"
 )
 
-// Agent manages the conversation loop
+// Agent manages the conversation loop.
+//
+// messages is the canonical fantasy-native conversation history. Phase 3
+// flipped this from []llm.Message to []fantasy.Message; conversion to the
+// legacy llm.Message shape happens at the streamer boundary (sendMessage,
+// Compact) via the adapter helpers in internal/llm.
 type Agent struct {
 	client   *llm.Client
 	streamer llm.ChatStreamer
 	tools    *tools.Registry
 	config   *config.Config
-	messages []llm.Message
+	messages []fantasy.Message
 
 	bootstrapMsgCount int
 
@@ -108,7 +115,7 @@ func NewAgentWithStreamer(cfg *config.Config, streamer llm.ChatStreamer) *Agent 
 		streamer:      streamer,
 		tools:         toolRegistry,
 		config:        cfg,
-		messages:      []llm.Message{{Role: "system", Content: systemPrompt}},
+		messages:      []fantasy.Message{newSystemMessage(systemPrompt)},
 		scope:         RootMemoryScope(),
 		injectedPaths: make(map[string]bool),
 		ToolCalls:     make(map[string]int),
@@ -119,28 +126,20 @@ func NewAgentWithStreamer(cfg *config.Config, streamer llm.ChatStreamer) *Agent 
 	// Inject context files (AGENTS.md etc.)
 	contextFiles := DiscoverContextFiles(cfg.WorkDir)
 	if contextFiles != "" {
-		a.messages = append(a.messages, llm.Message{
-			Role:    "user",
-			Content: "Here are the project context files:\n\n" + contextFiles,
-		})
-		a.messages = append(a.messages, llm.Message{
-			Role:    "assistant",
-			Content: "Got it. I've read the project context and will follow those conventions.",
-		})
+		a.messages = append(a.messages,
+			newUserMessage("Here are the project context files:\n\n"+contextFiles),
+			newAssistantMessage("Got it. I've read the project context and will follow those conventions."),
+		)
 	}
 
 	// Inject root MEMORY.md at bootstrap. Scoped HOT.md is injected lazily
 	// via SetScope when the first turn begins in a non-root context.
 	memory := LoadMemory(cfg.WorkDir)
 	if memory != "" {
-		a.messages = append(a.messages, llm.Message{
-			Role:    "user",
-			Content: "Here is the session memory from previous work:\n\n" + memory,
-		})
-		a.messages = append(a.messages, llm.Message{
-			Role:    "assistant",
-			Content: "Got it.",
-		})
+		a.messages = append(a.messages,
+			newUserMessage("Here is the session memory from previous work:\n\n"+memory),
+			newAssistantMessage("Got it."),
+		)
 	}
 
 	// Persona anchor: the last thing the model sees before the user's first
@@ -194,7 +193,7 @@ func (a *Agent) sendMessage(ctx context.Context, userMsg string, kind followUpKi
 	a.activeFollowUpKind = kind
 
 	expanded := ExpandFileRefs(userMsg, a.config.WorkDir)
-	a.messages = append(a.messages, llm.Message{Role: "user", Content: injectPerMessagePrefix(expanded)})
+	a.messages = append(a.messages, newUserMessage(injectPerMessagePrefix(expanded)))
 	a.TurnCount++
 
 	estimatedInputTokens := a.EstimateTokens()
@@ -205,7 +204,11 @@ func (a *Agent) sendMessage(ctx context.Context, userMsg string, kind followUpKi
 	events <- Event{Type: "state", State: StateThinking}
 
 	streamEvents := make(chan llm.StreamEvent, 100)
-	go a.streamer.StreamChat(ctx, a.messages, a.tools, streamEvents)
+	// Bridge to the legacy llm.Message wire shape at the streamer boundary.
+	// Client.StreamChat still takes []llm.Message; the in-memory canonical
+	// form is fantasy.Message. The adapter is loss-aware (see the docstring
+	// on FantasySliceToLLM) and round-trips text + tool calls + tool results.
+	go a.streamer.StreamChat(ctx, llm.FantasySliceToLLM(a.messages), a.tools, streamEvents)
 
 	for ev := range streamEvents {
 		switch ev.Type {
@@ -256,18 +259,21 @@ func (a *Agent) sendMessage(ctx context.Context, userMsg string, kind followUpKi
 				events <- Event{Type: "text", Text: safeText}
 			}
 			appendedAssistant := false
+			// ev.Messages comes back from the streamer as legacy []llm.Message
+			// (fantasy → llm projection inside streamOnce). Lift each one back
+			// into fantasy parts before splicing so the canonical history
+			// stays fantasy-native.
 			for _, m := range ev.Messages {
 				if m.Role == "assistant" {
 					m.Content = sanitizeAssistantText(m.Content)
 					appendedAssistant = true
 				}
-				a.messages = append(a.messages, m)
+				a.messages = append(a.messages, llm.LLMToFantasy(m))
 			}
 			if !appendedAssistant && textAccum.Len() > 0 {
-				a.messages = append(a.messages, llm.Message{
-					Role:    "assistant",
-					Content: sanitizeAssistantText(textAccum.String()),
-				})
+				a.messages = append(a.messages,
+					newAssistantMessage(sanitizeAssistantText(textAccum.String())),
+				)
 			}
 		}
 	}
@@ -481,10 +487,10 @@ var personaRehearsal = `🦍👑 ready. APES STRONG TOGETHER 🦍💪🤝`
 // buildPersonaAnchor returns a synthetic user/assistant pair that re-anchors
 // the persona after all context injection. This is the last thing the model
 // sees before the user's first real message.
-func buildPersonaAnchor() []llm.Message {
-	return []llm.Message{
-		{Role: "user", Content: personaPrompt},
-		{Role: "assistant", Content: personaRehearsal},
+func buildPersonaAnchor() []fantasy.Message {
+	return []fantasy.Message{
+		newUserMessage(personaPrompt),
+		newAssistantMessage(personaRehearsal),
 	}
 }
 
@@ -558,11 +564,14 @@ func (a *Agent) Config() *config.Config {
 	return a.config
 }
 
-// EstimateTokens returns a rough token count (chars / 4)
+// EstimateTokens returns a rough token count (chars / 4). Counts the text
+// projection of each fantasy.Message so the estimate stays comparable to the
+// pre-Phase-3 behavior — multi-part assistants and tool results contribute
+// the same characters they would have when collapsed into llm.Message.Content.
 func (a *Agent) EstimateTokens() int {
 	total := 0
 	for _, m := range a.messages {
-		total += len(m.Content)
+		total += len(messageText(m))
 	}
 	return total / 4
 }
@@ -589,7 +598,7 @@ func (a *Agent) Compact(ctx context.Context) error {
 
 	// Everything except system prompt and last 4 messages
 	for _, m := range a.messages[1:end] {
-		sb.WriteString(fmt.Sprintf("[%s]: %s\n", m.Role, truncateStr(m.Content, 500)))
+		sb.WriteString(fmt.Sprintf("[%s]: %s\n", m.Role, truncateStr(messageText(m), 500)))
 	}
 
 	summaryMsgs := []llm.Message{
@@ -611,17 +620,17 @@ func (a *Agent) Compact(ctx context.Context) error {
 
 	// Rebuild messages: system + summary + last 4
 	keep := a.messages[end:]
-	a.messages = []llm.Message{
+	a.messages = []fantasy.Message{
 		a.messages[0], // system prompt
-		{Role: "user", Content: "[Previous conversation summary]:\n" + summary.String()},
-		{Role: "assistant", Content: "Got it, I have the context from the summary."},
+		newUserMessage("[Previous conversation summary]:\n" + summary.String()),
+		newAssistantMessage("Got it, I have the context from the summary."),
 	}
 	a.messages = append(a.messages, keep...)
 
 	return nil
 }
 
-func (a *Agent) flushCompactedMessagesToDailyMemory(ctx context.Context, messages []llm.Message) error {
+func (a *Agent) flushCompactedMessagesToDailyMemory(ctx context.Context, messages []fantasy.Message) error {
 	if len(messages) == 0 {
 		return nil
 	}
@@ -634,7 +643,7 @@ func (a *Agent) flushCompactedMessagesToDailyMemory(ctx context.Context, message
 	sb.WriteString("Return concise markdown bullets covering only lasting facts: user preferences, decisions, completed work, relevant files, and open follow-ups.\n")
 	sb.WriteString("Skip transient chatter and tool noise. If nothing deserves durable memory, reply with exactly NONE.\n\n")
 	for _, m := range messages {
-		sb.WriteString(fmt.Sprintf("[%s]: %s\n", m.Role, truncateStr(m.Content, 700)))
+		sb.WriteString(fmt.Sprintf("[%s]: %s\n", m.Role, truncateStr(messageText(m), 700)))
 	}
 
 	streamEvents := make(chan llm.StreamEvent, 100)
@@ -837,10 +846,10 @@ func (a *Agent) lastAssistantContent() string {
 		return a.lastAssistantRaw
 	}
 	for i := len(a.messages) - 1; i >= 0; i-- {
-		if a.messages[i].Role != "assistant" {
+		if a.messages[i].Role != fantasy.MessageRoleAssistant {
 			continue
 		}
-		content := strings.TrimSpace(a.messages[i].Content)
+		content := strings.TrimSpace(messageText(a.messages[i]))
 		if content != "" {
 			return content
 		}
@@ -852,10 +861,10 @@ func (a *Agent) lastAssistantContent() string {
 // be shown to the user after any autonomous control tokens are removed.
 func (a *Agent) LastAssistantDisplayContent() string {
 	for i := len(a.messages) - 1; i >= 0; i-- {
-		if a.messages[i].Role != "assistant" {
+		if a.messages[i].Role != fantasy.MessageRoleAssistant {
 			continue
 		}
-		content := strings.TrimSpace(a.messages[i].Content)
+		content := strings.TrimSpace(messageText(a.messages[i]))
 		if content != "" {
 			return content
 		}
@@ -879,8 +888,8 @@ func (a *Agent) SetScope(scope MemoryScope) {
 	}
 	a.injectedPaths[path] = true
 	a.messages = append(a.messages,
-		llm.Message{Role: "user", Content: "Context memory for " + scopeLabel(scope) + ":\n\n" + hot},
-		llm.Message{Role: "assistant", Content: "Got it."},
+		newUserMessage("Context memory for "+scopeLabel(scope)+":\n\n"+hot),
+		newAssistantMessage("Got it."),
 	)
 }
 
@@ -897,14 +906,16 @@ func scopeLabel(scope MemoryScope) string {
 
 // SystemPrompt returns the active system prompt text.
 func (a *Agent) SystemPrompt() string {
-	if len(a.messages) > 0 && a.messages[0].Role == "system" {
-		return a.messages[0].Content
+	if len(a.messages) > 0 && a.messages[0].Role == fantasy.MessageRoleSystem {
+		return messageText(a.messages[0])
 	}
 	return ""
 }
 
-// Messages returns the current message history (for session saving)
-func (a *Agent) Messages() []llm.Message {
+// Messages returns the current message history (for session saving). The
+// canonical in-memory shape is fantasy.Message — callers that still need
+// the legacy llm.Message form should pass through llm.FantasySliceToLLM.
+func (a *Agent) Messages() []fantasy.Message {
 	return a.messages
 }
 
@@ -919,23 +930,26 @@ func (a *Agent) BootstrapMessageCount() int {
 // is aware of the invited persona and the prior conversation.
 func (a *Agent) InjectNote(note string) {
 	a.messages = append(a.messages,
-		llm.Message{Role: "user", Content: note},
-		llm.Message{Role: "assistant", Content: "Understood."},
+		newUserMessage(note),
+		newAssistantMessage("Understood."),
 	)
 }
 
 // RestoreMessages replaces the current message history with a prior session.
 // It resets session-local stats so that counters and timing start fresh.
-func (a *Agent) RestoreMessages(messages []llm.Message) {
-	a.messages = append([]llm.Message(nil), messages...)
+//
+// Phase 3: the input is fantasy-native. The agent's first message is forced
+// to be a system message carrying the freshly built system prompt — if the
+// restored slice already starts with one, its content is overwritten;
+// otherwise a system message is prepended. This matches the pre-Phase-3
+// behavior so callers (UI ResumeSession, headless --resume) don't change.
+func (a *Agent) RestoreMessages(messages []fantasy.Message) {
+	a.messages = append([]fantasy.Message(nil), messages...)
 	systemPrompt := buildSystemPrompt(a.config, a.tools.Definitions())
-	if len(a.messages) == 0 || a.messages[0].Role != "system" {
-		a.messages = append([]llm.Message{{
-			Role:    "system",
-			Content: systemPrompt,
-		}}, a.messages...)
+	if len(a.messages) == 0 || a.messages[0].Role != fantasy.MessageRoleSystem {
+		a.messages = append([]fantasy.Message{newSystemMessage(systemPrompt)}, a.messages...)
 	} else {
-		a.messages[0].Content = systemPrompt
+		a.messages[0] = newSystemMessage(systemPrompt)
 	}
 
 	// Reset session-local stats so resume starts with clean counters
@@ -958,30 +972,22 @@ func (a *Agent) RestoreMessages(messages []llm.Message) {
 // preserved; scoped HOT.md will be re-injected lazily on the next SetScope.
 func (a *Agent) Reset() {
 	systemPrompt := buildSystemPrompt(a.config, a.tools.Definitions())
-	a.messages = []llm.Message{{Role: "system", Content: systemPrompt}}
+	a.messages = []fantasy.Message{newSystemMessage(systemPrompt)}
 
 	contextFiles := DiscoverContextFiles(a.config.WorkDir)
 	if contextFiles != "" {
-		a.messages = append(a.messages, llm.Message{
-			Role:    "user",
-			Content: "Here are the project context files:\n\n" + contextFiles,
-		})
-		a.messages = append(a.messages, llm.Message{
-			Role:    "assistant",
-			Content: "Got it. I've read the project context and will follow those conventions.",
-		})
+		a.messages = append(a.messages,
+			newUserMessage("Here are the project context files:\n\n"+contextFiles),
+			newAssistantMessage("Got it. I've read the project context and will follow those conventions."),
+		)
 	}
 
 	memory := LoadMemory(a.config.WorkDir)
 	if memory != "" {
-		a.messages = append(a.messages, llm.Message{
-			Role:    "user",
-			Content: "Here is the session memory from previous work:\n\n" + memory,
-		})
-		a.messages = append(a.messages, llm.Message{
-			Role:    "assistant",
-			Content: "Got it.",
-		})
+		a.messages = append(a.messages,
+			newUserMessage("Here is the session memory from previous work:\n\n"+memory),
+			newAssistantMessage("Got it."),
+		)
 	}
 
 	a.messages = append(a.messages, buildPersonaAnchor()...)
@@ -1002,6 +1008,69 @@ func (a *Agent) Reset() {
 // Elapsed returns time since agent creation
 func (a *Agent) Elapsed() time.Duration {
 	return time.Since(a.StartTime)
+}
+
+// newSystemMessage builds a single-text-part fantasy.Message with the system
+// role. This is the canonical bootstrap shape — one TextPart per system /
+// user / assistant prompt — so equality checks across Reset/Restore stay
+// stable.
+func newSystemMessage(text string) fantasy.Message {
+	return fantasy.Message{
+		Role:    fantasy.MessageRoleSystem,
+		Content: []fantasy.MessagePart{fantasy.TextPart{Text: text}},
+	}
+}
+
+// newUserMessage builds a single-text-part fantasy.Message with the user role.
+func newUserMessage(text string) fantasy.Message {
+	return fantasy.Message{
+		Role:    fantasy.MessageRoleUser,
+		Content: []fantasy.MessagePart{fantasy.TextPart{Text: text}},
+	}
+}
+
+// newAssistantMessage builds a single-text-part fantasy.Message with the
+// assistant role. Tool calls are added as separate parts when needed; this
+// helper is for the text-only bootstrap and post-stream synthesized cases.
+func newAssistantMessage(text string) fantasy.Message {
+	return fantasy.Message{
+		Role:    fantasy.MessageRoleAssistant,
+		Content: []fantasy.MessagePart{fantasy.TextPart{Text: text}},
+	}
+}
+
+// messageText returns the concatenated text projection of a fantasy.Message.
+// Used by EstimateTokens, Compact, and the assistant-display helpers — the
+// same characters that the legacy llm.Message.Content collapse produced
+// before Phase 3, so behavior on those code paths is unchanged.
+func messageText(m fantasy.Message) string {
+	var sb strings.Builder
+	for _, part := range m.Content {
+		switch p := part.(type) {
+		case fantasy.TextPart:
+			sb.WriteString(p.Text)
+		case *fantasy.TextPart:
+			if p != nil {
+				sb.WriteString(p.Text)
+			}
+		case fantasy.ToolResultPart:
+			if t, ok := p.Output.(fantasy.ToolResultOutputContentText); ok {
+				sb.WriteString(t.Text)
+			} else if t, ok := p.Output.(*fantasy.ToolResultOutputContentText); ok && t != nil {
+				sb.WriteString(t.Text)
+			}
+		case *fantasy.ToolResultPart:
+			if p == nil {
+				continue
+			}
+			if t, ok := p.Output.(fantasy.ToolResultOutputContentText); ok {
+				sb.WriteString(t.Text)
+			} else if t, ok := p.Output.(*fantasy.ToolResultOutputContentText); ok && t != nil {
+				sb.WriteString(t.Text)
+			}
+		}
+	}
+	return sb.String()
 }
 
 // Cost returns the estimated cost in USD using the cost tracker
