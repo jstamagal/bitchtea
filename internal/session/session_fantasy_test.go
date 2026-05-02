@@ -13,7 +13,9 @@ import (
 
 // TestLoadV0FixtureUnchanged verifies that legacy session lines (no `v` /
 // `msg` fields) load through the v1-aware reader exactly as they did before
-// — the existing surface (Entries, MessagesFromEntries) must not regress.
+// — the Entries surface must not regress, and FantasyFromEntries must
+// promote v0 entries into the same fantasy parts the in-flight conversion
+// produces.
 func TestLoadV0FixtureUnchanged(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "v0.jsonl")
@@ -51,20 +53,7 @@ func TestLoadV0FixtureUnchanged(t *testing.T) {
 		}
 	}
 
-	// Legacy MessagesFromEntries path must still work unchanged.
-	msgs := MessagesFromEntries(loaded.Entries)
-	if len(msgs) != 4 {
-		t.Fatalf("expected 4 messages, got %d", len(msgs))
-	}
-	if msgs[1].Role != "assistant" || len(msgs[1].ToolCalls) != 1 {
-		t.Fatalf("v0 assistant tool call did not survive: %+v", msgs[1])
-	}
-	if msgs[2].Role != "tool" || msgs[2].ToolCallID != "call_a" {
-		t.Fatalf("v0 tool result did not survive: %+v", msgs[2])
-	}
-
-	// Forward-compat: v0 entries must promote into fantasy parts via the
-	// new reader as well.
+	// v0 entries must promote into fantasy parts via the new reader.
 	fmsgs := FantasyFromEntries(loaded.Entries)
 	if len(fmsgs) != 4 {
 		t.Fatalf("FantasyFromEntries returned %d, want 4", len(fmsgs))
@@ -410,20 +399,17 @@ func TestMixedSessionFile(t *testing.T) {
 		t.Errorf("v1 tool call lost: %T %+v", asst.Content[1], asst.Content[1])
 	}
 
-	// Legacy reader path must also work on the mixed file (the v1 entry's
-	// dual-written legacy fields cover the downgrade case).
-	lmsgs := MessagesFromEntries(reread.Entries)
-	if len(lmsgs) != 2 {
-		t.Fatalf("legacy reader returned %d messages from mixed file, want 2", len(lmsgs))
-	}
-	if lmsgs[1].Content != "v1 reply" || len(lmsgs[1].ToolCalls) != 1 {
-		t.Errorf("v1 entry's legacy projection wrong: %+v", lmsgs[1])
+	// The v1 entry's dual-written legacy fields must still cover the
+	// downgrade case (a v0-only reader would only see the legacy fields).
+	v1Entry := reread.Entries[1]
+	if v1Entry.Content != "v1 reply" || len(v1Entry.ToolCalls) != 1 {
+		t.Errorf("v1 entry's legacy projection wrong: content=%q tool_calls=%+v", v1Entry.Content, v1Entry.ToolCalls)
 	}
 }
 
-// TestFantasyFromEntriesSkipsLegacyToolWithoutID matches the existing
-// MessagesFromEntries policy: a v0 tool entry missing tool_call_id can't
-// replay through the provider API, so we drop it.
+// TestFantasyFromEntriesSkipsLegacyToolWithoutID asserts that v0 tool
+// entries missing tool_call_id are dropped — the provider API can't replay
+// them, so they must not appear in the synthesized fantasy slice.
 func TestFantasyFromEntriesSkipsLegacyToolWithoutID(t *testing.T) {
 	msgs := FantasyFromEntries([]Entry{
 		{Role: "assistant", Content: "done"},

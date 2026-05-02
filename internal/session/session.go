@@ -338,23 +338,6 @@ func SaveCheckpoint(dir string, checkpoint Checkpoint) error {
 	return nil
 }
 
-// EntryFromMessage converts an in-memory LLM message into a session entry.
-func EntryFromMessage(msg llm.Message) Entry {
-	return EntryFromMessageWithBootstrap(msg, false)
-}
-
-// EntryFromMessageWithBootstrap converts an in-memory LLM message into a
-// session entry and marks whether it came from startup/bootstrap injection.
-func EntryFromMessageWithBootstrap(msg llm.Message, bootstrap bool) Entry {
-	return Entry{
-		Bootstrap:  bootstrap,
-		Role:       msg.Role,
-		Content:    msg.Content,
-		ToolCallID: msg.ToolCallID,
-		ToolCalls:  append([]llm.ToolCall(nil), msg.ToolCalls...),
-	}
-}
-
 // DisplayEntries filters out internal bootstrap-only messages from the
 // user-visible transcript while leaving replay history untouched.
 func DisplayEntries(entries []Entry) []Entry {
@@ -366,33 +349,6 @@ func DisplayEntries(entries []Entry) []Entry {
 		display = append(display, e)
 	}
 	return display
-}
-
-// MessagesFromEntries reconstructs LLM message history from session entries.
-// Legacy tool entries without tool_call_id are skipped because the provider APIs
-// cannot replay them safely. v1 entries are projected back through their
-// legacy fields (the dual-write writer keeps these populated as a text
-// projection even for lossy messages), so this function is forward-compatible
-// with v1 sessions but loses fidelity on parts the legacy shape cannot
-// express. Callers that need full fidelity should use FantasyFromEntries.
-func MessagesFromEntries(entries []Entry) []llm.Message {
-	msgs := make([]llm.Message, 0, len(entries))
-	for _, e := range entries {
-		if e.Role == "tool" && e.ToolCallID == "" {
-			continue
-		}
-
-		msg := llm.Message{
-			Role:       e.Role,
-			Content:    e.Content,
-			ToolCallID: e.ToolCallID,
-		}
-		if len(e.ToolCalls) > 0 {
-			msg.ToolCalls = append([]llm.ToolCall(nil), e.ToolCalls...)
-		}
-		msgs = append(msgs, msg)
-	}
-	return msgs
 }
 
 // EntryFromFantasy converts a fantasy.Message into a v1 session Entry.
@@ -436,8 +392,7 @@ func EntryFromFantasyWithBootstrap(msg fantasy.Message, bootstrap bool) Entry {
 // returned verbatim. For v0 entries the legacy fields are synthesized into
 // fantasy parts the same way the in-flight llm→fantasy conversion does
 // (see internal/llm/convert.go). Tool entries without a tool_call_id are
-// skipped — provider APIs reject them and the existing
-// MessagesFromEntries already drops them, so we keep the policies aligned.
+// skipped — provider APIs reject them.
 func FantasyFromEntries(entries []Entry) []fantasy.Message {
 	msgs := make([]fantasy.Message, 0, len(entries))
 	for _, e := range entries {

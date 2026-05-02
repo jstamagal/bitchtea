@@ -6,8 +6,6 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
-
-	"github.com/jstamagal/bitchtea/internal/llm"
 )
 
 func TestNewAndAppend(t *testing.T) {
@@ -420,52 +418,12 @@ func TestListNonexistentDir(t *testing.T) {
 	}
 }
 
-func TestMessageRoundTripWithToolMetadata(t *testing.T) {
-	assistant := llm.Message{
-		Role:    "assistant",
-		Content: "Reading config now.",
-		ToolCalls: []llm.ToolCall{
-			{
-				ID:   "call_123",
-				Type: "function",
-				Function: llm.FunctionCall{
-					Name:      "read",
-					Arguments: `{"path":"README.md"}`,
-				},
-			},
-		},
-	}
-	tool := llm.Message{
-		Role:       "tool",
-		Content:    "file contents",
-		ToolCallID: "call_123",
-	}
-
-	entries := []Entry{
-		EntryFromMessage(assistant),
-		EntryFromMessage(tool),
-	}
-	roundTrip := MessagesFromEntries(entries)
-
-	if len(roundTrip) != 2 {
-		t.Fatalf("expected 2 messages after round trip, got %d", len(roundTrip))
-	}
-	if len(roundTrip[0].ToolCalls) != 1 {
-		t.Fatalf("expected assistant tool calls to survive round trip, got %+v", roundTrip[0].ToolCalls)
-	}
-	if roundTrip[0].ToolCalls[0].Function.Name != "read" {
-		t.Fatalf("wrong tool name after round trip: %+v", roundTrip[0].ToolCalls[0])
-	}
-	if roundTrip[1].ToolCallID != "call_123" {
-		t.Fatalf("expected tool call id to survive round trip, got %q", roundTrip[1].ToolCallID)
-	}
-}
-
 func TestEntryBootstrapRoundTrip(t *testing.T) {
-	entry := EntryFromMessageWithBootstrap(llm.Message{
-		Role:    "assistant",
-		Content: "internal ack",
-	}, true)
+	entry := Entry{
+		Role:      "assistant",
+		Content:   "internal ack",
+		Bootstrap: true,
+	}
 
 	data, err := json.Marshal(entry)
 	if err != nil {
@@ -501,75 +459,3 @@ func TestDisplayEntriesFiltersBootstrapEntries(t *testing.T) {
 	}
 }
 
-func TestMessagesFromEntriesSkipsLegacyToolEntryWithoutToolCallID(t *testing.T) {
-	msgs := MessagesFromEntries([]Entry{
-		{Role: "assistant", Content: "done"},
-		{Role: "tool", Content: "legacy tool output"},
-	})
-
-	if len(msgs) != 1 {
-		t.Fatalf("expected legacy tool entry to be skipped, got %d messages", len(msgs))
-	}
-	if msgs[0].Role != "assistant" {
-		t.Fatalf("expected assistant message to remain, got %q", msgs[0].Role)
-	}
-}
-
-func TestMessagesFromEntriesRoundTripThroughFork(t *testing.T) {
-	dir := t.TempDir()
-
-	s, err := New(dir)
-	if err != nil {
-		t.Fatalf("new: %v", err)
-	}
-
-	source := []llm.Message{
-		{Role: "user", Content: "inspect README"},
-		{
-			Role:    "assistant",
-			Content: "I will read the file.",
-			ToolCalls: []llm.ToolCall{
-				{
-					ID:   "call_readme",
-					Type: "function",
-					Function: llm.FunctionCall{
-						Name:      "read",
-						Arguments: `{"path":"README.md"}`,
-					},
-				},
-			},
-		},
-		{Role: "tool", Content: "README contents", ToolCallID: "call_readme"},
-		{Role: "assistant", Content: "done"},
-	}
-
-	for _, msg := range source {
-		if err := s.Append(EntryFromMessage(msg)); err != nil {
-			t.Fatalf("append %q: %v", msg.Role, err)
-		}
-	}
-
-	forked, err := s.Fork(s.Entries[2].ID)
-	if err != nil {
-		t.Fatalf("fork: %v", err)
-	}
-
-	loaded, err := Load(forked.Path)
-	if err != nil {
-		t.Fatalf("load fork: %v", err)
-	}
-
-	roundTrip := MessagesFromEntries(loaded.Entries)
-	if len(roundTrip) != 3 {
-		t.Fatalf("expected 3 messages after fork round trip, got %d", len(roundTrip))
-	}
-	if roundTrip[1].Role != "assistant" || len(roundTrip[1].ToolCalls) != 1 {
-		t.Fatalf("expected assistant tool call metadata to survive fork round trip, got %+v", roundTrip[1])
-	}
-	if roundTrip[1].ToolCalls[0].ID != "call_readme" {
-		t.Fatalf("expected tool call id to survive fork round trip, got %+v", roundTrip[1].ToolCalls[0])
-	}
-	if roundTrip[2].Role != "tool" || roundTrip[2].ToolCallID != "call_readme" {
-		t.Fatalf("expected tool result metadata to survive fork round trip, got %+v", roundTrip[2])
-	}
-}

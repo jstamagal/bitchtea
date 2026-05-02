@@ -151,7 +151,7 @@ The daemon respects the same flock the TUI uses:
 - **`memory.AppendHot` / `memory.AppendDailyForScope`** hold `flock(LOCK_EX)` on the target file. The daemon calls these directly (no `write_memory` tool yet — `bt-vhs` open). Concurrent TUI writes interleave at the entry boundary, never mid-line.
 - **Daemon's own writes** to `done/` and `failed/` are atomic-rename, so no flock needed — there is one daemon writer per file.
 
-Single rule restated: **the daemon must never append to an active TUI session JSONL.** Reading is fine (`Load`, `MessagesFromEntries`), and is in fact how `compact` works.
+Single rule restated: **the daemon must never append to an active TUI session JSONL.** Reading is fine (`Load`, `FantasyFromEntries`), and is in fact how `compact` works.
 
 ## Crash recovery
 

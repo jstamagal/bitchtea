@@ -99,9 +99,9 @@ func TestResumeFromV0FixtureFile(t *testing.T) {
 
 // TestResumeFromV1Fixture builds a session JSONL whose entries were minted
 // with EntryFromFantasy and verifies ResumeSession produces the same agent
-// history and viewport messages as the legacy path. The dual-write writer
-// keeps the legacy fields populated, so MessagesFromEntries (which is what
-// ResumeSession calls today) must still see the messages.
+// history and viewport messages as the legacy path. ResumeSession now goes
+// through FantasyFromEntries, but the dual-write writer still populates the
+// legacy fields so a downgraded reader could see them.
 func TestResumeFromV1Fixture(t *testing.T) {
 	entries := []session.Entry{
 		session.EntryFromFantasy(fantasy.Message{

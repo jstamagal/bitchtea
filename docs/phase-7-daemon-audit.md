@@ -16,7 +16,7 @@ These exports already do what a daemon would need; no rewrite required.
 |--------|------|---------------------------|
 | `session.Append` | `internal/session/session.go:109` | Append-only JSONL with `sync.Mutex` + `flock` — already multi-process safe. |
 | `session.Load`, `session.List`, `session.Latest` | `internal/session/session.go:84,231,280` | Read sessions the daemon did not author. |
-| `session.MessagesFromEntries` | `internal/session/session.go:344` | Reconstruct `[]llm.Message` from JSONL for off-loop replay. |
+| `session.FantasyFromEntries` | `internal/session/session.go` | Reconstruct `[]fantasy.Message` from JSONL (v0+v1) for off-loop replay. |
 | `session.SaveCheckpoint` | `internal/session/session.go:290` | Lightweight `.bitchtea_checkpoint.json` is exactly the shape a daemon would emit between turns. |
 | `memory.AppendHot` | `internal/memory/memory.go:92` | flock-serialized append to scoped `HOT.md`. |
 | `memory.AppendDailyForScope` | `internal/memory/memory.go:155` | flock-serialized append to scoped daily `YYYY-MM-DD.md`. |

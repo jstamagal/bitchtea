@@ -6,7 +6,7 @@ Bitchtea is a terminal-native agent harness built for power and speed. It follow
 
 ### 🏛️ Core Brain & Orchestration
 - **`main.go`**: The anchor. Handles CLI flags, profile loading, and boots either the TUI or Headless mode.
-- **`internal/agent`**: The soul. Manages conversation history (`llm.Message`), system prompts, and the autonomous loop.
+- **`internal/agent`**: The soul. Manages conversation history (`fantasy.Message`), system prompts, and the autonomous loop. The agent's in-memory history is fantasy-native; legacy `llm.Message` only appears at the `Client.StreamChat` boundary, where it is bridged via `llm.FantasySliceToLLM` / `llm.LLMToFantasy`.
   - `agent.go`: The `Agent` struct and `SendMessage` orchestration.
   - `context.go`: Discovers project-specific context files (`AGENTS.md`, `ARCHITECTURE.md`).
 
