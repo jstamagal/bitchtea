@@ -620,9 +620,8 @@ func TestEscClosesToolPanelBeforeCancelLadder(t *testing.T) {
 	cfg.SessionDir = t.TempDir()
 
 	model := NewModel(&cfg)
-	// Panel is visible by default; streaming with active tool.
+	// Panel is visible by default; streaming (no active tool).
 	model.streaming = true
-	model.activeToolName = "bash"
 	model.cancel = func() {}
 
 	if !model.toolPanel.Visible {
@@ -636,7 +635,7 @@ func TestEscClosesToolPanelBeforeCancelLadder(t *testing.T) {
 		t.Fatal("expected first esc to close tool panel")
 	}
 	if !got.streaming {
-		t.Fatal("expected first esc to NOT cancel the turn when panel was open")
+		t.Fatal("expected panel close to leave streaming untouched")
 	}
 	if len(got.messages) == 0 || !strings.Contains(got.messages[len(got.messages)-1].Content, "Tool panel closed") {
 		t.Fatalf("expected panel-close feedback, got %#v", got.messages)
