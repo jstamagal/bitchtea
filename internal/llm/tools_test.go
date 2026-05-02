@@ -334,6 +334,45 @@ func TestFilterRequiredEmptyAfterFilterMarshalsWithoutRequiredKey(t *testing.T) 
 	}
 }
 
+// TestTranslateToolsRoutesPortedToolsThroughTypedWrappers is the bt-p2-switch
+// guardrail. It locks in the dispatch order from translateTools — tools that
+// have a typed wrapper in typedToolFor must NOT come back as *bitchteaTool
+// (the generic Registry.Execute compatibility adapter). If a future change
+// accidentally drops a tool from typedToolFor it would silently fall back to
+// the generic path; this test surfaces that as a failure.
+//
+// Conversely, tools still on the compatibility path (terminal_*, preview_image)
+// are documented in typedToolFor's comment block and are explicitly NOT
+// asserted here — adding a typed wrapper for one of them is the trigger to
+// extend portedToolNames below.
+func TestTranslateToolsRoutesPortedToolsThroughTypedWrappers(t *testing.T) {
+	reg := tools.NewRegistry(t.TempDir(), t.TempDir())
+	translated := translateTools(reg)
+
+	byName := map[string]fantasy.AgentTool{}
+	for _, tool := range translated {
+		byName[tool.Info().Name] = tool
+	}
+
+	portedToolNames := []string{
+		"read",
+		"write",
+		"edit",
+		"bash",
+		"search_memory",
+		"write_memory",
+	}
+	for _, name := range portedToolNames {
+		tool, ok := byName[name]
+		if !ok {
+			t.Fatalf("translateTools did not produce a fantasy.AgentTool for ported tool %q", name)
+		}
+		if _, isGeneric := tool.(*bitchteaTool); isGeneric {
+			t.Fatalf("ported tool %q resolved to *bitchteaTool (generic Registry.Execute path); expected typed fantasy wrapper", name)
+		}
+	}
+}
+
 func TestTranslateToolsProducesValidSchemasForRealRegistryDefinitions(t *testing.T) {
 	for _, translatedTool := range translateTools(tools.NewRegistry(t.TempDir(), t.TempDir())) {
 		info := translatedTool.Info()

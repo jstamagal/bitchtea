@@ -38,19 +38,27 @@ func (t *bitchteaTool) SetProviderOptions(_ fantasy.ProviderOptions) {}
 // per stream-call (cheap — definitions are static, only the Required slice
 // varies).
 //
-// Phase 2 migration (bt-p2-*) ports tools one at a time from the generic
-// bitchteaTool adapter to typed fantasy.NewAgentTool wrappers. The typed
-// wrappers live in their own files (e.g. typed_edit.go) and are dispatched
-// here by tool name. Anything not yet ported keeps flowing through
-// bitchteaTool — half-migration is expected until bt-p2-switch lands.
+// Phase 2 migration status (bt-p2-switch): every Registry tool is dispatched
+// through typedToolFor first; only tools that have not yet had their per-tool
+// typed-wrapper ticket land fall through to the generic bitchteaTool adapter
+// below. The fallback path is now compatibility code — it remains because the
+// terminal_* family and preview_image still need careful per-tool ports
+// (PTY/image handling, separate tickets). Do NOT add new tools through the
+// fallback path; add a typed wrapper and wire it into typedToolFor instead.
 func translateTools(reg *tools.Registry) []fantasy.AgentTool {
 	defs := reg.Definitions()
 	out := make([]fantasy.AgentTool, 0, len(defs))
 	for _, d := range defs {
+		// Preferred path: typed fantasy wrapper. If a wrapper exists for this
+		// tool name it owns the schema, JSON deserialization, and Run dispatch.
 		if typed := typedToolFor(d.Function.Name, reg); typed != nil {
 			out = append(out, typed)
 			continue
 		}
+		// Compatibility path: generic bitchteaTool adapter using
+		// Registry.Execute(name, argsJSON). This branch only runs for the
+		// unported tools listed in typedToolFor's doc comment. Once those
+		// tools have typed wrappers this whole branch can be deleted.
 		params, required := splitSchema(d.Function.Parameters)
 		out = append(out, &bitchteaTool{
 			info: fantasy.ToolInfo{
@@ -68,8 +76,26 @@ func translateTools(reg *tools.Registry) []fantasy.AgentTool {
 
 // typedToolFor returns the typed fantasy wrapper for name, or nil if no typed
 // wrapper exists yet (in which case translateTools falls back to the generic
-// bitchteaTool adapter). New typed wrappers (bt-p2-read-write,
-// bt-p2-bash-memory) wire themselves in here.
+// bitchteaTool adapter — see the "compatibility path" comment in translateTools).
+//
+// Tools currently routed through typed wrappers (no longer touch
+// Registry.Execute via the generic adapter):
+//
+//   - read           (typed_read.go         · bt-p2-read-write)
+//   - write          (typed_write.go        · bt-p2-read-write)
+//   - edit           (typed_edit.go         · bt-p2-edit)
+//   - bash           (typed_bash.go         · bt-p2-bash-memory)
+//   - search_memory  (typed_search_memory.go · bt-p2-bash-memory)
+//   - write_memory   (typed_write_memory.go · bt-p2-switch)
+//
+// Tools still on the generic bitchteaTool compatibility path (need typed
+// wrappers in follow-up tickets, NOT to be expanded with new tools):
+//
+//   - terminal_start, terminal_send, terminal_keys, terminal_snapshot,
+//     terminal_wait, terminal_resize, terminal_close
+//     (PTY lifecycle — careful args + state handling, see internal/tools/terminal.go)
+//   - preview_image
+//     (image decode + render — see internal/tools/image.go)
 func typedToolFor(name string, reg *tools.Registry) fantasy.AgentTool {
 	switch name {
 	case "edit":
@@ -82,6 +108,8 @@ func typedToolFor(name string, reg *tools.Registry) fantasy.AgentTool {
 		return bashTool(reg)
 	case "search_memory":
 		return searchMemoryTool(reg)
+	case "write_memory":
+		return writeMemoryTool(reg)
 	}
 	return nil
 }
