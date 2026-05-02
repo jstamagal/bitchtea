@@ -155,3 +155,90 @@ func toLLMUsage(u fantasy.Usage) TokenUsage {
 		CacheReadTokens:     int(u.CacheReadTokens),
 	}
 }
+
+// LLMToFantasy is the inverse of fantasyToLLM: it lifts a single legacy
+// llm.Message into a fantasy.Message preserving every field that the legacy
+// shape can represent (role, text content, ordered tool calls for assistant,
+// tool_call_id + text body for tool results).
+//
+// Lossy on purpose, in symmetry with fantasyToLLM:
+//
+//   - ReasoningPart, FilePart, and SourceContent have no representation in
+//     llm.Message, so they cannot appear here.
+//   - ProviderOptions is left empty. The legacy llm.Message carries no
+//     provider-specific data today, so there is nothing to lift; the design
+//     doc (docs/phase-3-message-contract.md, "Open questions") leans toward
+//     stripping ProviderOptions on persistence anyway and re-stamping at
+//     PrepareStep, so leaving the field zero here matches that direction.
+//   - Tool result Output is always emitted as ToolResultOutputContentText.
+//     Media tool results (preview_image base64) are indistinguishable from
+//     plain text in legacy form; round-tripping through llm.Message and back
+//     can only restore the text path.
+//
+// Roles: system, user, assistant, tool. Anything else is preserved verbatim
+// in fantasy.Message.Role so an unrecognized legacy role survives the round
+// trip — fantasyToLLM already passes Role through as a string.
+func LLMToFantasy(msg Message) fantasy.Message {
+	out := fantasy.Message{Role: fantasy.MessageRole(msg.Role)}
+
+	switch msg.Role {
+	case "tool":
+		// Tool result: always one ToolResultPart whose Output is the text
+		// body. Empty Content is allowed — the part still carries the
+		// tool_call_id back to the caller.
+		out.Content = []fantasy.MessagePart{fantasy.ToolResultPart{
+			ToolCallID: msg.ToolCallID,
+			Output:     fantasy.ToolResultOutputContentText{Text: msg.Content},
+		}}
+	case "assistant":
+		// Assistant: optional text part, then one ToolCallPart per
+		// ToolCall in source order. fantasyToLLM concatenates text into a
+		// single string, so on the way back there is at most one TextPart.
+		parts := make([]fantasy.MessagePart, 0, 1+len(msg.ToolCalls))
+		if msg.Content != "" {
+			parts = append(parts, fantasy.TextPart{Text: msg.Content})
+		}
+		for _, tc := range msg.ToolCalls {
+			parts = append(parts, fantasy.ToolCallPart{
+				ToolCallID: tc.ID,
+				ToolName:   tc.Function.Name,
+				Input:      tc.Function.Arguments,
+			})
+		}
+		out.Content = parts
+	default:
+		// system, user, anything else → single text part if non-empty.
+		if msg.Content != "" {
+			out.Content = []fantasy.MessagePart{fantasy.TextPart{Text: msg.Content}}
+		}
+	}
+
+	return out
+}
+
+// LLMSliceToFantasy is the slice-level convenience for LLMToFantasy. Returns
+// a non-nil empty slice for a non-nil empty input so callers can always
+// range over the result.
+func LLMSliceToFantasy(msgs []Message) []fantasy.Message {
+	if msgs == nil {
+		return nil
+	}
+	out := make([]fantasy.Message, len(msgs))
+	for i, m := range msgs {
+		out[i] = LLMToFantasy(m)
+	}
+	return out
+}
+
+// FantasySliceToLLM is the slice-level convenience around fantasyToLLM. Same
+// nil-preserving contract as LLMSliceToFantasy.
+func FantasySliceToLLM(msgs []fantasy.Message) []Message {
+	if msgs == nil {
+		return nil
+	}
+	out := make([]Message, len(msgs))
+	for i, m := range msgs {
+		out[i] = fantasyToLLM(m)
+	}
+	return out
+}

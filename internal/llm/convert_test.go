@@ -435,6 +435,245 @@ func TestFantasyToLLMUnknownPartTypeIgnored(t *testing.T) {
 	}
 }
 
+// --- LLMToFantasy + round-trip coverage (bt-p3-model-types) ---------------
+//
+// These tests pin the bt-p3-agent-boundary contract: every llm.Message shape
+// the agent currently produces must round-trip through fantasy and back to
+// an equivalent llm.Message. The "assistant-tail transcript" case is the
+// load-bearing one — interrupted-turn replay depends on it.
+
+func messagesEqual(a, b Message) bool {
+	if a.Role != b.Role || a.Content != b.Content || a.ToolCallID != b.ToolCallID {
+		return false
+	}
+	if len(a.ToolCalls) != len(b.ToolCalls) {
+		return false
+	}
+	for i := range a.ToolCalls {
+		x, y := a.ToolCalls[i], b.ToolCalls[i]
+		if x.ID != y.ID || x.Type != y.Type || x.Function.Name != y.Function.Name || x.Function.Arguments != y.Function.Arguments {
+			return false
+		}
+	}
+	return true
+}
+
+func roundTripLLM(t *testing.T, name string, in Message) {
+	t.Helper()
+	got := fantasyToLLM(LLMToFantasy(in))
+	if !messagesEqual(in, got) {
+		t.Fatalf("%s: round trip mismatch\n in=%+v\nout=%+v", name, in, got)
+	}
+}
+
+func TestLLMToFantasyRoundTripUserText(t *testing.T) {
+	roundTripLLM(t, "user text", Message{Role: "user", Content: "hello world"})
+}
+
+func TestLLMToFantasyRoundTripAssistantText(t *testing.T) {
+	roundTripLLM(t, "assistant text", Message{Role: "assistant", Content: "sure thing"})
+}
+
+func TestLLMToFantasyRoundTripSystem(t *testing.T) {
+	roundTripLLM(t, "system", Message{Role: "system", Content: "you are bitchtea"})
+}
+
+func TestLLMToFantasyRoundTripAssistantSingleToolCall(t *testing.T) {
+	roundTripLLM(t, "assistant single tool call", Message{
+		Role: "assistant",
+		ToolCalls: []ToolCall{{
+			ID: "c1", Type: "function",
+			Function: FunctionCall{Name: "read", Arguments: `{"path":"x"}`},
+		}},
+	})
+}
+
+func TestLLMToFantasyRoundTripAssistantMultipleToolCallsOrder(t *testing.T) {
+	in := Message{
+		Role: "assistant",
+		ToolCalls: []ToolCall{
+			{ID: "a", Type: "function", Function: FunctionCall{Name: "read", Arguments: `{"path":"1"}`}},
+			{ID: "b", Type: "function", Function: FunctionCall{Name: "read", Arguments: `{"path":"2"}`}},
+			{ID: "c", Type: "function", Function: FunctionCall{Name: "write", Arguments: `{"path":"3"}`}},
+		},
+	}
+	roundTripLLM(t, "assistant 3 tool calls", in)
+	// And confirm order in the intermediate fantasy form.
+	fm := LLMToFantasy(in)
+	var ids []string
+	for _, p := range fm.Content {
+		if tc, ok := p.(fantasy.ToolCallPart); ok {
+			ids = append(ids, tc.ToolCallID)
+		}
+	}
+	if len(ids) != 3 || ids[0] != "a" || ids[1] != "b" || ids[2] != "c" {
+		t.Fatalf("tool call order lost in fantasy form: %v", ids)
+	}
+}
+
+func TestLLMToFantasyRoundTripAssistantMixedTextAndToolCalls(t *testing.T) {
+	in := Message{
+		Role:    "assistant",
+		Content: "calling now",
+		ToolCalls: []ToolCall{
+			{ID: "t1", Type: "function", Function: FunctionCall{Name: "read", Arguments: `{}`}},
+			{ID: "t2", Type: "function", Function: FunctionCall{Name: "bash", Arguments: `{"cmd":"ls"}`}},
+		},
+	}
+	roundTripLLM(t, "assistant mixed", in)
+
+	// Intermediate must place the text part before the tool calls so providers
+	// see "thinking..." preceding the calls.
+	fm := LLMToFantasy(in)
+	if len(fm.Content) != 3 {
+		t.Fatalf("expected 3 parts (text + 2 tool calls), got %d: %+v", len(fm.Content), fm.Content)
+	}
+	if _, ok := fm.Content[0].(fantasy.TextPart); !ok {
+		t.Fatalf("first part should be TextPart, got %T", fm.Content[0])
+	}
+}
+
+func TestLLMToFantasyRoundTripToolResult(t *testing.T) {
+	roundTripLLM(t, "tool result", Message{
+		Role:       "tool",
+		ToolCallID: "c1",
+		Content:    "file body line 1\nfile body line 2",
+	})
+}
+
+func TestLLMToFantasyRoundTripToolResultEmptyBody(t *testing.T) {
+	// An empty-body tool result still needs the ToolCallID to survive the
+	// round trip — the agent uses it to correlate calls and results.
+	roundTripLLM(t, "tool result empty", Message{
+		Role:       "tool",
+		ToolCallID: "c-empty",
+		Content:    "",
+	})
+}
+
+func TestLLMToFantasyRoundTripAssistantTailTranscript(t *testing.T) {
+	// The interrupted-turn shape: a transcript that ends with an assistant
+	// message whose tool calls have NOT yet been answered. Resume must
+	// preserve this verbatim — every message including the dangling tool
+	// calls survives a fantasy round trip with order intact.
+	in := []Message{
+		{Role: "system", Content: "you are bitchtea"},
+		{Role: "user", Content: "read foo and bar"},
+		{
+			Role:    "assistant",
+			Content: "reading",
+			ToolCalls: []ToolCall{
+				{ID: "call_foo", Type: "function", Function: FunctionCall{Name: "read", Arguments: `{"path":"foo"}`}},
+			},
+		},
+		{Role: "tool", ToolCallID: "call_foo", Content: "FOO BODY"},
+		{
+			// Trailing assistant turn with two NEW tool calls and NO
+			// matching tool results — the "interrupted" shape.
+			Role: "assistant",
+			ToolCalls: []ToolCall{
+				{ID: "call_bar", Type: "function", Function: FunctionCall{Name: "read", Arguments: `{"path":"bar"}`}},
+				{ID: "call_baz", Type: "function", Function: FunctionCall{Name: "read", Arguments: `{"path":"baz"}`}},
+			},
+		},
+	}
+
+	fms := LLMSliceToFantasy(in)
+	if len(fms) != len(in) {
+		t.Fatalf("slice length changed: got %d, want %d", len(fms), len(in))
+	}
+	got := FantasySliceToLLM(fms)
+	if len(got) != len(in) {
+		t.Fatalf("round-trip length changed: got %d, want %d", len(got), len(in))
+	}
+	for i := range in {
+		if !messagesEqual(in[i], got[i]) {
+			t.Fatalf("assistant-tail round trip mismatch at %d:\n in=%+v\nout=%+v", i, in[i], got[i])
+		}
+	}
+
+	// And the trailing assistant message specifically preserves both
+	// dangling tool calls in source order (this is what resume depends on).
+	tail := got[len(got)-1]
+	if tail.Role != "assistant" {
+		t.Fatalf("tail role = %q, want assistant", tail.Role)
+	}
+	if len(tail.ToolCalls) != 2 || tail.ToolCalls[0].ID != "call_bar" || tail.ToolCalls[1].ID != "call_baz" {
+		t.Fatalf("dangling tool calls mangled: %+v", tail.ToolCalls)
+	}
+}
+
+func TestLLMToFantasyEmptyAssistantNoContentNoToolCalls(t *testing.T) {
+	// An assistant message with neither text nor tool calls (rare but legal:
+	// e.g. a model emitted only reasoning, which fantasyToLLM dropped) must
+	// not panic and must round-trip cleanly.
+	in := Message{Role: "assistant"}
+	fm := LLMToFantasy(in)
+	if fm.Role != fantasy.MessageRoleAssistant {
+		t.Fatalf("role = %v, want assistant", fm.Role)
+	}
+	if len(fm.Content) != 0 {
+		t.Fatalf("expected empty content, got %+v", fm.Content)
+	}
+	roundTripLLM(t, "empty assistant", in)
+}
+
+func TestLLMToFantasyEmptyUserNoPanic(t *testing.T) {
+	in := Message{Role: "user"}
+	fm := LLMToFantasy(in)
+	if fm.Role != fantasy.MessageRoleUser {
+		t.Fatalf("role = %v, want user", fm.Role)
+	}
+	// Empty-content user message has no parts — caller must handle that.
+	if len(fm.Content) != 0 {
+		t.Fatalf("expected empty content, got %+v", fm.Content)
+	}
+	roundTripLLM(t, "empty user", in)
+}
+
+func TestLLMToFantasyNilToolCallsClean(t *testing.T) {
+	// Explicit nil ToolCalls must produce a single TextPart and round-trip
+	// to a message with nil ToolCalls (not a zero-length slice that compares
+	// unequal under reflect.DeepEqual).
+	in := Message{Role: "assistant", Content: "just text", ToolCalls: nil}
+	got := fantasyToLLM(LLMToFantasy(in))
+	if got.Content != "just text" {
+		t.Fatalf("content = %q, want just text", got.Content)
+	}
+	if len(got.ToolCalls) != 0 {
+		t.Fatalf("expected no tool calls, got %+v", got.ToolCalls)
+	}
+}
+
+func TestLLMSliceToFantasyNilPreservesNil(t *testing.T) {
+	if got := LLMSliceToFantasy(nil); got != nil {
+		t.Fatalf("nil input should yield nil slice, got %+v", got)
+	}
+	if got := FantasySliceToLLM(nil); got != nil {
+		t.Fatalf("nil input should yield nil slice, got %+v", got)
+	}
+}
+
+func TestLLMSliceToFantasyEmptyIsEmptySlice(t *testing.T) {
+	got := LLMSliceToFantasy([]Message{})
+	if got == nil {
+		t.Fatalf("non-nil empty input should yield non-nil empty slice")
+	}
+	if len(got) != 0 {
+		t.Fatalf("expected empty slice, got %d", len(got))
+	}
+}
+
+func TestLLMToFantasyProviderOptionsLeftEmpty(t *testing.T) {
+	// Per the design doc: legacy llm.Message has no provider-specific data,
+	// so LLMToFantasy must NOT invent ProviderOptions. Lock that in.
+	in := Message{Role: "assistant", Content: "hi"}
+	fm := LLMToFantasy(in)
+	if len(fm.ProviderOptions) != 0 {
+		t.Fatalf("ProviderOptions should be empty for lifted legacy messages, got %+v", fm.ProviderOptions)
+	}
+}
+
 func TestToLLMUsageCasts(t *testing.T) {
 	got := toLLMUsage(fantasy.Usage{
 		InputTokens:         12,
