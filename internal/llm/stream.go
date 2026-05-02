@@ -126,13 +126,17 @@ func (c *Client) streamOnce(ctx context.Context, msgs []Message, reg *tools.Regi
 			if sendErr := safeSend(stepCtx, events, StreamEvent{Type: "thinking"}); sendErr != nil {
 				return stepCtx, fantasy.PrepareStepResult{}, sendErr
 			}
-			// Per docs/phase-4-preparestep.md, cache markers run after queue
-			// drain and tool refresh on the final prepared.Messages shape.
-			// Until the full PrepareStep abstraction (bt-p4) lands, we
-			// operate on stepOpts.Messages directly — fantasy treats a nil
-			// prepared.Messages as "use stepOpts.Messages unchanged", so we
-			// have to substitute the slice we mutate.
-			prepared := fantasy.PrepareStepResult{Messages: stepOpts.Messages}
+			// Drain queued prompts (bt-p4-queue) before cache markers so
+			// mid-turn input is part of the prepared message slice.
+			msgs := stepOpts.Messages
+			if c.promptDrain != nil {
+				if drained := c.promptDrain(); len(drained) > 0 {
+					for _, text := range drained {
+						msgs = append(msgs, fantasy.NewUserMessage(text))
+					}
+				}
+			}
+			prepared := fantasy.PrepareStepResult{Messages: msgs}
 			applyAnthropicCacheMarkers(&prepared, cacheService, cacheBoundaryIdx)
 			return stepCtx, prepared, nil
 		},
