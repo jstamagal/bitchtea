@@ -8,6 +8,7 @@ import (
 	"os/exec"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/charmbracelet/x/vt"
@@ -39,6 +40,15 @@ type terminalSession struct {
 	// String/Read/Close also touch the underlying buffer — so concurrent
 	// snapshot + Write or Close + Read races without this outer lock.
 	emuMu sync.Mutex
+
+	// closing is set by close() before it begins teardown. The emu.Read
+	// loop checks it after each Read returns and exits without re-entering
+	// emu.Read — this guarantees no goroutine is inside emu.Read when
+	// close() finally calls emu.Close(). Required because vt.Emulator's
+	// `closed` field is a plain bool that Close writes and Read reads
+	// without any synchronization (upstream race that vt.SafeEmulator
+	// does not fix). See close() and the emu.Read goroutine in Start().
+	closing atomic.Bool
 }
 
 func newTerminalManager(workDir string) *terminalManager {
@@ -127,12 +137,20 @@ func (m *terminalManager) Start(ctx context.Context, argsJSON string) (string, e
 	go func() {
 		// emu.Read() blocks on its internal pipe; emuMu must NOT be held
 		// across it or snapshot/close will deadlock. The Write-vs-String
-		// race is prevented by emuMu; the Close-vs-Read race on the
-		// e.closed flag is a known bug in vt.SafeEmulator (upstream).
+		// race is prevented by emuMu. The Close-vs-Read race on the
+		// e.closed bool field (upstream vt bug — SafeEmulator does not
+		// wrap Read/Close) is worked around by checking session.closing
+		// here: close() sets closing, sends a wake byte via SendText to
+		// unblock our pending emu.Read, then waits for us to exit before
+		// calling emu.Close(). That establishes happens-before between
+		// every emu.Read access of e.closed and Close's write of e.closed.
 		buf := make([]byte, 4096)
 		for {
+			if session.closing.Load() {
+				break
+			}
 			n, readErr := session.emu.Read(buf)
-			if n > 0 {
+			if n > 0 && !session.closing.Load() {
 				_, _ = session.pty.Write(buf[:n])
 			}
 			if readErr != nil {
@@ -347,22 +365,36 @@ func (s *terminalSession) close() {
 	s.closed = true
 	s.mu.Unlock()
 
+	// Tell the emu.Read goroutine to stop iterating BEFORE we touch the
+	// emulator's racy `closed` field via emu.Close(). See the goroutine
+	// in Start() and the closing field comment for why this ordering
+	// matters.
+	s.closing.Store(true)
+
 	s.cancel()
 	if s.cmd.Process != nil && s.running() {
 		_ = s.cmd.Process.Kill()
 	}
 
-	// Close the emulator's internal pipe writer. This will cause
-	// emu.Read() (blocked in io.Copy(pty, emu)) to return io.EOF,
-	// and subsequent emu.Write() calls to return io.ErrClosedPipe,
-	// which makes io.Copy(emu, pty) exit too.
-	_ = s.emu.Close()
+	// Wake the emu.Read goroutine if it is blocked on the emulator's
+	// internal pipe. SendText writes to the same pipe emu.Read reads
+	// from, so any pending Read returns with data; the goroutine then
+	// sees s.closing and exits without re-entering emu.Read. SafeEmulator
+	// serializes SendText under its own mutex so this is race-free.
+	s.emu.SendText("\x00")
 
 	// Wait for process to exit and close pty from wait() goroutine.
 	<-s.done
 
-	// Wait for both io.Copy goroutines to drain after emulator closed.
+	// Wait for both io.Copy goroutines to drain. This guarantees no
+	// goroutine is inside emu.Read when we call emu.Close() below — so
+	// emu.Close()'s write to e.closed can no longer race with a Read.
 	s.copyWg.Wait()
+
+	// Now safe to close the emulator. emu.Write callers (the pty.Read
+	// goroutine) have already exited because pty.Close in wait() made
+	// pty.Read return EOF.
+	_ = s.emu.Close()
 }
 
 func (s *terminalSession) running() bool {
