@@ -7,6 +7,8 @@ import (
 	"sync"
 
 	"charm.land/fantasy"
+
+	"github.com/jstamagal/bitchtea/internal/mcp"
 )
 
 // Client is bitchtea's wrapper around a fantasy.Provider + LanguageModel
@@ -44,6 +46,12 @@ type Client struct {
 	mu       sync.Mutex
 	provider fantasy.Provider      // cached, nil until first ensureModel
 	model    fantasy.LanguageModel // cached, nil until first ensureModel
+
+	// mcpManager, when non-nil, supplies MCP tools that are appended after
+	// the local Registry tools on every Stream call. nil means "MCP not
+	// opted in" — behavior matches pre-Phase-6. Wiring is owned by the
+	// agent bootstrap (Agent.SetMCPManager), not by this package.
+	mcpManager *mcp.Manager
 }
 
 // NewClient builds a Client. The provider/model are not constructed until the
@@ -116,6 +124,26 @@ func (c *Client) InjectLanguageModelForTesting(model fantasy.LanguageModel) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.model = model
+}
+
+// SetMCPManager installs (or clears) the MCP manager whose tools will be
+// merged into every subsequent StreamChat call. Pass nil to disable MCP
+// dispatch (and revert to the local-only tool surface). Cheap to call —
+// no provider invalidation is needed because the manager is consumed
+// inside streamOnce, not during provider construction.
+func (c *Client) SetMCPManager(m *mcp.Manager) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.mcpManager = m
+}
+
+// MCPManager returns the currently installed MCP manager, or nil if none.
+// Used by streamOnce when assembling the per-turn tool list and by tests
+// that want to assert the wiring without reaching into private state.
+func (c *Client) MCPManager() *mcp.Manager {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.mcpManager
 }
 
 // SetDebugHook installs (or clears) the DebugHook. nil → nil is a no-op so

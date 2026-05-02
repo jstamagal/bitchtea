@@ -90,7 +90,14 @@ func (c *Client) streamOnce(ctx context.Context, msgs []Message, reg *tools.Regi
 		opts = append(opts, fantasy.WithSystemPrompt(systemPrompt))
 	}
 	if reg != nil {
-		opts = append(opts, fantasy.WithTools(translateTools(reg)...))
+		// Assemble the per-turn tool list. When no MCP manager is wired
+		// in, MCPTools returns nil and AssembleAgentTools degrades to the
+		// pre-Phase-6 behavior (translateTools(reg) only). The MCP listing
+		// error is non-fatal: schema errors at the manager level drop
+		// individual tools, and a fully-failed listing should still let
+		// the local tool surface stay usable for this turn.
+		mcpTools, _ := MCPTools(ctx, c.MCPManager())
+		opts = append(opts, fantasy.WithTools(AssembleAgentTools(reg, mcpTools)...))
 	}
 
 	fa := fantasy.NewAgent(model, opts...)

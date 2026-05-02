@@ -15,6 +15,7 @@ import (
 
 	"github.com/jstamagal/bitchtea/internal/config"
 	"github.com/jstamagal/bitchtea/internal/llm"
+	"github.com/jstamagal/bitchtea/internal/mcp"
 	"github.com/jstamagal/bitchtea/internal/tools"
 )
 
@@ -557,6 +558,21 @@ func (a *Agent) SetService(service string) {
 // transport on the next call.
 func (a *Agent) SetDebugHook(hook func(llm.DebugInfo)) {
 	a.client.SetDebugHook(hook)
+}
+
+// SetMCPManager wires (or clears) an MCP client manager whose tools will be
+// merged into every subsequent turn's tool list. Per the contract, MCP is
+// opt-in: when no manager is set the agent loop behaves exactly as it does
+// without MCP — local tools only.
+//
+// Wiring is forwarded to the underlying *llm.Client so the assembly happens
+// inside streamOnce, where the per-turn tool list is built. The manager is
+// NOT auto-started here; that is the bootstrap's responsibility (bt-p6-verify).
+func (a *Agent) SetMCPManager(m *mcp.Manager) {
+	if a.client == nil {
+		return
+	}
+	a.client.SetMCPManager(m)
 }
 
 // Config returns the current config (for profile save)
