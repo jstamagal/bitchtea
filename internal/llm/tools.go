@@ -149,5 +149,11 @@ func filterRequired(required []string, properties map[string]any) []string {
 			out = append(out, name)
 		}
 	}
+	// Return nil (not an empty slice) when every required name was filtered
+	// out — some providers reject "required": [] / null. Callers and downstream
+	// fantasy code only emit the field when this is non-empty.
+	if len(out) == 0 {
+		return nil
+	}
 	return out
 }

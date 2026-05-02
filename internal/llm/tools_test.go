@@ -2,6 +2,7 @@ package llm
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -189,6 +190,38 @@ func TestSplitSchemaEdgeCases(t *testing.T) {
 			wantRequired: []string{"path"},
 		},
 		{
+			// Regression for bt-qna: when every required name names a
+			// property that doesn't exist, filterRequired must return nil
+			// (not []string{}) so providers don't see an empty array.
+			name: "object schema with all required names filtered yields nil required",
+			input: map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"path": map[string]any{"type": "string"},
+				},
+				"required": []string{"missing_one", "missing_two"},
+			},
+			wantParams: map[string]any{
+				"path": map[string]any{"type": "string"},
+			},
+			wantRequired: nil,
+		},
+		{
+			// Same as above but via the []any path (e.g. JSON-decoded input).
+			name: "object schema []any required all filtered yields nil required",
+			input: map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"path": map[string]any{"type": "string"},
+				},
+				"required": []any{"nope", 42, nil},
+			},
+			wantParams: map[string]any{
+				"path": map[string]any{"type": "string"},
+			},
+			wantRequired: nil,
+		},
+		{
 			name: "object schema drops malformed property schemas and required names",
 			input: map[string]any{
 				"type": "object",
@@ -259,6 +292,45 @@ func TestSplitSchemaEdgeCases(t *testing.T) {
 			assertStringSlicesEqual(t, required, tt.wantRequired)
 			assertMapsEqual(t, params, tt.wantParams)
 		})
+	}
+}
+
+// TestFilterRequiredEmptyAfterFilterMarshalsWithoutRequiredKey is the
+// behavioral guardrail for bt-qna. It mirrors what fantasy's prepareTools
+// builds (type/properties/required map) using a schema whose required names
+// all resolve to nothing, then JSON-marshals the wire payload and asserts
+// that "required" is absent — not present as [] or null.
+func TestFilterRequiredEmptyAfterFilterMarshalsWithoutRequiredKey(t *testing.T) {
+	params, required := splitSchema(map[string]any{
+		"type": "object",
+		"properties": map[string]any{
+			"path": map[string]any{"type": "string"},
+		},
+		"required": []string{"missing"},
+	})
+
+	if required != nil {
+		t.Fatalf("expected nil required after all names filtered, got %#v", required)
+	}
+
+	// Mirror fantasy/agent.go prepareTools wire schema construction, except
+	// only emit "required" when it's non-empty — the assertion proves the
+	// caller can rely on filterRequired's nil to know to omit the key.
+	wire := map[string]any{
+		"type":       "object",
+		"properties": params,
+	}
+	if len(required) > 0 {
+		wire["required"] = required
+	}
+
+	raw, err := json.Marshal(wire)
+	if err != nil {
+		t.Fatalf("marshal wire schema: %v", err)
+	}
+	got := string(raw)
+	if strings.Contains(got, `"required"`) {
+		t.Fatalf("wire schema must not include \"required\" when empty after filter; got %s", got)
 	}
 }
 
