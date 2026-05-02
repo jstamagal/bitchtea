@@ -74,6 +74,10 @@ func typedToolFor(name string, reg *tools.Registry) fantasy.AgentTool {
 	switch name {
 	case "edit":
 		return editTool(reg)
+	case "read":
+		return readTool(reg)
+	case "write":
+		return writeTool(reg)
 	}
 	return nil
 }
