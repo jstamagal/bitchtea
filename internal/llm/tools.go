@@ -78,6 +78,10 @@ func typedToolFor(name string, reg *tools.Registry) fantasy.AgentTool {
 		return readTool(reg)
 	case "write":
 		return writeTool(reg)
+	case "bash":
+		return bashTool(reg)
+	case "search_memory":
+		return searchMemoryTool(reg)
 	}
 	return nil
 }
