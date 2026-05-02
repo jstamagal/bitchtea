@@ -202,6 +202,73 @@ func TestBashError(t *testing.T) {
 	}
 }
 
+func TestBashCancelledContextReportsCancelNotTimeout(t *testing.T) {
+	dir := t.TempDir()
+	reg := NewRegistry(dir, t.TempDir())
+
+	ctx, cancel := context.WithCancel(context.Background())
+	// Cancel shortly after start so the running sleep is interrupted by parent cancel.
+	go func() {
+		time.Sleep(50 * time.Millisecond)
+		cancel()
+	}()
+
+	_, err := reg.Execute(ctx, "bash", `{"command":"sleep 5","timeout":30}`)
+	if err == nil {
+		t.Fatal("expected error when parent context is cancelled")
+	}
+	msg := err.Error()
+	if !strings.Contains(msg, "cancel") {
+		t.Fatalf("expected error mentioning cancel, got %q", msg)
+	}
+	if strings.Contains(strings.ToLower(msg), "timed out") || strings.Contains(strings.ToLower(msg), "timeout") {
+		t.Fatalf("error must not mention timeout on parent cancel, got %q", msg)
+	}
+}
+
+func TestBashTimeoutReportsTimeout(t *testing.T) {
+	dir := t.TempDir()
+	reg := NewRegistry(dir, t.TempDir())
+
+	// Use the tool's own timeout argument (smallest unit is seconds, but the
+	// internal context timeout fires regardless). Use a 1s tool-level timeout
+	// against a 5s sleep — the deadline should fire and surface as timeout.
+	_, err := reg.Execute(context.Background(), "bash", `{"command":"sleep 5","timeout":1}`)
+	if err == nil {
+		t.Fatal("expected timeout error")
+	}
+	msg := err.Error()
+	if !strings.Contains(msg, "timed out") {
+		t.Fatalf("expected error mentioning 'timed out', got %q", msg)
+	}
+	if strings.Contains(strings.ToLower(msg), "cancel") {
+		t.Fatalf("error must not mention cancel on timeout, got %q", msg)
+	}
+}
+
+func TestBashNonexistentCommandDoesNotPanic(t *testing.T) {
+	dir := t.TempDir()
+	reg := NewRegistry(dir, t.TempDir())
+
+	// bash itself runs fine, so a nonexistent inner command produces a
+	// non-zero exit (handled via ProcessState). To exercise the
+	// "ProcessState == nil" branch we'd need bash itself to be missing; we
+	// can't reasonably remove bash from PATH inside the test process. Just
+	// confirm we don't panic on the common "command not found" path.
+	defer func() {
+		if r := recover(); r != nil {
+			t.Fatalf("execBash panicked: %v", r)
+		}
+	}()
+	result, err := reg.Execute(context.Background(), "bash", `{"command":"this_binary_definitely_does_not_exist_xyz"}`)
+	if err != nil {
+		t.Fatalf("bash should not error on inner command-not-found: %v", err)
+	}
+	if !strings.Contains(result, "Exit code:") {
+		t.Fatalf("expected exit code in output, got %q", result)
+	}
+}
+
 func TestUnknownTool(t *testing.T) {
 	reg := NewRegistry(t.TempDir(), t.TempDir())
 	_, err := reg.Execute(context.Background(), "nope", `{}`)

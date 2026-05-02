@@ -3,6 +3,7 @@ package tools
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -664,8 +665,14 @@ func (r *Registry) execBash(ctx context.Context, argsJSON string) (string, error
 	}
 
 	if err != nil {
-		if ctx.Err() != nil {
+		if errors.Is(ctx.Err(), context.DeadlineExceeded) {
 			return output, fmt.Errorf("command timed out after %ds", timeout)
+		}
+		if errors.Is(ctx.Err(), context.Canceled) {
+			return output, fmt.Errorf("command cancelled")
+		}
+		if cmd.ProcessState == nil {
+			return output, fmt.Errorf("failed to start command: %w", err)
 		}
 		return output + "\nExit code: " + strconv.Itoa(cmd.ProcessState.ExitCode()), nil
 	}
