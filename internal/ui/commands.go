@@ -30,6 +30,7 @@ var slashCommandRegistry = registerSlashCommands(
 	slashCommandSpec{names: []string{"/set"}, handler: handleSetCommand},
 	slashCommandSpec{names: []string{"/model"}, handler: handleModelCommand},
 	slashCommandSpec{names: []string{"/clear"}, handler: handleClearCommand},
+	slashCommandSpec{names: []string{"/restart"}, handler: handleRestartCommand},
 	slashCommandSpec{names: []string{"/compact"}, handler: handleCompactCommand},
 	slashCommandSpec{names: []string{"/copy"}, handler: handleCopyCommand},
 	slashCommandSpec{names: []string{"/tokens"}, handler: handleTokensCommand},
@@ -85,6 +86,7 @@ const helpCommandText = "Commands:\n" +
 	"  /profile [cmd]      save/load/delete profiles (built-ins: ollama, openrouter, etc.)\n" +
 	"  /compact            Compact conversation context\n" +
 	"  /clear              Clear chat display\n" +
+	"  /restart            Reset agent and start a fresh conversation\n" +
 	"  /copy [n]           Copy last or nth assistant response\n" +
 	"  /tokens             Token usage estimate\n" +
 	"  /memory             Show MEMORY.md contents\n" +
@@ -223,6 +225,30 @@ func handleModelCommand(m Model, _ string, parts []string) (Model, tea.Cmd) {
 func handleClearCommand(m Model, _ string, _ []string) (Model, tea.Cmd) {
 	m.messages = []ChatMessage{}
 	m.refreshViewport()
+	return m, nil
+}
+
+func handleRestartCommand(m Model, _ string, _ []string) (Model, tea.Cmd) {
+	if m.streaming && m.agent != nil {
+		m.cancelActiveTurn("Restart", true)
+	}
+
+	m.agent.Reset()
+
+	m.messages = []ChatMessage{}
+	if m.streamBuffer != nil {
+		m.streamBuffer.Reset()
+	}
+	m.queued = nil
+
+	// Start a fresh session log so the restarted conversation is persisted
+	// independently. Failure is non-fatal — the app still works without it.
+	if newSess, err := session.New(m.config.SessionDir); err == nil {
+		m.session = newSess
+	}
+	m.lastSavedMsgIdx = 0
+
+	m.sysMsg("*** Conversation restarted. Fresh context.")
 	return m, nil
 }
 

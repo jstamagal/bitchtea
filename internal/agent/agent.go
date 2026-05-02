@@ -915,6 +915,53 @@ func (a *Agent) RestoreMessages(messages []llm.Message) {
 	a.lastAssistantRaw = ""
 }
 
+// Reset clears the conversation history back to its bootstrap state — system
+// prompt, discovered context files (AGENTS.md/CLAUDE.md), root MEMORY.md, and
+// the persona anchor — and resets session-local stats so a fresh conversation
+// can begin without restarting the program. The active memory scope is
+// preserved; scoped HOT.md will be re-injected lazily on the next SetScope.
+func (a *Agent) Reset() {
+	systemPrompt := buildSystemPrompt(a.config, a.tools.Definitions())
+	a.messages = []llm.Message{{Role: "system", Content: systemPrompt}}
+
+	contextFiles := DiscoverContextFiles(a.config.WorkDir)
+	if contextFiles != "" {
+		a.messages = append(a.messages, llm.Message{
+			Role:    "user",
+			Content: "Here are the project context files:\n\n" + contextFiles,
+		})
+		a.messages = append(a.messages, llm.Message{
+			Role:    "assistant",
+			Content: "Got it. I've read the project context and will follow those conventions.",
+		})
+	}
+
+	memory := LoadMemory(a.config.WorkDir)
+	if memory != "" {
+		a.messages = append(a.messages, llm.Message{
+			Role:    "user",
+			Content: "Here is the session memory from previous work:\n\n" + memory,
+		})
+		a.messages = append(a.messages, llm.Message{
+			Role:    "assistant",
+			Content: "Got it.",
+		})
+	}
+
+	a.messages = append(a.messages, buildPersonaAnchor()...)
+	a.bootstrapMsgCount = len(a.messages)
+
+	a.injectedPaths = make(map[string]bool)
+	a.TurnCount = 0
+	a.ToolCalls = make(map[string]int)
+	a.CostTracker = llm.NewCostTracker()
+	a.StartTime = time.Now()
+	a.lastTurnState = turnStateIdle
+	a.activeFollowUpKind = followUpKindNone
+	a.lastCompletedFollowUp = followUpKindNone
+	a.lastAssistantRaw = ""
+}
+
 // Elapsed returns time since agent creation
 func (a *Agent) Elapsed() time.Duration {
 	return time.Since(a.StartTime)

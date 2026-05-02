@@ -344,6 +344,7 @@ Commands (inside the TUI):
   /model <name>          Switch models
   /compact               Compact context
   /clear                 Clear chat display
+  /restart               Reset agent and start a fresh conversation
   /tokens                Token usage estimate
   /sessions              List saved sessions
   /tree                  Show session tree

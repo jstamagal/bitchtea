@@ -121,6 +121,7 @@ BITCHTEA_PROVIDER      Force provider (openai, anthropic)
 | `/profile save\|load\|delete <name>` | Manage saved profiles and load built-ins like `ollama`, `openrouter`, `zai-openai`, and `zai-anthropic` | Safe |
 | `/compact` | Compact conversation context | Moderate: rewrites in-memory context |
 | `/clear` | Clear chat display | Safe |
+| `/restart` | Reset agent and start a fresh conversation (no quit) | Safe: drops in-memory context |
 | `/copy` | Copy the last assistant message | Safe |
 | `/tokens` | Show token usage estimate | Safe |
 | `/memory` | Show `MEMORY.md` from the current workspace | Safe |
