@@ -105,6 +105,19 @@ func (c *Client) SetBootstrapMsgCount(n int) {
 	c.BootstrapMsgCount = n
 }
 
+// InjectLanguageModelForTesting replaces the cached LanguageModel with a
+// caller-supplied one. This is the public seam used by cross-package smoke
+// tests (e.g. internal/agent) that need a fake fantasy.LanguageModel without
+// reaching into the unexported model field. Production code MUST NOT call
+// this; the contract is "set it before any StreamChat call, never mid-flight".
+// It does not invalidate the provider — by design, since the only caller is
+// test code that wants the fake to outlive subsequent Set* calls.
+func (c *Client) InjectLanguageModelForTesting(model fantasy.LanguageModel) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.model = model
+}
+
 // SetDebugHook installs (or clears) the DebugHook. nil → nil is a no-op so
 // callers that toggle debug off when it was already off don't pay for a
 // provider rebuild on the next call.

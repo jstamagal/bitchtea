@@ -71,9 +71,9 @@ Keep it acyclic. A change that adds an upward edge (e.g., `llm -> agent`, or `to
 These are open architectural items tracked in `bd` — read the current state from the code, not from intuitions about what the IRC framing implies:
 
 - **Per-context histories** (`bt-x1o`, P0): `/join #chan` and `/query nick` only re-label the UI today; the agent still streams against one shared `messages` slice. Don't write code or docs that assume isolated histories until this lands.
-- **`write_memory` tool** (`bt-vhs`, P0) is not yet implemented — only `search_memory` exists in the tool surface.
+- **`write_memory` tool** (`bt-vhs`, P0): now implemented (added with bt-p2-switch and exposed as a typed wrapper). The bullet stays in "in flight" only until `bt-vhs` is closed; the surface itself is live.
 - **Daemon removal** (`bt-76w`, P2): the old `_attic` daemon was deleted during compaction. There is currently **no daemon binary, no `cmd/daemon`, no `internal/daemon` package**, and no hardcoded compaction model. A future Phase 7 epic (`bt-p7`, P3) may rebuild it, but until then do not reintroduce daemon assumptions.
-- **Fantasy migration** (Phases 2–4, epics `bt-p2`/`bt-p3`/`bt-p4`): tools today are still untyped `Registry.Execute(name, argsJSON)` and the agent boundary still uses `llm.Message`. Typed `fantasy.NewAgentTool` wrappers and fantasy-native messages are the *target*, not the present state — don't write code as if the migration is complete.
+- **Fantasy migration** (Phases 2–4, epics `bt-p2`/`bt-p3`/`bt-p4`): partial. Phase 2 is in flight: 6 tools (`read`, `write`, `edit`, `bash`, `search_memory`, `write_memory`) are now typed `fantasy.NewAgentTool` wrappers in `internal/llm/typed_*.go`; the remaining 8 (`terminal_start`, `terminal_send`, `terminal_keys`, `terminal_snapshot`, `terminal_wait`, `terminal_resize`, `terminal_close`, `preview_image`) still flow through the legacy generic `bitchteaTool` adapter. `translateTools` picks the typed wrapper when one exists and falls back to the generic adapter; both bottom out in `Registry.Execute(name, argsJSON)`. The agent boundary still uses `llm.Message`. Typed wrappers for *every* tool and fantasy-native messages are the eventual target — don't write code as if the migration is complete.
 
 ## Adding a Slash Command
 

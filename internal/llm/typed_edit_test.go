@@ -78,7 +78,9 @@ func TestEditTool_SuccessfulEditMutatesFile(t *testing.T) {
 			{OldText: "world", NewText: "fantasy"},
 		},
 	})
-	assertToolReturnsTextResponse(t, resp, err, "Applied 1 edit(s) to "+fileName)
+	// execEdit returns the resolved (absolute) path in the success message;
+	// see internal/tools.execEdit and TestEditFile in tools_test.go. (bt-2fi)
+	assertToolReturnsTextResponse(t, resp, err, "Applied 1 edit(s) to "+filepath.Join(workDir, fileName))
 
 	got, readErr := os.ReadFile(filepath.Join(workDir, fileName))
 	if readErr != nil {

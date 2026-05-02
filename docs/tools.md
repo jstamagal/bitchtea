@@ -47,8 +47,9 @@ Renders images (PNG/JPEG/GIF) into ANSI block art for the terminal.
 
 ## 🧬 DISPATCHER & EXECUTOR
 
-- **Definitions**: `Registry.Definitions()` returns OpenAI-compatible JSON schemas (`tools.go:42`).
-- **Execution**: `Registry.Execute()` is the entry point for all tool calls. It unmarshals JSON args and routes to private `exec*` methods.
+- **Definitions**: `Registry.Definitions()` returns OpenAI-compatible JSON schemas (`tools.go:42`). These are still the canonical schema source for the system prompt.
+- **Execution**: `Registry.Execute()` is the underlying executor. All tools dispatch into it eventually.
+- **Provider-facing registration** (Phase 2 / `bt-p2`): `internal/llm/translateTools` now prefers a **typed `fantasy.NewAgentTool` wrapper** for each tool that has been ported. As of bt-p2-verify the typed roster is `read`, `write`, `edit`, `bash`, `search_memory`, `write_memory` (see `internal/llm/typed_*.go`). The remaining tools — `terminal_start`, `terminal_send`, `terminal_keys`, `terminal_snapshot`, `terminal_wait`, `terminal_resize`, `terminal_close`, and `preview_image` — still flow through the legacy generic adapter (`bitchteaTool`). Both paths bottom out in `Registry.Execute`, so behavior is identical; the typed path just gives fantasy a real Go type for the input instead of a JSON string.
 
 🦍💪🤝 APES STRONK TOGETHER 🦍💪🤝
 
@@ -103,7 +104,7 @@ This section peels back the skin of the executor (`internal/tools/Registry.Execu
 
 ### 🧬 THE DATA FLOW HANDSHAKE
 1.  **LLM** sends a `tool_call` event with a JSON payload of `arguments`.
-2.  **Agent** (`internal/agent/agent.go:193`) dispatches this to `Registry.Execute`.
+2.  **fantasy** dispatches the call into the registered tool. For typed-ported tools (read/write/edit/bash/search_memory/write_memory) it lands in the typed `Run` callback in `internal/llm/typed_*.go`, which re-marshals to JSON and calls `Registry.Execute`. For unported tools (terminal_*, preview_image) it lands in `bitchteaTool.Run` which forwards directly to `Registry.Execute`. Either way the agent sees a `tool_start` event when execution begins.
 3.  **Registry** unmarshals the JSON into a local struct and runs the private `exec*` method.
 4.  **REPL/TUI** receives a `tool_start` event and prints `calling [tool]...` to the viewport.
 5.  **Registry** returns a `string` (success) or `error`.
