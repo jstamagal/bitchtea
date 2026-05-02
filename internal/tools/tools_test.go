@@ -40,6 +40,51 @@ func TestReadFile(t *testing.T) {
 	}
 }
 
+func TestReadOffsetPastEOF(t *testing.T) {
+	dir := t.TempDir()
+	nonEmpty := filepath.Join(dir, "lines.txt")
+	os.WriteFile(nonEmpty, []byte("a\nb\nc"), 0644) // 3 lines
+	empty := filepath.Join(dir, "empty.txt")
+	os.WriteFile(empty, []byte(""), 0644)
+
+	reg := NewRegistry(dir, t.TempDir())
+
+	// Offset well past EOF on a non-empty file -> error mentioning offset/length
+	_, err := reg.Execute(context.Background(), "read", `{"path":"lines.txt","offset":99}`)
+	if err == nil {
+		t.Fatalf("expected error for offset past EOF, got nil")
+	}
+	msg := err.Error()
+	if !strings.Contains(msg, "past end of file") || !strings.Contains(msg, "99") || !strings.Contains(msg, "3") {
+		t.Fatalf("error should mention offset and length, got: %q", msg)
+	}
+
+	// Offset just past last addressable line -> error
+	// File has 3 lines; strings.Split yields 3 elements, so offset 4 -> start=3 >= 3 -> error.
+	_, err = reg.Execute(context.Background(), "read", `{"path":"lines.txt","offset":4}`)
+	if err == nil {
+		t.Fatalf("expected error for offset at len(lines)+1, got nil")
+	}
+
+	// Normal in-range offset still works
+	result, err := reg.Execute(context.Background(), "read", `{"path":"lines.txt","offset":2,"limit":1}`)
+	if err != nil {
+		t.Fatalf("in-range offset: %v", err)
+	}
+	if result != "b" {
+		t.Fatalf("unexpected in-range content: %q", result)
+	}
+
+	// Empty file with no offset/limit -> empty string, no error (preserved behavior)
+	result, err = reg.Execute(context.Background(), "read", `{"path":"empty.txt"}`)
+	if err != nil {
+		t.Fatalf("empty file read: %v", err)
+	}
+	if result != "" {
+		t.Fatalf("empty file should return empty string, got: %q", result)
+	}
+}
+
 func TestWriteFile(t *testing.T) {
 	dir := t.TempDir()
 	reg := NewRegistry(dir, t.TempDir())

@@ -473,7 +473,7 @@ func (r *Registry) execRead(argsJSON string) (string, error) {
 			start = args.Offset - 1 // 1-indexed
 		}
 		if start >= len(lines) {
-			return "", nil
+			return "", fmt.Errorf("read: offset %d is past end of file (file has %d lines)", args.Offset, len(lines))
 		}
 		end := len(lines)
 		if args.Limit > 0 && start+args.Limit < end {
