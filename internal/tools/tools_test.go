@@ -10,6 +10,7 @@ import (
 	"strings"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	memorypkg "github.com/jstamagal/bitchtea/internal/memory"
 )
@@ -516,6 +517,89 @@ func TestPreviewImage(t *testing.T) {
 	}
 	if !strings.Contains(result, "image preview tiny.png (png, 2x2)") {
 		t.Fatalf("unexpected preview header: %q", result)
+	}
+}
+
+func TestTruncateUTF8MultiByte(t *testing.T) {
+	// "世" is 3 bytes in UTF-8. Pick a cap that lands mid-rune.
+	s := strings.Repeat("世", 1000)
+	// 100 is not a multiple of 3, so a naive byte slice would split a rune.
+	got := truncateUTF8(s, 100)
+	if !utf8.ValidString(got) {
+		t.Fatalf("truncateUTF8 produced invalid UTF-8 at byte cap 100: %q", got)
+	}
+	if len(got) > 100 {
+		t.Fatalf("truncateUTF8 exceeded byte cap: len=%d", len(got))
+	}
+	// Should be the largest multiple of 3 <= 100 = 99.
+	if len(got) != 99 {
+		t.Fatalf("expected 99 bytes (33 full runes), got %d", len(got))
+	}
+
+	// Mix with emoji (4-byte runes).
+	mixed := strings.Repeat("a世\U0001F600", 200)
+	for cap := 1; cap < len(mixed); cap++ {
+		out := truncateUTF8(mixed, cap)
+		if !utf8.ValidString(out) {
+			t.Fatalf("truncateUTF8 produced invalid UTF-8 at cap=%d: % x", cap, out)
+		}
+	}
+}
+
+func TestTruncateUTF8ASCIIExactLimit(t *testing.T) {
+	s := strings.Repeat("a", 50)
+	got := truncateUTF8(s, 50)
+	if got != s {
+		t.Fatalf("ASCII at exact limit should be unchanged; got %q", got)
+	}
+}
+
+func TestTruncateUTF8ShorterThanLimit(t *testing.T) {
+	s := "hello 世界"
+	got := truncateUTF8(s, 1024)
+	if got != s {
+		t.Fatalf("string shorter than limit should be unchanged; got %q", got)
+	}
+}
+
+func TestReadTruncatesAtRuneBoundary(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "wide.txt")
+	// 60 KB of "世" (3 bytes each) — comfortably exceeds the 50 KB cap.
+	content := strings.Repeat("世", 20000)
+	if err := os.WriteFile(path, []byte(content), 0644); err != nil {
+		t.Fatalf("write fixture: %v", err)
+	}
+
+	reg := NewRegistry(dir, t.TempDir())
+	result, err := reg.Execute(context.Background(), "read", `{"path":"wide.txt"}`)
+	if err != nil {
+		t.Fatalf("read: %v", err)
+	}
+	if !strings.HasSuffix(result, "\n... (truncated)") {
+		t.Fatalf("expected truncation marker, got tail %q", result[max(0, len(result)-32):])
+	}
+	if !utf8.ValidString(result) {
+		t.Fatalf("read returned invalid UTF-8 after truncation")
+	}
+}
+
+func TestBashTruncatesAtRuneBoundary(t *testing.T) {
+	dir := t.TempDir()
+	reg := NewRegistry(dir, t.TempDir())
+
+	// Print ~60 KB of "世" via printf; well past the 50 KB cap.
+	cmd := `printf '世%.0s' $(seq 1 20000)`
+	args := `{"command":"` + cmd + `","timeout":30}`
+	result, err := reg.Execute(context.Background(), "bash", args)
+	if err != nil {
+		t.Fatalf("bash: %v", err)
+	}
+	if !strings.HasSuffix(result, "\n... (truncated)") {
+		t.Fatalf("expected truncation marker, got tail %q", result[max(0, len(result)-32):])
+	}
+	if !utf8.ValidString(result) {
+		t.Fatalf("bash returned invalid UTF-8 after truncation")
 	}
 }
 

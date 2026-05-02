@@ -10,6 +10,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	memorypkg "github.com/jstamagal/bitchtea/internal/memory"
 )
@@ -485,7 +486,7 @@ func (r *Registry) execRead(argsJSON string) (string, error) {
 	// Truncate if too large
 	const maxSize = 50 * 1024
 	if len(content) > maxSize {
-		content = content[:maxSize] + "\n... (truncated)"
+		content = truncateUTF8(content, maxSize) + "\n... (truncated)"
 	}
 
 	return content, nil
@@ -659,7 +660,7 @@ func (r *Registry) execBash(ctx context.Context, argsJSON string) (string, error
 	// Truncate
 	const maxSize = 50 * 1024
 	if len(output) > maxSize {
-		output = output[:maxSize] + "\n... (truncated)"
+		output = truncateUTF8(output, maxSize) + "\n... (truncated)"
 	}
 
 	if err != nil {
@@ -677,4 +678,19 @@ func truncate(s string, n int) string {
 		return s
 	}
 	return s[:n] + "..."
+}
+
+// truncateUTF8 returns s truncated to at most maxBytes bytes, walking back
+// to a rune boundary so multi-byte characters are not split mid-encoding.
+func truncateUTF8(s string, maxBytes int) string {
+	if len(s) <= maxBytes {
+		return s
+	}
+	cut := maxBytes
+	// utf8.RuneStart returns true for ASCII bytes and the leading byte of a
+	// multi-byte sequence; walk back until we find one.
+	for cut > 0 && !utf8.RuneStart(s[cut]) {
+		cut--
+	}
+	return s[:cut]
 }
