@@ -333,27 +333,26 @@ func TestFirstEscDuringRunningToolCancelsToolOnly(t *testing.T) {
 	model.toolPanel.Visible = false // skip panel-close step
 	model.streaming = true
 	model.activeToolName = "bash"
-	model.activeToolCallID = "call-123"
+	model.activeToolCallID = "call-1"
 	model.queued = []queuedMsg{{text: "next", queuedAt: time.Now()}}
 	canceled := false
 	model.cancel = func() { canceled = true }
+	model.agent = agent.NewAgentWithStreamer(&cfg, nil)
 
 	updated, _ := model.Update(tea.KeyMsg{Type: tea.KeyEsc})
 	got := updated.(Model)
 
-	// Per-tool cancel: the turn should NOT be cancelled.
 	if canceled {
-		t.Fatal("expected first esc during active tool to cancel tool only, not the turn")
+		t.Fatal("expected first esc during active tool to cancel tool only, not turn")
 	}
 	if !got.streaming {
-		t.Fatal("expected tool-only cancel to leave streaming active")
+		t.Fatal("expected tool-only cancel to keep streaming (turn alive)")
 	}
 	if len(got.queued) != 1 {
 		t.Fatalf("expected tool-only cancel to preserve queue, got %#v", got.queued)
 	}
-	// escStage resets to 0 after tool cancel (no graduation needed).
 	if got.escStage != 0 {
-		t.Fatalf("expected esc stage to reset after tool cancel, got %d", got.escStage)
+		t.Fatalf("expected escStage reset to 0 after tool cancel attempt, got %d", got.escStage)
 	}
 }
 

@@ -32,6 +32,12 @@ type ContextKey = string
 // DefaultContextKey is the context key for the initial default context.
 const DefaultContextKey = "#main"
 
+// promptQueueItem is a queued user prompt with its enqueue time for staleness checks.
+type promptQueueItem struct {
+	text     string
+	queuedAt time.Time
+}
+
 type Agent struct {
 	client   *llm.Client
 	streamer llm.ChatStreamer
@@ -51,6 +57,9 @@ type Agent struct {
 	// Memory scope for the active IRC context.
 	scope         MemoryScope
 	injectedPaths map[string]bool // HOT paths already injected as context messages
+
+	// Queued prompts for mid-turn drain via PrepareStep (bt-p4-queue).
+	promptQueue []promptQueueItem
 
 	// Stats
 	TurnCount   int
@@ -226,6 +235,48 @@ func (a *Agent) ActiveToolIDs() []string {
 	return mgr.ActiveToolIDs()
 }
 
+// QueuePrompt adds a user message to the prompt queue for mid-turn drain
+// via PrepareStep. Each item is timestamped so staleness can be checked
+// when draining.
+func (a *Agent) QueuePrompt(text string) {
+	a.promptQueue = append(a.promptQueue, promptQueueItem{
+		text:     text,
+		queuedAt: time.Now(),
+	})
+}
+
+// QueueLen returns the number of queued prompts.
+func (a *Agent) QueueLen() int { return len(a.promptQueue) }
+
+// ClearQueue drops all queued prompts.
+func (a *Agent) ClearQueue() { a.promptQueue = nil }
+
+// drainAndMirrorQueuedPrompts atomically drains the prompt queue and
+// mirrors each item into a.messages as a user message so session save and
+// compaction see it. Returns the drained texts for PrepareStep to append
+// to prepared.Messages.
+func (a *Agent) drainAndMirrorQueuedPrompts() []string {
+	if len(a.promptQueue) == 0 {
+		return nil
+	}
+	texts := make([]string, len(a.promptQueue))
+	for i, item := range a.promptQueue {
+		texts[i] = item.text
+		a.messages = append(a.messages, newUserMessage(
+			fmt.Sprintf("[queued prompt %d]: %s", i+1, item.text),
+		))
+	}
+	a.promptQueue = nil
+	return texts
+}
+
+// drainPromptQueueSnapshot returns a snapshot of queued prompt texts and
+// mirrors them into a.messages. This is the func() []string hook passed to
+// Client.SetPromptDrain for mid-turn drain via PrepareStep.
+func (a *Agent) drainPromptQueueSnapshot() []string {
+	return a.drainAndMirrorQueuedPrompts()
+}
+
 // sendMessage runs one user turn through the streamer. fantasy owns the
 // LLM/tool loop now: it streams text, dispatches tool calls into bitchteaTool
 // (which calls Registry.Execute), and emits StreamEvents back through the
@@ -247,6 +298,13 @@ func (a *Agent) sendMessage(ctx context.Context, userMsg string, kind followUpKi
 	var gotUsage bool
 
 	events <- Event{Type: "state", State: StateThinking}
+
+	// Wire the prompt drain so PrepareStep can pull mid-turn queued prompts.
+	// Staleness check is deferred to the drainer — the old UI-side check is
+	// kept as a post-turn guard but the per-step drain is what actually
+	// routes mid-turn input.
+	a.client.SetPromptDrain(a.drainAndMirrorQueuedPrompts)
+	defer a.client.SetPromptDrain(nil)
 
 	streamEvents := make(chan llm.StreamEvent, 100)
 	// Bridge to the legacy llm.Message wire shape at the streamer boundary.
