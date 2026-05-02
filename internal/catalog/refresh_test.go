@@ -6,6 +6,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"path/filepath"
 	"sync/atomic"
 	"testing"
@@ -285,5 +286,167 @@ func TestRefresh_AgainstHTTPTestServer_End2End(t *testing.T) {
 	}
 	if res.Envelope.Source != srv.URL {
 		t.Fatalf("source url not stamped: %q", res.Envelope.Source)
+	}
+}
+
+// TestRefresh_NoSourceURL_ReturnsCacheNoHTTP covers the guard: even when
+// Enabled is true, an empty SourceURL must prevent the network call. This
+// is the user-hasn't-configured-CATWALK_URL path.
+func TestRefresh_NoSourceURL_ReturnsCacheNoHTTP(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "providers.json")
+	cached := Envelope{SchemaVersion: SchemaVersion, Providers: []catwalk.Provider{{ID: "openai"}}}
+	if err := WriteCache(path, cached); err != nil {
+		t.Fatalf("seed cache: %v", err)
+	}
+	fake := &fakeClient{}
+	res := Refresh(context.Background(), RefreshOptions{
+		CachePath: path,
+		Enabled:   true,
+		SourceURL: "", // empty
+		Client:    fake,
+	})
+	if atomic.LoadInt32(&fake.calls) != 0 {
+		t.Fatalf("empty SourceURL must not call client")
+	}
+	if !res.FromCache || res.HitNetwork {
+		t.Fatalf("flags wrong with empty SourceURL: %+v", res)
+	}
+}
+
+// TestRefresh_MissingCache_Refresh200WritesFresh covers the first-boot path:
+// no cache file exists, the network call succeeds, and the result is written.
+func TestRefresh_MissingCache_Refresh200WritesFresh(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "providers.json")
+	fake := &fakeClient{
+		providers: []catwalk.Provider{{Name: "Fresh", ID: "anthropic"}},
+	}
+	now := time.Date(2026, 5, 2, 12, 0, 0, 0, time.UTC)
+	res := Refresh(context.Background(), RefreshOptions{
+		CachePath: path,
+		Enabled:   true,
+		SourceURL: "https://example.invalid",
+		Client:    fake,
+		Now:       func() time.Time { return now },
+	})
+	if res.Err != nil {
+		t.Fatalf("Refresh err on missing cache: %v", res.Err)
+	}
+	if !res.Updated || !res.HitNetwork {
+		t.Fatalf("flags wrong on missing cache: %+v", res)
+	}
+	if res.Envelope.FetchedAt != now || res.Envelope.LastChecked != now {
+		t.Fatalf("timestamps not set: %+v", res.Envelope)
+	}
+	disk, err := ReadCache(path)
+	if err != nil {
+		t.Fatalf("cache not written on first refresh: %v", err)
+	}
+	if disk.Providers[0].Name != "Fresh" {
+		t.Fatalf("disk content wrong: %+v", disk)
+	}
+}
+
+// TestRefresh_CtxTimeoutWithVeryStaleCache covers the path where the cache is
+// very stale but the context has a timeout. Refresh should attempt the network,
+// hit the timeout/error, and return the stale cache with an error. The stale
+// cache remains usable on disk (no eviction).
+func TestRefresh_CtxTimeoutWithVeryStaleCache(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "providers.json")
+	stale := Envelope{
+		SchemaVersion: SchemaVersion,
+		LastChecked:   time.Date(2026, 4, 1, 0, 0, 0, 0, time.UTC),
+		FetchedAt:     time.Date(2026, 4, 1, 0, 0, 0, 0, time.UTC),
+		Providers:     []catwalk.Provider{{Name: "Stale", ID: "openai"}},
+	}
+	if err := WriteCache(path, stale); err != nil {
+		t.Fatalf("seed cache: %v", err)
+	}
+	fake := &fakeClient{err: context.DeadlineExceeded}
+	res := Refresh(context.Background(), RefreshOptions{
+		CachePath: path,
+		Enabled:   true,
+		SourceURL: "https://example.invalid",
+		Client:    fake,
+	})
+	if !errors.Is(res.Err, context.DeadlineExceeded) {
+		t.Fatalf("want deadline error surfaced, got %v", res.Err)
+	}
+	if len(res.Envelope.Providers) != 1 || res.Envelope.Providers[0].Name != "Stale" {
+		t.Fatalf("stale cache should survive timeout: %+v", res.Envelope)
+	}
+	// Disk untouched — the stale LastChecked should not be bumped on failure.
+	disk, err := ReadCache(path)
+	if err != nil {
+		t.Fatalf("ReadCache after timeout: %v", err)
+	}
+	if !disk.LastChecked.Equal(stale.LastChecked) {
+		t.Fatalf("last_checked moved on failure: %v -> %v", stale.LastChecked, disk.LastChecked)
+	}
+}
+
+// TestRefresh_WriteFailureReturnsInMemoryResult covers the path where the
+// network succeeds but the disk write fails. The returned Envelope must still
+// carry the fresh data so the session sees up-to-date info.
+func TestRefresh_WriteFailureReturnsInMemoryResult(t *testing.T) {
+	// Create a path where the parent is a file, not a dir — WriteCache will fail.
+	dir := t.TempDir()
+	parent := filepath.Join(dir, "not-a-dir")
+	if err := os.WriteFile(parent, []byte("block"), 0o600); err != nil {
+		t.Fatalf("write blocker file: %v", err)
+	}
+	path := filepath.Join(parent, "providers.json")
+	fake := &fakeClient{
+		providers: []catwalk.Provider{{Name: "InMemory", ID: "openai"}},
+	}
+	res := Refresh(context.Background(), RefreshOptions{
+		CachePath: path,
+		Enabled:   true,
+		SourceURL: "https://example.invalid",
+		Client:    fake,
+	})
+	if res.Err == nil {
+		t.Fatalf("expected write error, got nil")
+	}
+	if !res.Updated || !res.HitNetwork {
+		t.Fatalf("flags wrong on write failure: %+v", res)
+	}
+	if len(res.Envelope.Providers) != 1 || res.Envelope.Providers[0].Name != "InMemory" {
+		t.Fatalf("fresh providers should survive write failure: %+v", res.Envelope)
+	}
+}
+
+// TestRefresh_SoftTTLOverride confirms a custom SoftTTL is respected: a
+// 30-minute TTL means a cache that's 1 hour old must trigger a network call.
+func TestRefresh_SoftTTLOverride(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "providers.json")
+	now := time.Date(2026, 5, 2, 12, 0, 0, 0, time.UTC)
+	cached := Envelope{
+		SchemaVersion: SchemaVersion,
+		LastChecked:   now.Add(-1 * time.Hour), // 1h old
+		Providers:     []catwalk.Provider{{Name: "Cached", ID: "openai"}},
+	}
+	if err := WriteCache(path, cached); err != nil {
+		t.Fatalf("seed cache: %v", err)
+	}
+	fake := &fakeClient{
+		providers: []catwalk.Provider{{Name: "Refreshed", ID: "openai"}},
+	}
+	res := Refresh(context.Background(), RefreshOptions{
+		CachePath: path,
+		Enabled:   true,
+		SourceURL: "https://example.invalid",
+		Client:    fake,
+		SoftTTL:   30 * time.Minute, // shorter than 1h, so must refresh
+		Now:       func() time.Time { return now },
+	})
+	if atomic.LoadInt32(&fake.calls) != 1 {
+		t.Fatalf("30m TTL with 1h-old cache should trigger HTTP, got %d calls", fake.calls)
+	}
+	if !res.HitNetwork || !res.Updated {
+		t.Fatalf("flags wrong with short TTL: %+v", res)
 	}
 }

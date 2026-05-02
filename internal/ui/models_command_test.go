@@ -327,3 +327,197 @@ func TestAvailableServicesSortedAndLowercased(t *testing.T) {
 		}
 	}
 }
+
+// --- Picker regression tests (bt-p5-verify) ---
+
+// TestModelPickerNewPickerCursorAtDefault confirms a fresh picker starts with
+// cursor at position 0 (default-large model if present).
+func TestModelPickerNewPickerCursorAtDefault(t *testing.T) {
+	ids := []string{"alpha", "beta", "gamma"}
+	p := newModelPicker("test", ids)
+	if p.cursor != 0 {
+		t.Fatalf("cursor = %d, want 0", p.cursor)
+	}
+	if p.selected() != "alpha" {
+		t.Fatalf("selected = %q, want alpha", p.selected())
+	}
+}
+
+// TestModelPickerCursorClampedOnRefilter verifies the cursor is clamped after
+// narrowing the filter.
+func TestModelPickerCursorClampedOnRefilter(t *testing.T) {
+	ids := []string{"openai/gpt-4o", "anthropic/claude-sonnet-4", "anthropic/claude-haiku-4"}
+	p := newModelPicker("test", ids)
+	p.cursor = 2 // point at haiku
+	p.appendQuery("openai")
+	// Only one match now.
+	if len(p.filtered) != 1 {
+		t.Fatalf("filtered = %d, want 1", len(p.filtered))
+	}
+	if p.cursor != 0 {
+		t.Fatalf("cursor not clamped after refilter, got %d", p.cursor)
+	}
+}
+
+// TestModelPickerEmptyModelsList confirms the picker handles an empty model
+// list gracefully.
+func TestModelPickerEmptyModelsList(t *testing.T) {
+	p := newModelPicker("empty", nil)
+	if p.cursor != 0 {
+		t.Fatalf("cursor = %d, want 0", p.cursor)
+	}
+	if p.selected() != "" {
+		t.Fatalf("selected = %q, want empty", p.selected())
+	}
+	p.moveCursor(1)
+	if p.cursor != 0 {
+		t.Fatalf("cursor should stay at 0 on empty list")
+	}
+}
+
+// TestModelPickerBackspaceFullCycle tests backspace through an empty query.
+func TestModelPickerBackspaceFullCycle(t *testing.T) {
+	ids := []string{"a", "b"}
+	p := newModelPicker("test", ids)
+	p.appendQuery("something")
+	p.backspace()
+	p.backspace()
+	// backspace on empty query is a no-op, not a panic.
+	for i := 0; i < 20; i++ {
+		p.backspace()
+	}
+	if p.query != "" {
+		t.Fatalf("query should be empty after full backspace, got %q", p.query)
+	}
+	if len(p.filtered) != 2 {
+		t.Fatalf("empty query should match all, got %d filtered", len(p.filtered))
+	}
+}
+
+// TestModelPickerViewBoundedRows confirms the view doesn't exceed maxRows.
+func TestModelPickerViewBoundedRows(t *testing.T) {
+	ids := make([]string, 50)
+	for i := range ids {
+		ids[i] = "model-" + string(rune('a'+i%26)) + "-v" + string(rune('0'+i/26))
+	}
+	p := newModelPicker("test", ids)
+	view := p.view(5)
+	lines := strings.Split(view, "\n")
+	// title + prompt + up to maxRows entries + optional hint + footer
+	// Should be roughly: title(1) + prompt(1) + entries(≤maxRows) + "...\n(1)" + footer(1)
+	if len(lines) > 12 {
+		t.Fatalf("view too tall: %d lines for maxRows=5", len(lines))
+	}
+}
+
+// TestModelPickerMoveCursorPage confirms PgUp/PgDown move by page increments.
+func TestModelPickerMoveCursorPage(t *testing.T) {
+	ids := make([]string, 30)
+	for i := range ids {
+		ids[i] = "model-" + string(rune('a'+i%26))
+	}
+	p := newModelPicker("test", ids)
+	p.cursor = 20
+	p.moveCursor(-pickerVisibleRows) // PgUp
+	if p.cursor != 8 {
+		t.Fatalf("PgUp: cursor = %d, want 8", p.cursor)
+	}
+	p.moveCursor(pickerVisibleRows) // PgDown
+	if p.cursor != 20 {
+		t.Fatalf("PgDown: cursor = %d, want 20", p.cursor)
+	}
+}
+
+// TestModelsForServiceDefaultLargeModelDedup confirms the default-large model
+// appears only once (at front) and the rest follow in catalog order.
+func TestModelsForServiceDefaultLargeModelDedup(t *testing.T) {
+	p := catwalk.Provider{
+		ID:                  "openrouter",
+		DefaultLargeModelID: "alpha",
+		Models: []catwalk.Model{
+			{ID: "alpha"}, {ID: "beta"}, {ID: "gamma"},
+		},
+	}
+	got := modelsForService([]catwalk.Provider{p}, "openrouter")
+	want := []string{"alpha", "beta", "gamma"}
+	if len(got) != len(want) {
+		t.Fatalf("got %v, want %v", got, want)
+	}
+	for i := range got {
+		if got[i] != want[i] {
+			t.Errorf("got[%d] = %q, want %q", i, got[i], want[i])
+		}
+	}
+}
+
+// TestModelsForServiceDefaultLargeNotInList does not crash or insert when
+// DefaultLargeModelID is not present in any model.
+func TestModelsForServiceDefaultLargeNotInList(t *testing.T) {
+	p := catwalk.Provider{
+		ID:                  "openrouter",
+		DefaultLargeModelID: "nonexistent-model",
+		Models: []catwalk.Model{
+			{ID: "alpha"}, {ID: "beta"},
+		},
+	}
+	got := modelsForService([]catwalk.Provider{p}, "openrouter")
+	if len(got) != 2 {
+		t.Fatalf("expected 2 models, got %v", got)
+	}
+}
+
+// TestModelsForServiceSkipsEmptyIDs confirms model entries with empty IDs
+// are filtered out.
+func TestModelsForServiceSkipsEmptyIDs(t *testing.T) {
+	p := catwalk.Provider{
+		ID: "openrouter",
+		Models: []catwalk.Model{
+			{ID: ""}, {ID: "valid"}, {ID: ""},
+		},
+	}
+	got := modelsForService([]catwalk.Provider{p}, "openrouter")
+	if len(got) != 1 || got[0] != "valid" {
+		t.Fatalf("expected only 'valid', got %v", got)
+	}
+}
+
+// TestHandleModelsCommandPickerStateAfterFilter verifies the picker state is
+// consistent after opening and typing into it via Update.
+func TestHandleModelsCommandPickerStateAfterFilter(t *testing.T) {
+	stubCatalog(t, []catwalk.Provider{openrouterFixture()})
+	m := newTestModel(t)
+	m.config.Service = "openrouter"
+
+	result, _ := m.handleCommand("/models")
+	model := result.(Model)
+	if model.picker == nil {
+		t.Fatalf("expected picker open")
+	}
+
+	// Type two chars then backspace one — filter should narrow then widen.
+	next, _ := model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'h'}})
+	next, _ = next.(Model).Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'a'}})
+	final, _ := next.(Model).Update(tea.KeyMsg{Type: tea.KeyBackspace})
+	pickerModel := final.(Model)
+	if pickerModel.picker == nil {
+		t.Fatal("picker should still be open")
+	}
+	// Filter is "h" — should match haiku-4 at minimum.
+	if len(pickerModel.picker.filtered) < 1 {
+		t.Fatalf("filtered too narrow: %d entries for query=%q", len(pickerModel.picker.filtered), pickerModel.picker.query)
+	}
+}
+
+// TestHandleModelsCommandServiceStripped confirms the service join is robust
+// against surrounding whitespace.
+func TestHandleModelsCommandServiceStripped(t *testing.T) {
+	stubCatalog(t, []catwalk.Provider{openrouterFixture()})
+	m := newTestModel(t)
+	m.config.Service = "  openrouter  "
+
+	result, _ := m.handleCommand("/models")
+	model := result.(Model)
+	if model.picker == nil {
+		t.Fatal("picker should open with whitespace-stripped service")
+	}
+}
