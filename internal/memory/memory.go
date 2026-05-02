@@ -86,6 +86,45 @@ func SaveScoped(sessionDir, workDir string, scope Scope, content string) error {
 	return os.WriteFile(path, []byte(content), 0644)
 }
 
+// AppendHot appends a markdown entry to the hot memory file for the given
+// scope, creating parent directories as needed. Concurrent writers are
+// serialized via flock. Empty content is a no-op.
+func AppendHot(sessionDir, workDir string, scope Scope, when time.Time, title, content string) error {
+	content = strings.TrimSpace(content)
+	if content == "" {
+		return nil
+	}
+
+	path := HotPath(sessionDir, workDir, scope)
+	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
+		return fmt.Errorf("create hot memory dir: %w", err)
+	}
+
+	f, err := os.OpenFile(path, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0644)
+	if err != nil {
+		return fmt.Errorf("open hot memory file: %w", err)
+	}
+	defer f.Close()
+
+	if err := syscall.Flock(int(f.Fd()), syscall.LOCK_EX); err != nil {
+		return fmt.Errorf("flock hot memory: %w", err)
+	}
+	defer syscall.Flock(int(f.Fd()), syscall.LOCK_UN) //nolint:errcheck
+
+	heading := strings.TrimSpace(title)
+	if heading == "" {
+		heading = when.Format(time.RFC3339)
+	} else {
+		heading = fmt.Sprintf("%s (%s)", heading, when.Format(time.RFC3339))
+	}
+
+	entry := fmt.Sprintf("## %s\n\n%s\n\n", heading, content)
+	if _, err := f.WriteString(entry); err != nil {
+		return fmt.Errorf("append hot memory: %w", err)
+	}
+	return nil
+}
+
 // DailyPath returns the markdown file used for durable daily memory for the
 // current worktree scope.
 func DailyPath(sessionDir, workDir string, when time.Time) string {

@@ -143,6 +143,39 @@ func (r *Registry) Definitions() []ToolDef {
 		{
 			Type: "function",
 			Function: ToolFuncDef{
+				Name:        "write_memory",
+				Description: "Persist a memory entry (decision, preference, work-state note) into hot memory for the current scope, or override with scope='root' or a specific channel/query. Use 'daily' to append to the durable daily archive instead. Appended as a dated markdown section so search_memory can recall it later.",
+				Parameters: map[string]interface{}{
+					"type": "object",
+					"properties": map[string]interface{}{
+						"content": map[string]interface{}{
+							"type":        "string",
+							"description": "Markdown content to remember. Plain prose or a bulleted list works.",
+						},
+						"title": map[string]interface{}{
+							"type":        "string",
+							"description": "Optional heading for the entry (e.g. 'decision: drop daemon').",
+						},
+						"scope": map[string]interface{}{
+							"type":        "string",
+							"description": "Optional scope override: 'current' (default), 'root', 'channel', or 'query'.",
+						},
+						"name": map[string]interface{}{
+							"type":        "string",
+							"description": "Required when scope is 'channel' or 'query'. The channel (#name) or query (nick) to write to.",
+						},
+						"daily": map[string]interface{}{
+							"type":        "boolean",
+							"description": "If true, append to the durable daily archive instead of the hot file (default false).",
+						},
+					},
+					"required": []string{"content"},
+				},
+			},
+		},
+		{
+			Type: "function",
+			Function: ToolFuncDef{
 				Name:        "bash",
 				Description: "Execute a bash command. Returns stdout and stderr.",
 				Parameters: map[string]interface{}{
@@ -382,6 +415,8 @@ func (r *Registry) Execute(ctx context.Context, name string, argsJSON string) (s
 		return r.execEdit(argsJSON)
 	case "search_memory":
 		return r.execSearchMemory(argsJSON)
+	case "write_memory":
+		return r.execWriteMemory(argsJSON)
 	case "bash":
 		return r.execBash(ctx, argsJSON)
 	case "terminal_start":
@@ -534,6 +569,61 @@ func (r *Registry) execSearchMemory(argsJSON string) (string, error) {
 	}
 
 	return memorypkg.RenderSearchResults(args.Query, results), nil
+}
+
+func (r *Registry) execWriteMemory(argsJSON string) (string, error) {
+	var args struct {
+		Content string `json:"content"`
+		Title   string `json:"title"`
+		Scope   string `json:"scope"`
+		Name    string `json:"name"`
+		Daily   bool   `json:"daily"`
+	}
+	if err := json.Unmarshal([]byte(argsJSON), &args); err != nil {
+		return "", fmt.Errorf("parse args: %w", err)
+	}
+	if strings.TrimSpace(args.Content) == "" {
+		return "", fmt.Errorf("content is required")
+	}
+
+	scope := r.Scope
+	switch strings.ToLower(strings.TrimSpace(args.Scope)) {
+	case "", "current":
+		// keep r.Scope
+	case "root":
+		scope = memorypkg.RootScope()
+	case "channel":
+		if strings.TrimSpace(args.Name) == "" {
+			return "", fmt.Errorf("name is required when scope='channel'")
+		}
+		root := memorypkg.RootScope()
+		scope = memorypkg.ChannelScope(args.Name, &root)
+	case "query":
+		if strings.TrimSpace(args.Name) == "" {
+			return "", fmt.Errorf("name is required when scope='query'")
+		}
+		root := memorypkg.RootScope()
+		scope = memorypkg.QueryScope(args.Name, &root)
+	default:
+		return "", fmt.Errorf("unknown scope %q (want 'current', 'root', 'channel', or 'query')", args.Scope)
+	}
+
+	now := time.Now()
+	if args.Daily {
+		body := args.Content
+		if t := strings.TrimSpace(args.Title); t != "" {
+			body = "### " + t + "\n\n" + body
+		}
+		if err := memorypkg.AppendDailyForScope(r.SessionDir, r.WorkDir, scope, now, body); err != nil {
+			return "", err
+		}
+		return fmt.Sprintf("Appended %d bytes to daily memory (%s)", len(args.Content), memorypkg.DailyPathForScope(r.SessionDir, r.WorkDir, scope, now)), nil
+	}
+
+	if err := memorypkg.AppendHot(r.SessionDir, r.WorkDir, scope, now, args.Title, args.Content); err != nil {
+		return "", err
+	}
+	return fmt.Sprintf("Wrote %d bytes to %s", len(args.Content), memorypkg.HotPath(r.SessionDir, r.WorkDir, scope)), nil
 }
 
 func (r *Registry) execBash(ctx context.Context, argsJSON string) (string, error) {

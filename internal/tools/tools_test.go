@@ -10,6 +10,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	memorypkg "github.com/jstamagal/bitchtea/internal/memory"
 )
 
 func TestReadFile(t *testing.T) {
@@ -127,8 +129,8 @@ func TestUnknownTool(t *testing.T) {
 func TestDefinitions(t *testing.T) {
 	reg := NewRegistry(t.TempDir(), t.TempDir())
 	defs := reg.Definitions()
-	if len(defs) != 13 {
-		t.Fatalf("expected 13 tool definitions, got %d", len(defs))
+	if len(defs) != 14 {
+		t.Fatalf("expected 14 tool definitions, got %d", len(defs))
 	}
 
 	names := map[string]bool{}
@@ -136,7 +138,7 @@ func TestDefinitions(t *testing.T) {
 		names[d.Function.Name] = true
 	}
 	for _, expected := range []string{
-		"read", "write", "edit", "search_memory", "bash",
+		"read", "write", "edit", "search_memory", "write_memory", "bash",
 		"terminal_start", "terminal_send", "terminal_keys", "terminal_snapshot",
 		"terminal_wait", "terminal_resize", "terminal_close",
 		"preview_image",
@@ -164,6 +166,70 @@ func TestSearchMemoryTool(t *testing.T) {
 	}
 	if !strings.Contains(result, "Source: MEMORY.md") {
 		t.Fatalf("expected MEMORY.md source, got %q", result)
+	}
+}
+
+func TestWriteMemoryTool(t *testing.T) {
+	workDir := t.TempDir()
+	sessionDir := filepath.Join(t.TempDir(), "sessions")
+	reg := NewRegistry(workDir, sessionDir)
+
+	// Default scope (root) writes to MEMORY.md in workDir.
+	out, err := reg.Execute(context.Background(), "write_memory",
+		`{"content":"prefer flat history over forks","title":"decision: linear sessions"}`)
+	if err != nil {
+		t.Fatalf("write_memory root: %v", err)
+	}
+	if !strings.Contains(out, "MEMORY.md") {
+		t.Fatalf("expected MEMORY.md in result, got %q", out)
+	}
+	data, err := os.ReadFile(filepath.Join(workDir, "MEMORY.md"))
+	if err != nil {
+		t.Fatalf("read MEMORY.md: %v", err)
+	}
+	if !strings.Contains(string(data), "decision: linear sessions") ||
+		!strings.Contains(string(data), "prefer flat history over forks") {
+		t.Fatalf("memory file missing entry:\n%s", data)
+	}
+
+	// search_memory should now find it.
+	res, err := reg.Execute(context.Background(), "search_memory", `{"query":"linear sessions"}`)
+	if err != nil {
+		t.Fatalf("search_memory: %v", err)
+	}
+	if !strings.Contains(res, "prefer flat history") {
+		t.Fatalf("search did not surface written entry: %q", res)
+	}
+
+	// Channel scope override writes under contexts/channels/.
+	if _, err := reg.Execute(context.Background(), "write_memory",
+		`{"content":"#dev prefers terse replies","scope":"channel","name":"#dev"}`); err != nil {
+		t.Fatalf("write_memory channel: %v", err)
+	}
+	rootScope := memorypkg.RootScope()
+	channel := memorypkg.ChannelScope("#dev", &rootScope)
+	hot := memorypkg.HotPath(sessionDir, workDir, channel)
+	chData, err := os.ReadFile(hot)
+	if err != nil {
+		t.Fatalf("read channel HOT.md (%s): %v", hot, err)
+	}
+	if !strings.Contains(string(chData), "#dev prefers terse replies") {
+		t.Fatalf("channel memory missing entry:\n%s", chData)
+	}
+
+	// Daily mode appends to durable archive.
+	if _, err := reg.Execute(context.Background(), "write_memory",
+		`{"content":"flushed at end of session","daily":true,"title":"flush"}`); err != nil {
+		t.Fatalf("write_memory daily: %v", err)
+	}
+
+	// Missing content fails.
+	if _, err := reg.Execute(context.Background(), "write_memory", `{"content":"   "}`); err == nil {
+		t.Fatal("expected error for empty content")
+	}
+	// Channel scope without name fails.
+	if _, err := reg.Execute(context.Background(), "write_memory", `{"content":"x","scope":"channel"}`); err == nil {
+		t.Fatal("expected error when channel scope missing name")
 	}
 }
 
