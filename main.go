@@ -12,6 +12,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 
 	"github.com/jstamagal/bitchtea/internal/agent"
+	"github.com/jstamagal/bitchtea/internal/catalog"
 	"github.com/jstamagal/bitchtea/internal/config"
 	"github.com/jstamagal/bitchtea/internal/session"
 	"github.com/jstamagal/bitchtea/internal/ui"
@@ -31,6 +32,13 @@ func main() {
 
 	cfg := config.DefaultConfig()
 	config.DetectProvider(&cfg)
+
+	// Kick the catwalk catalog refresh in the background. Off by default;
+	// only runs when both BITCHTEA_CATWALK_AUTOUPDATE=true (or 1) and
+	// BITCHTEA_CATWALK_URL are set. Bounded by a 5s context so a hung
+	// catwalk endpoint can never block startup. Errors are swallowed —
+	// next read just sees the previous cache (or the embedded floor).
+	maybeStartCatalogRefresh()
 
 	opts, rcCommands, err := applyStartupConfig(&cfg, os.Args[1:], config.ParseRC())
 	if err != nil {
@@ -316,6 +324,40 @@ func truncateForLog(s string, max int) string {
 	return s[:max] + "..."
 }
 
+// maybeStartCatalogRefresh fires a single background goroutine that tries to
+// pull a fresh catwalk catalog into ~/.bitchtea/catalog/providers.json. It
+// is gated on env vars, time-bound, and entirely non-fatal: startup never
+// waits on the result, and no error is ever surfaced to the user. Next
+// startup picks up whatever the goroutine wrote.
+func maybeStartCatalogRefresh() {
+	enabled := envBool("BITCHTEA_CATWALK_AUTOUPDATE")
+	url := strings.TrimSpace(os.Getenv("BITCHTEA_CATWALK_URL"))
+	if !enabled || url == "" {
+		return
+	}
+	cachePath := catalog.CachePath(config.BaseDir())
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), catalog.DefaultRefreshTimeout)
+		defer cancel()
+		_ = catalog.Refresh(ctx, catalog.RefreshOptions{
+			CachePath: cachePath,
+			Enabled:   true,
+			SourceURL: url,
+		})
+	}()
+}
+
+// envBool reads a boolean env var with the same loose acceptance most
+// BITCHTEA_* flags use: "1", "true", "yes", "on" (case-insensitive) → true.
+func envBool(name string) bool {
+	v := strings.ToLower(strings.TrimSpace(os.Getenv(name)))
+	switch v {
+	case "1", "true", "yes", "on":
+		return true
+	}
+	return false
+}
+
 func printUsage() {
 	fmt.Println(`bitchtea — putting the BITCH back in your terminal
 
@@ -339,6 +381,9 @@ Environment:
   ZAI_API_KEY            Z.ai API key for the zai-* profiles
   BITCHTEA_MODEL         Default model
   BITCHTEA_PROVIDER      Provider name (openai, anthropic)
+  BITCHTEA_CATWALK_URL   Catwalk catalog base URL (no default; off when unset)
+  BITCHTEA_CATWALK_AUTOUPDATE
+                         Enable background catalog refresh (default: false)
 
 Commands (inside the TUI):
   /set <key> [value]     Show/change settings (provider, model, baseurl, apikey,
