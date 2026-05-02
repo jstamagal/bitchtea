@@ -14,6 +14,7 @@ import (
 	"github.com/jstamagal/bitchtea/internal/agent"
 	"github.com/jstamagal/bitchtea/internal/catalog"
 	"github.com/jstamagal/bitchtea/internal/config"
+	"github.com/jstamagal/bitchtea/internal/llm"
 	"github.com/jstamagal/bitchtea/internal/session"
 	"github.com/jstamagal/bitchtea/internal/ui"
 )
@@ -47,6 +48,13 @@ func main() {
 	// catwalk endpoint can never block startup. Errors are swallowed —
 	// next read just sees the previous cache (or the embedded floor).
 	maybeStartCatalogRefresh()
+
+	// Wire CostTracker to the catalog cache as the default price source.
+	// catalog.Load returns the best envelope it can produce synchronously
+	// (cache → embedded → empty); CatalogPriceSource transparently falls
+	// back to the embedded snapshot on any per-model miss, so this is
+	// always at-least-as-good as the prior embedded-only behavior.
+	llm.SetDefaultPriceSource(llm.CatalogPriceSource(catalog.Load(catalog.LoadOptions{})))
 
 	opts, rcCommands, err := applyStartupConfig(&cfg, os.Args[1:], config.ParseRC())
 	if err != nil {

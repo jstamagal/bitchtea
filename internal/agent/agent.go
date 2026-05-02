@@ -1073,7 +1073,10 @@ func messageText(m fantasy.Message) string {
 	return sb.String()
 }
 
-// Cost returns the estimated cost in USD using the cost tracker
+// Cost returns the estimated cost in USD using the cost tracker. The
+// upstream Service identity is passed through so a CatalogPriceSource can
+// disambiguate models that appear under multiple providers (the
+// "join on Service ↔ InferenceProvider" rule from the Phase 5 audit).
 func (a *Agent) Cost() float64 {
-	return a.CostTracker.EstimateCost(a.config.Model)
+	return a.CostTracker.EstimateCostFor(a.config.Model, a.config.Service)
 }
