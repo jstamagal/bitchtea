@@ -18,30 +18,71 @@ import (
 // Tests inject directly via this struct.
 type providerConfig struct {
 	provider string
+	service  string // upstream service identity; if set, routes by service instead of host
 	apiKey   string
 	baseURL  string
 	http     *http.Client // nil = SDK default
 }
 
-// buildProvider returns a fantasy.Provider for cfg. Routing is host-based on
-// cfg.baseURL (parsed via net/url) compared against each provider package's
-// DefaultURL constant. An unknown openai-style host falls back to openaicompat.
+// buildProvider returns a fantasy.Provider for cfg. When cfg.service is set,
+// routing is by service identity (Phase 9). Otherwise it falls back to
+// host-based routing on cfg.baseURL for backwards compatibility.
 func buildProvider(cfg providerConfig) (fantasy.Provider, error) {
 	switch cfg.provider {
 	case "anthropic":
-		baseURL := stripV1Suffix(cfg.baseURL)
-		opts := []anthropic.Option{anthropic.WithAPIKey(cfg.apiKey)}
-		if baseURL != "" {
-			opts = append(opts, anthropic.WithBaseURL(baseURL))
-		}
-		if cfg.http != nil {
-			opts = append(opts, anthropic.WithHTTPClient(cfg.http))
-		}
-		return anthropic.New(opts...)
+		return buildAnthropicProvider(cfg)
 	case "openai", "":
+		if cfg.service != "" {
+			return routeByService(cfg)
+		}
 		return routeOpenAICompatible(cfg)
 	}
 	return nil, fmt.Errorf("unsupported provider: %q", cfg.provider)
+}
+
+// buildAnthropicProvider builds an anthropic.Provider with baseURL override.
+func buildAnthropicProvider(cfg providerConfig) (fantasy.Provider, error) {
+	baseURL := stripV1Suffix(cfg.baseURL)
+	opts := []anthropic.Option{anthropic.WithAPIKey(cfg.apiKey)}
+	if baseURL != "" {
+		opts = append(opts, anthropic.WithBaseURL(baseURL))
+	}
+	if cfg.http != nil {
+		opts = append(opts, anthropic.WithHTTPClient(cfg.http))
+	}
+	return anthropic.New(opts...)
+}
+
+// routeByService selects the fantasy provider package based on the Service
+// identity. This replaces host-based URL sniffing for Phase 9.
+func routeByService(cfg providerConfig) (fantasy.Provider, error) {
+	switch cfg.service {
+	case "openrouter":
+		opts := []openrouter.Option{openrouter.WithAPIKey(cfg.apiKey)}
+		if cfg.http != nil {
+			opts = append(opts, openrouter.WithHTTPClient(cfg.http))
+		}
+		return openrouter.New(opts...)
+
+	case "vercel":
+		opts := []vercel.Option{vercel.WithAPIKey(cfg.apiKey)}
+		if cfg.http != nil {
+			opts = append(opts, vercel.WithHTTPClient(cfg.http))
+		}
+		return vercel.New(opts...)
+
+	default:
+		// openai, ollama, zai-openai, aihubmix, copilot, xai, custom, etc.
+		// All use openaicompat with baseURL override.
+		opts := []openaicompat.Option{
+			openaicompat.WithAPIKey(cfg.apiKey),
+			openaicompat.WithBaseURL(cfg.baseURL),
+		}
+		if cfg.http != nil {
+			opts = append(opts, openaicompat.WithHTTPClient(cfg.http))
+		}
+		return openaicompat.New(opts...)
+	}
 }
 
 // routeOpenAICompatible picks between openai/openrouter/vercel/openaicompat

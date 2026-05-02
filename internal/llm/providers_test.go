@@ -199,6 +199,126 @@ func TestHostOfMust_ReturnsHost(t *testing.T) {
 	}
 }
 
+// --- routeByService: service-identity routing (Phase 9) -------------------
+
+func TestRouteByService_OpenRouter(t *testing.T) {
+	p, err := routeByService(providerConfig{
+		service: "openrouter",
+		apiKey:  "sk-test",
+		baseURL: "https://openrouter.ai/api/v1",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if p == nil {
+		t.Fatal("expected non-nil provider")
+	}
+}
+
+func TestRouteByService_Vercel(t *testing.T) {
+	p, err := routeByService(providerConfig{
+		service: "vercel",
+		apiKey:  "sk-test",
+		baseURL: "https://ai-gateway.vercel.sh/v1",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if p == nil {
+		t.Fatal("expected non-nil provider")
+	}
+}
+
+func TestRouteByService_Ollama(t *testing.T) {
+	p, err := routeByService(providerConfig{
+		service: "ollama",
+		apiKey:  "",
+		baseURL: "http://localhost:11434/v1",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if p == nil {
+		t.Fatal("expected non-nil provider")
+	}
+}
+
+func TestRouteByService_ZAIOpenAI(t *testing.T) {
+	p, err := routeByService(providerConfig{
+		service: "zai-openai",
+		apiKey:  "sk-test",
+		baseURL: "https://api.z.ai/v1",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if p == nil {
+		t.Fatal("expected non-nil provider")
+	}
+}
+
+func TestRouteByService_Custom(t *testing.T) {
+	p, err := routeByService(providerConfig{
+		service: "custom",
+		apiKey:  "sk-test",
+		baseURL: "https://my-proxy.example.com/v1",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if p == nil {
+		t.Fatal("expected non-nil provider")
+	}
+}
+
+func TestRouteByService_EmptyFallsToOpenAICompat(t *testing.T) {
+	// Empty service falls to default (openaicompat).
+	p, err := routeByService(providerConfig{
+		service: "",
+		apiKey:  "sk-test",
+		baseURL: "https://my-proxy.example.com/v1",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if p == nil {
+		t.Fatal("expected non-nil provider")
+	}
+}
+
+// buildProvider with service set should use routeByService, not host routing.
+
+func TestBuildProvider_WithServiceSkipsHostRouting(t *testing.T) {
+	// ollama service with localhost URL → routeByService → openaicompat
+	p, err := buildProvider(providerConfig{
+		provider: "openai",
+		service:  "ollama",
+		apiKey:   "",
+		baseURL:  "http://localhost:11434/v1",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if p == nil {
+		t.Fatal("expected non-nil provider")
+	}
+}
+
+func TestBuildProvider_WithoutServiceUsesHostRouting(t *testing.T) {
+	// No service → falls back to routeOpenAICompatible (host-based).
+	p, err := buildProvider(providerConfig{
+		provider: "openai",
+		apiKey:   "sk-test",
+		baseURL:  "https://openrouter.ai/api/v1",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if p == nil {
+		t.Fatal("expected non-nil provider")
+	}
+}
+
 // --- stripV1Suffix -------------------------------------------------------
 
 func TestStripV1Suffix(t *testing.T) {

@@ -225,6 +225,7 @@ func (c *Client) ensureModel(ctx context.Context) (fantasy.LanguageModel, error)
 func (c *Client) toProviderConfigLocked() providerConfig {
 	cfg := providerConfig{
 		provider: c.Provider,
+		service:  c.Service,
 		apiKey:   c.APIKey,
 		baseURL:  c.BaseURL,
 	}
