@@ -13,9 +13,18 @@ Slash commands control the TUI. Use them to bend the session to your will.
 ## 🧠 MODEL & CONFIG
 
 - **`/model <name>`**: Switch the LLM (e.g., `gpt-4o`, `claude-3-5-sonnet-latest`).
-- **`/provider <name>`**: Switch provider (e.g., `openai`, `anthropic`).
-- **`/profile [load|save|delete] <name>`**: Manage saved connection profiles.
-- **`/set <key> <value>`**: Change settings (e.g., `nick`, `sound`, `auto-next`).
+- **`/provider <name>`**: Switch the wire format (`openai` or `anthropic`). See "Provider vs Service" below.
+- **`/profile [load|save|show|delete] <name>`**: Manage saved connection profiles. `show` previews a profile (provider, service, model, baseurl, masked key) without loading it.
+- **`/set <key> <value>`**: Change settings (e.g., `nick`, `sound`, `auto-next`, `service`). The `service` key relabels the upstream identity without altering the transport — see "Provider vs Service" below.
+
+### Provider vs Service
+
+`provider` and `service` are two distinct fields on every config and profile:
+
+- **`provider`** is the *wire format* the client speaks. Today it is always one of `openai` or `anthropic`. It controls request body shape, auth header style, and stream parsing. Setting `/set provider` (or `/provider`) or `/set baseurl` clobbers `service` to `custom`, because the per-service behavior gates can no longer trust the previous identity once you've redirected the transport.
+- **`service`** is the *upstream identity*: which actual API you are talking to (`openai`, `anthropic`, `ollama`, `openrouter`, `zai-openai`, `zai-anthropic`, `vercel`, ... or `custom`). It exists so per-service quirks — Anthropic prompt caching, OpenRouter reasoning forwarding, Ollama empty-key allowance, etc. — can be gated on identity rather than fragile URL sniffing. Built-in profiles populate it; legacy profiles missing the field are derived lazily on load (by name, then by base-URL host, then `custom`). `/set service <value>` accepts any string verbatim and is treated as a metadata relabel — your active profile name is preserved.
+
+Concrete example: the `openrouter` built-in is `provider=openai service=openrouter` because OpenRouter speaks the OpenAI wire format but is not OpenAI; behavior gates that fire only for native OpenAI must check `service`, not `provider`. Full migration notes live in [`phase-9-service-identity.md`](phase-9-service-identity.md).
 
 ## 💾 SESSION & MEMORY
 

@@ -349,7 +349,8 @@ Commands (inside the TUI):
   /sessions              List saved sessions
   /tree                  Show session tree
   /fork                  Fork session
-  /set <key> [value]     Show/change settings (sound, auto-next, auto-idea, etc.)
+  /set <key> [value]     Show/change settings (provider, model, baseurl, apikey,
+                         service, nick, profile, sound, auto-next, auto-idea)
   /mp3 [cmd]             Toggle MP3 panel and player
   /help                  Show help
   /quit                  Exit

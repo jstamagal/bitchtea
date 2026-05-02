@@ -76,9 +76,9 @@ const helpCommandText = "Commands:\n" +
 	"  /msg <nick> <text>  One-shot send to nick, no focus change\n" +
 	"  /channels           List open contexts\n" +
 	"  /set [key [value]]  Show or change a setting\n" +
-	"                        keys: provider, model, baseurl, apikey, nick,\n" +
-	"                              profile, sound, auto-next, auto-idea\n" +
-	"  /profile [cmd]      save/load/delete profiles (built-ins: ollama, openrouter, etc.)\n" +
+	"                        keys: provider, model, baseurl, apikey, service,\n" +
+	"                              nick, profile, sound, auto-next, auto-idea\n" +
+	"  /profile [cmd]      save/load/show/delete profiles (built-ins: ollama, openrouter, etc.)\n" +
 	"  /compact            Compact conversation context\n" +
 	"  /clear              Clear chat display\n" +
 	"  /restart            Reset agent and start a fresh conversation\n" +
@@ -120,15 +120,23 @@ func handleSetCommand(m Model, input string, parts []string) (Model, tea.Cmd) {
 			value, _ := config.GetSetting(m.config, key)
 			sb.WriteString(fmt.Sprintf("  %s = %s\n", key, value))
 		}
+		// Service is the upstream identity (openai, ollama, openrouter, ...)
+		// distinct from Provider (wire format). Surfaced here so users can see
+		// what per-service gates will fire. See docs/phase-9-service-identity.md.
+		sb.WriteString(fmt.Sprintf("  service = %s\n", serviceDisplay(m.config.Service)))
 		m.sysMsg(strings.TrimRight(sb.String(), "\n"))
 		return m, nil
 	}
 
 	key := strings.ToLower(parts[1])
 	if len(parts) == 2 {
+		if key == "service" {
+			m.sysMsg(fmt.Sprintf("service = %s", serviceDisplay(m.config.Service)))
+			return m, nil
+		}
 		value, ok := config.GetSetting(m.config, key)
 		if !ok {
-			m.errMsg(fmt.Sprintf("Unknown setting %q. Valid keys: %s", key, strings.Join(config.SetKeys(), ", ")))
+			m.errMsg(fmt.Sprintf("Unknown setting %q. Valid keys: %s", key, strings.Join(setKeysWithService(), ", ")))
 			return m, nil
 		}
 		m.sysMsg(fmt.Sprintf("%s = %s", key, value))
@@ -145,10 +153,12 @@ func handleSetCommand(m Model, input string, parts []string) (Model, tea.Cmd) {
 		return handleBaseURLCommand(m, "/baseurl "+value, []string{"/baseurl", value})
 	case "apikey":
 		return handleAPIKeyCommand(m, "/apikey "+value, []string{"/apikey", value})
+	case "service":
+		return handleServiceSet(m, value)
 	}
 
 	if !config.ApplySet(m.config, key, value) {
-		m.errMsg(fmt.Sprintf("Unknown setting %q. Valid keys: %s", key, strings.Join(config.SetKeys(), ", ")))
+		m.errMsg(fmt.Sprintf("Unknown setting %q. Valid keys: %s", key, strings.Join(setKeysWithService(), ", ")))
 		return m, nil
 	}
 
@@ -167,7 +177,7 @@ func handleSetCommand(m Model, input string, parts []string) (Model, tea.Cmd) {
 	case "sound", "auto-next", "auto-idea":
 		// Config-only settings; no agent sync required.
 	default:
-		m.errMsg(fmt.Sprintf("Unknown setting %q. Valid keys: %s", key, strings.Join(config.SetKeys(), ", ")))
+		m.errMsg(fmt.Sprintf("Unknown setting %q. Valid keys: %s", key, strings.Join(setKeysWithService(), ", ")))
 		return m, nil
 	}
 
@@ -593,12 +603,27 @@ func handleProfileCommand(m Model, _ string, parts []string) (Model, tea.Cmd) {
 	if len(parts) < 2 {
 		names := config.ListProfiles()
 		m.sysMsg("Profiles: " + strings.Join(names, ", ") +
-			"\nUsage: /profile save <name> | /profile load <name> | /profile delete <name>")
+			"\nUsage: /profile save <name> | /profile load <name> | /profile show <name> | /profile delete <name>")
 		return m, nil
 	}
 
 	action := parts[1]
 	switch action {
+	case "show":
+		if len(parts) < 3 {
+			m.errMsg("Usage: /profile show <name>")
+			return m, nil
+		}
+		name := parts[2]
+		p, err := config.ResolveProfile(name)
+		if err != nil {
+			m.errMsg(profileLookupMessage(name))
+			return m, nil
+		}
+		m.sysMsg(fmt.Sprintf("Profile: %s\n  provider=%s service=%s model=%s\n  baseurl=%s\n  endpoint=%s\n  apikey=%s",
+			name, p.Provider, serviceDisplay(p.Service), p.Model, p.BaseURL,
+			transportEndpointPreview(p.Provider, p.BaseURL), maskSecret(p.APIKey)))
+		return m, nil
 	case "save":
 		if len(parts) < 3 {
 			m.errMsg("Usage: /profile save <name>")
@@ -608,6 +633,7 @@ func handleProfileCommand(m Model, _ string, parts []string) (Model, tea.Cmd) {
 		p := config.Profile{
 			Name:     name,
 			Provider: m.config.Provider,
+			Service:  m.config.Service,
 			BaseURL:  m.config.BaseURL,
 			APIKey:   m.config.APIKey,
 			Model:    m.config.Model,
@@ -615,7 +641,8 @@ func handleProfileCommand(m Model, _ string, parts []string) (Model, tea.Cmd) {
 		if err := config.SaveProfile(p); err != nil {
 			m.errMsg(fmt.Sprintf("Save failed: %v", err))
 		} else {
-			m.sysMsg(fmt.Sprintf("*** Profile saved: %s (provider=%s model=%s)", name, p.Provider, p.Model))
+			m.sysMsg(fmt.Sprintf("*** Profile saved: %s (provider=%s service=%s model=%s)",
+				name, p.Provider, serviceDisplay(p.Service), p.Model))
 		}
 	case "load":
 		if len(parts) < 3 {
@@ -783,10 +810,12 @@ func applyProfileToModel(m *Model, name string, p *config.Profile, verbose bool)
 
 	masked := maskSecret(p.APIKey)
 	if verbose {
-		m.sysMsg(fmt.Sprintf("*** Profile loaded: %s\n  provider=%s model=%s\n  baseurl=%s\n  endpoint=%s\n  apikey=%s",
-			name, p.Provider, p.Model, p.BaseURL, transportEndpointPreview(p.Provider, p.BaseURL), masked))
+		m.sysMsg(fmt.Sprintf("*** Profile loaded: %s\n  provider=%s service=%s model=%s\n  baseurl=%s\n  endpoint=%s\n  apikey=%s",
+			name, p.Provider, serviceDisplay(p.Service), p.Model, p.BaseURL,
+			transportEndpointPreview(p.Provider, p.BaseURL), masked))
 	} else {
-		m.sysMsg(fmt.Sprintf("*** Profile loaded: %s (provider=%s model=%s)", name, p.Provider, p.Model))
+		m.sysMsg(fmt.Sprintf("*** Profile loaded: %s (provider=%s service=%s model=%s)",
+			name, p.Provider, serviceDisplay(p.Service), p.Model))
 	}
 	if p.APIKey == "" {
 		m.sysMsg("This profile did not provide an API key. Set one with /apikey or the matching env var before connecting.")
@@ -798,6 +827,41 @@ func applyProfileToModel(m *Model, name string, p *config.Profile, verbose bool)
 
 func clearLoadedProfile(m *Model) {
 	m.config.Profile = ""
+}
+
+// handleServiceSet writes the user-supplied service identity verbatim. Per the
+// bt-fnt convention used for /set provider, /set baseurl, etc., no validation
+// is performed — any string is accepted, including arbitrary proxy labels.
+// Service is informational metadata used to gate per-service behavior (cache
+// control, reasoning forwarding, ...); see docs/phase-9-service-identity.md.
+func handleServiceSet(m Model, value string) (Model, tea.Cmd) {
+	if value == "" {
+		m.errMsg("Usage: /set service <value>")
+		return m, nil
+	}
+	m.config.Service = value
+	// Don't clear cfg.Profile here — relabeling Service is a metadata edit, not
+	// a transport switch. Provider/baseurl/apikey already drop the profile tag.
+	m.sysMsg(fmt.Sprintf("Service set to: %s", value))
+	return m, nil
+}
+
+// setKeysWithService returns the canonical /set key list with "service"
+// appended. Kept here (rather than in config.SetKeys) because /set service
+// is handled UI-side via verbatim routing, like /set provider.
+func setKeysWithService() []string {
+	keys := config.SetKeys()
+	return append(keys, "service")
+}
+
+// serviceDisplay renders cfg.Service for /set output. Built-ins fill the
+// field on load and DetectProvider sets it for env-detected providers, so an
+// empty value here means a hand-rolled config that hasn't been derived yet.
+func serviceDisplay(value string) string {
+	if value == "" {
+		return "<unset>"
+	}
+	return value
 }
 
 func maskSecret(value string) string {
