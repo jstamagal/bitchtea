@@ -708,6 +708,27 @@ func TestBashTruncatesAtRuneBoundary(t *testing.T) {
 	}
 }
 
+func TestExecuteCancelledContextReturnsError(t *testing.T) {
+	dir := t.TempDir()
+	reg := NewRegistry(dir, t.TempDir())
+
+	// Cancelled context should be caught by the early check in Execute
+	// for any tool, including those that don't use context internally.
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	tools := []string{"read", "write", "edit", "search_memory", "bash"}
+	for _, name := range tools {
+		_, err := reg.Execute(ctx, name, `{"path":"x","content":"x","query":"x","command":"x"}`)
+		if err == nil {
+			t.Errorf("Execute(%s) with cancelled context: expected error, got nil", name)
+		}
+		if !strings.Contains(err.Error(), "tool cancelled") {
+			t.Errorf("Execute(%s) error = %q, want contains 'tool cancelled'", name, err.Error())
+		}
+	}
+}
+
 func terminalIDFromResult(t *testing.T, result string) string {
 	t.Helper()
 	fields := strings.Fields(result)

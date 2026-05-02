@@ -408,6 +408,13 @@ func (r *Registry) Definitions() []ToolDef {
 
 // Execute runs a tool and returns the result
 func (r *Registry) Execute(ctx context.Context, name string, argsJSON string) (string, error) {
+	// Early cancellation check so tools that don't use context internally
+	// (read, write, edit, terminal_send, etc.) still respond to CancelTool
+	// instead of running to completion.
+	if err := ctx.Err(); err != nil {
+		return "", fmt.Errorf("tool cancelled: %w", err)
+	}
+
 	switch name {
 	case "read":
 		return r.execRead(argsJSON)
