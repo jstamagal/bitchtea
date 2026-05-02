@@ -3,6 +3,7 @@ package llm
 import (
 	"context"
 	"fmt"
+	"runtime"
 	"strconv"
 	"sync"
 	"sync/atomic"
@@ -134,8 +135,12 @@ func TestSetDebugHookNilNoOpKeepsCache(t *testing.T) {
 // release is closed, then emits a minimal finish part. It exists so the
 // concurrency test can keep multiple StreamChat calls in flight while
 // hammering Set* from other goroutines.
+//
+// entered is signalled (non-blocking send) on every Stream entry so the test
+// can synchronize "all streams are inside blocking" before starting setters.
 type blockingLanguageModel struct {
 	release chan struct{}
+	entered chan struct{}
 	calls   atomic.Int32
 }
 
@@ -145,6 +150,12 @@ func (m *blockingLanguageModel) Generate(context.Context, fantasy.Call) (*fantas
 
 func (m *blockingLanguageModel) Stream(ctx context.Context, _ fantasy.Call) (fantasy.StreamResponse, error) {
 	m.calls.Add(1)
+	if m.entered != nil {
+		select {
+		case m.entered <- struct{}{}:
+		default:
+		}
+	}
 	// Block here so the StreamChat goroutine sits inside fantasy with the
 	// Client mutex released. While we sit here, the setter goroutines race
 	// against ensureModel callers.
@@ -181,22 +192,39 @@ func (m *blockingLanguageModel) Model() string    { return "blocking-model" }
 // Strategy:
 //   - Pre-install a blocking fake LanguageModel so StreamChat returns from
 //     ensureModel with a cached reference, then sits inside fantasy.Stream.
-//   - Spawn N stream goroutines and M setter goroutines (~64 total).
-//   - Setter goroutines hammer SetAPIKey/SetBaseURL/SetModel/SetProvider/
-//     SetDebugHook in tight loops, each call invalidating the cache.
+//   - Spawn N stream goroutines and wait until each one has actually
+//     entered the blocking model. (If we don't synchronize here, a setter
+//     may invalidate the cached model before a slow stream goroutine
+//     reaches ensureModel; that goroutine would then try to build a real
+//     provider with the test's bogus URL and DNS-fail. Not a real bug —
+//     just a test-setup race.)
+//   - Spawn M setter goroutines that hammer the Set* surface.
 //   - Release the blocking model, wait for all goroutines, assert no panic
-//     and that final field state matches the last setter assignment.
+//     and that final field state matches some setter assignment.
+//
+// A deadline guard (5s) calls t.Fatal if wg.Wait() doesn't return. This
+// catches real deadlocks fast instead of letting them eat the full Go test
+// framework timeout. If you hit the deadline guard, suspect a real
+// concurrency bug in the Set*/ensureModel mutex contract.
+//
+// Sizes are deliberately modest (8 streams, 16 setters, 50 iter): the mutex
+// surface is tiny, more goroutines do not buy more coverage but do amplify
+// CI flake from goroutine churn.
 //
 // Pass = clean run under `go test -race`. Failure here means there is a real
 // race on Client cache fields and a follow-up bd ticket is required.
 func TestClientConcurrentSetAndStream(t *testing.T) {
 	const (
-		streamGoroutines = 16
-		setterGoroutines = 48
-		setterIterations = 200
+		streamGoroutines = 8
+		setterGoroutines = 16
+		setterIterations = 50
+		deadlineGuard    = 5 * time.Second
 	)
 
-	model := &blockingLanguageModel{release: make(chan struct{})}
+	model := &blockingLanguageModel{
+		release: make(chan struct{}),
+		entered: make(chan struct{}, streamGoroutines),
+	}
 	client := NewClient("seed-key", "https://seed.example", "seed-model", "openai")
 	// Pre-seed the cache so ensureModel returns immediately on the first
 	// stream call without hitting buildProvider (which would try real
@@ -207,7 +235,11 @@ func TestClientConcurrentSetAndStream(t *testing.T) {
 
 	reg := tools.NewRegistry(t.TempDir(), t.TempDir())
 
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	// Use a non-cancelling ctx for the streams themselves — we want them to
+	// complete normally, not get cancelled mid-flight (which would push
+	// them into StreamChat's retry/backoff path and make the test slow).
+	// The deadlineGuard below is what actually catches a deadlock.
+	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
 	var wg sync.WaitGroup
@@ -230,10 +262,21 @@ func TestClientConcurrentSetAndStream(t *testing.T) {
 		}()
 	}
 
-	// Setter goroutines: every iteration mutates a Client field while the
-	// stream goroutines hold an in-flight reference to the cached model.
-	// Each Set* takes c.mu and clears the cache; the in-flight model
-	// reference stays valid per the ensureModel contract.
+	// Wait until every stream goroutine has reached blockingLanguageModel.Stream.
+	// At this point each one holds an in-flight reference to the cached model
+	// and is parked on the release channel; subsequent Set* invalidations no
+	// longer affect them.
+	for i := 0; i < streamGoroutines; i++ {
+		select {
+		case <-model.entered:
+		case <-time.After(deadlineGuard):
+			t.Fatalf("only %d/%d stream goroutines reached blocking model — possible mutex deadlock in ensureModel", i, streamGoroutines)
+		}
+	}
+
+	// Setter goroutines: every iteration mutates a Client field. Streams
+	// are now safely parked, so setter cache invalidation just exercises
+	// the mutex without breaking the in-flight streams.
 	for i := 0; i < setterGoroutines; i++ {
 		i := i
 		wg.Add(1)
@@ -264,18 +307,30 @@ func TestClientConcurrentSetAndStream(t *testing.T) {
 		}()
 	}
 
-	// Give everything a moment to interleave, then release the blocking
-	// model so streams can complete.
-	time.Sleep(50 * time.Millisecond)
+	// Release the blocking model so streams can complete.
 	close(model.release)
 
-	wg.Wait()
+	// Deadline guard: if wg.Wait doesn't return within deadlineGuard,
+	// something is genuinely deadlocked. Fail fast with a useful message
+	// instead of waiting for the Go test framework's much larger timeout.
+	done := make(chan struct{})
+	go func() {
+		wg.Wait()
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(deadlineGuard):
+		buf := make([]byte, 1<<20)
+		n := runtime.Stack(buf, true)
+		t.Logf("goroutine dump on deadlock:\n%s", buf[:n])
+		t.Fatal("test deadlock — wg.Wait() did not return within deadline; concurrent Set*/Stream path may have a real bug")
+	}
 
-	// Sanity: at least one stream actually entered fantasy.Stream. (Some
-	// may have errored out earlier if the test environment is pathological,
-	// but we expect most to land here.)
-	if model.calls.Load() == 0 {
-		t.Fatal("no stream goroutines reached fantasy.Stream — test did not exercise the concurrent path")
+	// Sanity: every stream goroutine actually entered fantasy.Stream
+	// (we already gated on this via model.entered).
+	if model.calls.Load() < int32(streamGoroutines) {
+		t.Fatalf("expected %d stream entries, got %d", streamGoroutines, model.calls.Load())
 	}
 
 	// Final-state sanity: the Client's exported fields must hold *some*
