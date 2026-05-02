@@ -613,3 +613,156 @@ func TestAgentDoneDrainsFreshQueuedMessages(t *testing.T) {
 		t.Fatalf("expected fresh queue to be drained, got %#v", got.queued)
 	}
 }
+
+func TestEscClosesToolPanelBeforeCancelLadder(t *testing.T) {
+	cfg := config.DefaultConfig()
+	cfg.WorkDir = t.TempDir()
+	cfg.SessionDir = t.TempDir()
+
+	model := NewModel(&cfg)
+	// Panel is visible by default; streaming with active tool.
+	model.streaming = true
+	model.activeToolName = "bash"
+	model.cancel = func() {}
+
+	if !model.toolPanel.Visible {
+		t.Fatal("expected tool panel to start visible")
+	}
+
+	updated, _ := model.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	got := updated.(Model)
+
+	if got.toolPanel.Visible {
+		t.Fatal("expected first esc to close tool panel")
+	}
+	if !got.streaming {
+		t.Fatal("expected first esc to NOT cancel the turn when panel was open")
+	}
+	if len(got.messages) == 0 || !strings.Contains(got.messages[len(got.messages)-1].Content, "Tool panel closed") {
+		t.Fatalf("expected panel-close feedback, got %#v", got.messages)
+	}
+	// escStage should NOT be incremented — panel close is free.
+	if got.escStage != 0 {
+		t.Fatalf("expected esc stage 0 after panel close, got %d", got.escStage)
+	}
+}
+
+func TestEscClosesMP3PanelBeforeCancelLadder(t *testing.T) {
+	cfg := config.DefaultConfig()
+	cfg.WorkDir = t.TempDir()
+	cfg.SessionDir = t.TempDir()
+
+	model := NewModel(&cfg)
+	model.toolPanel.Visible = false // tool panel already closed
+	model.mp3.visible = true
+	model.streaming = true
+	model.cancel = func() {}
+
+	updated, _ := model.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	got := updated.(Model)
+
+	if got.mp3.visible {
+		t.Fatal("expected first esc to close MP3 panel")
+	}
+	if len(got.messages) == 0 || !strings.Contains(got.messages[len(got.messages)-1].Content, "MP3 panel closed") {
+		t.Fatalf("expected MP3 panel-close feedback, got %#v", got.messages)
+	}
+}
+
+func TestEscAfterPanelCloseStartsCancelLadder(t *testing.T) {
+	cfg := config.DefaultConfig()
+	cfg.WorkDir = t.TempDir()
+	cfg.SessionDir = t.TempDir()
+
+	model := NewModel(&cfg)
+	model.toolPanel.Visible = false // already closed
+	model.streaming = true
+	model.cancel = func() {}
+
+	// First meaningful Esc: prompt for turn cancel
+	updated, _ := model.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	got := updated.(Model)
+
+	if got.escStage != 1 {
+		t.Fatalf("expected esc stage 1 after first ladder esc, got %d", got.escStage)
+	}
+	if !got.streaming {
+		t.Fatal("expected first ladder esc to leave turn running")
+	}
+	if len(got.messages) == 0 || !strings.Contains(got.messages[len(got.messages)-1].Content, "Press Esc again") {
+		t.Fatalf("expected cancel-ladder prompt, got %#v", got.messages)
+	}
+
+	// Second meaningful Esc: cancel turn
+	updated, _ = got.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	got = updated.(Model)
+
+	if got.streaming {
+		t.Fatal("expected second ladder esc to cancel turn")
+	}
+}
+
+func TestEscResetsStageWhenIdle(t *testing.T) {
+	cfg := config.DefaultConfig()
+	cfg.WorkDir = t.TempDir()
+	cfg.SessionDir = t.TempDir()
+
+	model := NewModel(&cfg)
+	model.toolPanel.Visible = false // skip panel-close
+	model.streaming = false
+	model.escStage = 2
+	model.queueClearArmed = true
+
+	updated, _ := model.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	got := updated.(Model)
+
+	if got.escStage != 0 {
+		t.Fatalf("expected esc stage to reset when not streaming, got %d", got.escStage)
+	}
+	if got.queueClearArmed {
+		t.Fatal("expected queue clear arm to reset when idle")
+	}
+}
+
+func TestEscKeyLadderSequenceTransitions(t *testing.T) {
+	// Full sequence: idle → panel close → cancel ladder → queue clear
+	cfg := config.DefaultConfig()
+	cfg.WorkDir = t.TempDir()
+	cfg.SessionDir = t.TempDir()
+
+	model := NewModel(&cfg)
+	model.streaming = true
+	model.queued = []queuedMsg{{text: "msg", queuedAt: time.Now()}}
+	model.cancel = func() {}
+
+	// Step 1: close panel (toolPanel starts visible)
+	updated, _ := model.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	got := updated.(Model)
+	if got.toolPanel.Visible {
+		t.Fatal("step 1: expected tool panel to close")
+	}
+
+	// Step 2: first ladder esc — prompt
+	updated, _ = got.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	got = updated.(Model)
+	if got.escStage != 1 {
+		t.Fatalf("step 2: expected esc stage 1, got %d", got.escStage)
+	}
+
+	// Step 3: second ladder esc — cancel turn
+	updated, _ = got.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	got = updated.(Model)
+	if !got.queueClearArmed {
+		t.Fatal("step 3: expected queue clear armed after turn cancel")
+	}
+
+	// Step 4: clear queued messages
+	updated, _ = got.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	got = updated.(Model)
+	if got.queueClearArmed {
+		t.Fatal("step 4: expected queue clear arm to reset")
+	}
+	if len(got.queued) != 0 {
+		t.Fatalf("step 4: expected queue cleared, got %d", len(got.queued))
+	}
+}
