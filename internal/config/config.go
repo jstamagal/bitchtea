@@ -347,19 +347,10 @@ func ApplyProfile(cfg *Config, p *Profile) {
 }
 
 // ProfileAllowsEmptyAPIKey reports whether the selected transport can start
-// without credentials. Today that means local Ollama-compatible endpoints.
-//
-// TODO(bt-p9): Once Service is reliably populated end-to-end, replace the
-// URL-prefix sniffing with: cfg.Service == "ollama". Phase 9 (bt-p9-builtins)
-// added the field; gating switchover lands in a sibling ticket.
+// without credentials. Gated on Service identity (Phase 9) — only "ollama"
+// is allowed to run without an API key.
 func ProfileAllowsEmptyAPIKey(cfg Config) bool {
-	if cfg.Provider != "openai" {
-		return false
-	}
-
-	baseURL := strings.TrimSpace(strings.ToLower(cfg.BaseURL))
-	return strings.HasPrefix(baseURL, "http://localhost:11434/") ||
-		strings.HasPrefix(baseURL, "http://127.0.0.1:11434/")
+	return cfg.Service == "ollama"
 }
 
 // ResolveProfile loads a saved profile or falls back to built-in provider presets.

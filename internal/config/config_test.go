@@ -215,14 +215,17 @@ func TestListProfilesIncludesBuiltins(t *testing.T) {
 }
 
 func TestProfileAllowsEmptyAPIKey(t *testing.T) {
-	if !ProfileAllowsEmptyAPIKey(Config{Provider: "openai", BaseURL: "http://localhost:11434/v1"}) {
-		t.Fatal("ollama-compatible localhost endpoint should allow empty API key")
+	if !ProfileAllowsEmptyAPIKey(Config{Service: "ollama"}) {
+		t.Fatal("ollama service should allow empty API key")
 	}
-	if ProfileAllowsEmptyAPIKey(Config{Provider: "anthropic", BaseURL: "http://localhost:11434/v1"}) {
-		t.Fatal("anthropic transport should still require an API key")
+	if ProfileAllowsEmptyAPIKey(Config{Service: "anthropic"}) {
+		t.Fatal("anthropic service should still require an API key")
 	}
-	if ProfileAllowsEmptyAPIKey(Config{Provider: "openai", BaseURL: "https://api.openai.com/v1"}) {
-		t.Fatal("hosted openai endpoints should still require an API key")
+	if ProfileAllowsEmptyAPIKey(Config{Service: "openai"}) {
+		t.Fatal("openai service should still require an API key")
+	}
+	if ProfileAllowsEmptyAPIKey(Config{Service: ""}) {
+		t.Fatal("empty service should not allow empty API key")
 	}
 }
 
