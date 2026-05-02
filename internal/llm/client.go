@@ -57,6 +57,11 @@ type Client struct {
 	// each streamOnce call, cleared when the turn ends. The agent reads
 	// it to expose CancelTool to the UI.
 	toolCtx *ToolContextManager
+
+	// promptDrain is an optional hook that PrepareStep calls on every step
+	// to drain queued user prompts mid-turn. Set by the agent via
+	// SetPromptDrain before the first StreamChat call.
+	promptDrain func() []string
 }
 
 // NewClient builds a Client. The provider/model are not constructed until the
@@ -129,6 +134,16 @@ func (c *Client) InjectLanguageModelForTesting(model fantasy.LanguageModel) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.model = model
+}
+
+// SetPromptDrain installs a queue-drain hook that PrepareStep calls on
+// every step. The function drains all pending user prompts and returns
+// them; the returned strings will be appended to prepared.Messages as
+// synthetic user messages. Pass nil to disable mid-turn drain.
+func (c *Client) SetPromptDrain(fn func() []string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.promptDrain = fn
 }
 
 // SetMCPManager installs (or clears) the MCP manager whose tools will be
