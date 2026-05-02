@@ -115,6 +115,7 @@ BITCHTEA_PROVIDER      Force provider (openai, anthropic)
 | Command | Behavior | Risk profile |
 |---|---|---|
 | `/profile save\|load\|show\|delete <name>` | Manage saved profiles and load built-ins like `ollama`, `openrouter`, `zai-openai`, and `zai-anthropic`. Bare `/profile <name>` loads the named profile. | Safe |
+| `/models` | Open a fuzzy-find picker over the model catalog for the active service. Type to filter, ↑/↓ to move, Enter to pick, Esc to cancel. Reads the cached catwalk catalog (`~/.bitchtea/catalog/providers.json`) and falls back to the embedded snapshot offline. | Safe |
 | `/compact` | Compact conversation context | Moderate: rewrites in-memory context |
 | `/clear` | Clear chat display | Safe |
 | `/restart` | Reset agent and start a fresh conversation (no quit) | Safe: drops in-memory context |

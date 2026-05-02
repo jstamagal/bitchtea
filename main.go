@@ -390,6 +390,7 @@ Commands (inside the TUI):
                          service, nick, profile, sound, auto-next, auto-idea)
                          e.g. /set apikey sk-..., /set provider anthropic
   /profile [cmd] <name>  save/load/show/delete profiles; bare /profile <name> loads
+  /models                Open a fuzzy picker of models for the active service
   /compact               Compact context
   /clear                 Clear chat display
   /restart               Reset agent and start a fresh conversation

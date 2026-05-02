@@ -130,6 +130,22 @@ type Model struct {
 
 	// Suppresses visible/logged command output during silent startup execution.
 	suppressMessages bool
+
+	// Active model picker overlay (nil when not picking). When set, key
+	// events are routed to the picker instead of the textarea / slash router.
+	// See model_picker.go and handleModelsCommand.
+	picker *modelPicker
+
+	// pickerMsgIdx tracks the index of the current picker render in messages
+	// so refreshes overwrite in place rather than spamming new entries.
+	pickerMsgIdx int
+
+	// pickerOnSelect is invoked with the chosen model ID when the user hits
+	// Enter. The callback receives a *Model so it can mutate state on the
+	// live receiver (the closure cannot capture &m from the slash handler —
+	// bubbletea hands the next Update a fresh value copy). Reset to nil on
+	// close.
+	pickerOnSelect func(*Model, string)
 }
 
 // NewModel creates the initial model
@@ -383,6 +399,14 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.refreshViewport()
 
 	case tea.KeyMsg:
+		// Picker overlay swallows all keys until it closes. Done first so
+		// /models can shadow Enter / Up / Down / Esc without fighting the
+		// textarea or history handlers below.
+		if m.picker != nil {
+			m.handlePickerKey(msg)
+			return m, nil
+		}
+
 		// Up/down arrow: history navigation when cursor is on first/last line,
 		// otherwise fall through to textarea for normal multiline cursor movement.
 		switch msg.String() {

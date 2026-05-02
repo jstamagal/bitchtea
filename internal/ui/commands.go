@@ -10,10 +10,18 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 
 	"github.com/jstamagal/bitchtea/internal/agent"
+	"github.com/jstamagal/bitchtea/internal/catalog"
 	"github.com/jstamagal/bitchtea/internal/config"
 	"github.com/jstamagal/bitchtea/internal/llm"
 	"github.com/jstamagal/bitchtea/internal/session"
 )
+
+// loadModelCatalog is a package-level seam so tests can substitute a fixture
+// without writing files into ~/.bitchtea/. Production wiring just calls
+// catalog.Load with the user's BaseDir.
+var loadModelCatalog = func() catalog.Envelope {
+	return catalog.Load(catalog.LoadOptions{})
+}
 
 type slashCommandHandler func(Model, string, []string) (Model, tea.Cmd)
 
@@ -41,6 +49,7 @@ var slashCommandRegistry = registerSlashCommands(
 	slashCommandSpec{names: []string{"/tree"}, handler: handleTreeCommand},
 	slashCommandSpec{names: []string{"/fork"}, handler: handleForkCommand},
 	slashCommandSpec{names: []string{"/profile"}, handler: handleProfileCommand},
+	slashCommandSpec{names: []string{"/models"}, handler: handleModelsCommand},
 	slashCommandSpec{names: []string{"/join"}, handler: handleJoinCommand},
 	slashCommandSpec{names: []string{"/part"}, handler: handlePartCommand},
 	slashCommandSpec{names: []string{"/query"}, handler: handleQueryCommand},
@@ -77,6 +86,8 @@ const helpCommandText = "Commands:\n" +
 	"                        e.g. /set apikey sk-..., /set provider anthropic\n" +
 	"  /profile [cmd]      save/load/show/delete profiles (built-ins: ollama, openrouter, etc.)\n" +
 	"                        bare /profile <name> loads the named profile\n" +
+	"  /models             Open a fuzzy picker of models for the active service\n" +
+	"                        (uses the catwalk catalog cache; offline-safe)\n" +
 	"  /compact            Compact conversation context\n" +
 	"  /clear              Clear chat display\n" +
 	"  /restart            Reset agent and start a fresh conversation\n" +
@@ -923,4 +934,56 @@ func providerTransportHint(provider, baseURL string) string {
 	}
 
 	return strings.Join(warnings, "\n")
+}
+
+// handleModelsCommand opens a fuzzy picker over the model IDs for the active
+// service. Wiring:
+//
+//   - Resolve the join key from cfg.Service (per docs/phase-9-service-identity.md
+//     and docs/phase-5-catalog-audit.md "join on Service ↔ InferenceProvider").
+//   - Load the catalog via the package-level loadModelCatalog seam (cache or
+//     embedded fallback — never blocks, never errors).
+//   - Surface a clear error if the service is unset or no provider matches.
+//   - On selection, route through agent.SetModel + clear the loaded profile
+//     tag (mirroring /set model semantics).
+func handleModelsCommand(m Model, _ string, _ []string) (Model, tea.Cmd) {
+	service := strings.TrimSpace(m.config.Service)
+	if service == "" {
+		m.errMsg("models: no active service — set one with /set service <name> or load a profile (e.g. /profile openrouter).")
+		return m, nil
+	}
+
+	env := loadModelCatalog()
+	if len(env.Providers) == 0 {
+		m.errMsg("models: catalog is empty — try BITCHTEA_CATWALK_AUTOUPDATE=true with BITCHTEA_CATWALK_URL set, or wait for the embedded snapshot.")
+		return m, nil
+	}
+
+	ids := modelsForService(env.Providers, service)
+	if len(ids) == 0 {
+		hint := ""
+		if names := availableServices(env.Providers); len(names) > 0 {
+			hint = "\n  available services: " + strings.Join(names, ", ")
+		}
+		m.errMsg(fmt.Sprintf(
+			"models: no catalog data for service %q — try BITCHTEA_CATWALK_AUTOUPDATE=true or check /profile.%s",
+			service, hint,
+		))
+		return m, nil
+	}
+
+	title := fmt.Sprintf("models for %s (%d total) — type to filter", service, len(ids))
+	picker := newModelPicker(title, ids)
+
+	m.openPicker(picker, applyModelSelection)
+	return m, nil
+}
+
+// applyModelSelection is the picker callback for /models. It mirrors
+// /set model semantics: route through the agent's cache-invalidating setter
+// and drop the loaded profile tag so the topbar reflects the manual override.
+func applyModelSelection(m *Model, choice string) {
+	m.agent.SetModel(choice)
+	clearLoadedProfile(m)
+	m.sysMsg(fmt.Sprintf("*** Model switched to: %s", choice))
 }

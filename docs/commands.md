@@ -14,6 +14,7 @@ Slash commands control the TUI. Use them to bend the session to your will.
 
 - **`/set <key> <value>`**: Single source of truth for connection settings. Keys: `provider`, `model`, `baseurl`, `apikey`, `service`, `nick`, `profile`, `sound`, `auto-next`, `auto-idea`. Examples: `/set provider anthropic`, `/set model gpt-4o`, `/set apikey sk-...`. See "Provider vs Service" below.
 - **`/profile [load|save|show|delete] <name>`**: Manage saved connection profiles. `show` previews a profile (provider, service, model, baseurl, masked key) without loading it. Bare `/profile <name>` (no subcommand) loads the named profile.
+- **`/models`**: Open a fuzzy-find picker over the catwalk model catalog for the active `service`. Type to filter (case-insensitive substring), `↑/↓` move, `PgUp/PgDn` page, `Enter` selects (routes through `agent.SetModel` and clears the loaded profile tag, mirroring `/set model`), `Esc` cancels. Reads `~/.bitchtea/catalog/providers.json` first and falls back to the catwalk-embedded snapshot offline. If the active service has no catalog entry the command surfaces the available service IDs as a hint.
 
 ### Provider vs Service
 
