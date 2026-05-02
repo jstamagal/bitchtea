@@ -114,11 +114,7 @@ BITCHTEA_PROVIDER      Force provider (openai, anthropic)
 
 | Command | Behavior | Risk profile |
 |---|---|---|
-| `/model <name>` | Switch model | Safe |
-| `/provider <name>` | Switch provider | Safe |
-| `/baseurl <url>` | Set API base URL | Safe |
-| `/apikey <key>` | Set API key | Safe |
-| `/profile save\|load\|delete <name>` | Manage saved profiles and load built-ins like `ollama`, `openrouter`, `zai-openai`, and `zai-anthropic` | Safe |
+| `/profile save\|load\|show\|delete <name>` | Manage saved profiles and load built-ins like `ollama`, `openrouter`, `zai-openai`, and `zai-anthropic`. Bare `/profile <name>` loads the named profile. | Safe |
 | `/compact` | Compact conversation context | Moderate: rewrites in-memory context |
 | `/clear` | Clear chat display | Safe |
 | `/restart` | Reset agent and start a fresh conversation (no quit) | Safe: drops in-memory context |

@@ -341,7 +341,10 @@ Environment:
   BITCHTEA_PROVIDER      Provider name (openai, anthropic)
 
 Commands (inside the TUI):
-  /model <name>          Switch models
+  /set <key> [value]     Show/change settings (provider, model, baseurl, apikey,
+                         service, nick, profile, sound, auto-next, auto-idea)
+                         e.g. /set apikey sk-..., /set provider anthropic
+  /profile [cmd] <name>  save/load/show/delete profiles; bare /profile <name> loads
   /compact               Compact context
   /clear                 Clear chat display
   /restart               Reset agent and start a fresh conversation
@@ -349,8 +352,6 @@ Commands (inside the TUI):
   /sessions              List saved sessions
   /tree                  Show session tree
   /fork                  Fork session
-  /set <key> [value]     Show/change settings (provider, model, baseurl, apikey,
-                         service, nick, profile, sound, auto-next, auto-idea)
   /mp3 [cmd]             Toggle MP3 panel and player
   /help                  Show help
   /quit                  Exit

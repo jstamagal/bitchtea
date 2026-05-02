@@ -6,8 +6,8 @@ If the jungle gets quiet, something is wrong.
 
 If you see `no API key found`:
 1. Check your environment variables (`echo $OPENAI_API_KEY`).
-2. Ensure you are using the correct provider with `/provider <openai|anthropic>`.
-3. Use `/apikey <key>` to set it manually for the active session.
+2. Ensure you are using the correct provider with `/set provider <openai|anthropic>`.
+3. Use `/set apikey <key>` to set it manually for the active session.
 
 ## 🔍 DEBUGGING THE METAL
 

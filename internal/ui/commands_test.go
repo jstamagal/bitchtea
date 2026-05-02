@@ -64,17 +64,22 @@ func TestHandleCommandUnknownCommandStillErrors(t *testing.T) {
 
 // TestRemovedRootCommandsAreNotRegistered guards against re-introducing root
 // commands that are now expected to live behind /set. /auto-next, /auto-idea,
-// and /sound were removed because they were thin toggle wrappers around
-// /set auto-next, /set auto-idea, and /set sound respectively.
+// and /sound were removed (bt-4sw) because they were thin toggle wrappers.
+// /apikey, /baseurl, /provider, and /model were removed (bt-0k0) because they
+// duplicated /set apikey, /set baseurl, /set provider, /set model.
 func TestRemovedRootCommandsAreNotRegistered(t *testing.T) {
-	for _, name := range []string{"/auto-next", "/auto-idea", "/sound"} {
+	removed := []string{
+		"/auto-next", "/auto-idea", "/sound",
+		"/apikey", "/baseurl", "/provider", "/model",
+	}
+	for _, name := range removed {
 		if _, ok := lookupSlashCommand(name); ok {
 			t.Errorf("%s should no longer be a root slash command — use /set instead", name)
 		}
 	}
 
 	m := newTestModel(t)
-	for _, cmd := range []string{"/auto-next", "/auto-idea", "/sound"} {
+	for _, cmd := range removed {
 		result, _ := m.handleCommand(cmd)
 		msg := lastMsg(result)
 		if msg.Type != MsgError {
@@ -83,6 +88,38 @@ func TestRemovedRootCommandsAreNotRegistered(t *testing.T) {
 		if !strings.Contains(msg.Content, "Unknown command") {
 			t.Fatalf("%s should error with 'Unknown command', got %q", cmd, msg.Content)
 		}
+	}
+}
+
+// TestSetRoutesToRemovedRootHandlersStillWork confirms that /set apikey,
+// /set baseurl, /set provider, and /set model still produce verbatim writes
+// after the root commands were removed in bt-0k0. They share the underlying
+// handlers via handleSetCommand's routing switch.
+func TestSetRoutesToRemovedRootHandlersStillWork(t *testing.T) {
+	cases := []struct {
+		input string
+		check func(Model) bool
+		desc  string
+	}{
+		{"/set apikey x", func(m Model) bool { return m.config.APIKey == "x" }, "apikey verbatim"},
+		{"/set baseurl notaurl", func(m Model) bool { return m.config.BaseURL == "notaurl" }, "baseurl verbatim"},
+		{"/set provider foo", func(m Model) bool { return m.config.Provider == "foo" }, "provider verbatim"},
+		{"/set model bar", func(m Model) bool { return m.config.Model == "bar" }, "model verbatim"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.desc, func(t *testing.T) {
+			m := newTestModel(t)
+			result, _ := m.handleCommand(tc.input)
+			model := result.(Model)
+			for _, msg := range model.messages {
+				if msg.Type == MsgError {
+					t.Errorf("unexpected error: %q", msg.Content)
+				}
+			}
+			if !tc.check(model) {
+				t.Errorf("%s: stored value did not match", tc.desc)
+			}
+		})
 	}
 }
 

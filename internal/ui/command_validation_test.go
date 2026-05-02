@@ -55,11 +55,11 @@ func TestProviderAcceptsAnyValueVerbatim(t *testing.T) {
 		wantContain string
 		wantStored  string
 	}{
-		{"openai", "/provider openai", "Provider set to: openai", "openai"},
-		{"anthropic", "/provider anthropic", "Provider set to: anthropic", "anthropic"},
-		{"arbitrary value", "/provider foo", "Provider set to: foo", "foo"},
-		{"single char", "/provider x", "Provider set to: x", "x"},
-		{"no arg shows current", "/provider", "Provider:", "openai"},
+		{"openai", "/set provider openai", "Provider set to: openai", "openai"},
+		{"anthropic", "/set provider anthropic", "Provider set to: anthropic", "anthropic"},
+		{"arbitrary value", "/set provider foo", "Provider set to: foo", "foo"},
+		{"single char", "/set provider x", "Provider set to: x", "x"},
+		{"no arg shows current", "/set provider", "provider = openai", "openai"},
 	}
 
 	for _, tt := range tests {
@@ -94,12 +94,12 @@ func TestBaseURLAcceptsAnyValueVerbatim(t *testing.T) {
 		wantContain string
 		wantStored  string
 	}{
-		{"https", "/baseurl https://api.example.com/v1", "Base URL set to", "https://api.example.com/v1"},
-		{"http", "/baseurl http://localhost:8080", "Base URL set to", "http://localhost:8080"},
-		{"no scheme", "/baseurl api.example.com", "Base URL set to", "api.example.com"},
-		{"random text", "/baseurl notaurl", "Base URL set to", "notaurl"},
-		{"ftp", "/baseurl ftp://example.com", "Base URL set to", "ftp://example.com"},
-		{"no arg shows current", "/baseurl", "Base URL:", "https://api.openai.com/v1"},
+		{"https", "/set baseurl https://api.example.com/v1", "Base URL set to", "https://api.example.com/v1"},
+		{"http", "/set baseurl http://localhost:8080", "Base URL set to", "http://localhost:8080"},
+		{"no scheme", "/set baseurl api.example.com", "Base URL set to", "api.example.com"},
+		{"random text", "/set baseurl notaurl", "Base URL set to", "notaurl"},
+		{"ftp", "/set baseurl ftp://example.com", "Base URL set to", "ftp://example.com"},
+		{"no arg shows current", "/set baseurl", "baseurl = https://api.openai.com/v1", "https://api.openai.com/v1"},
 	}
 
 	for _, tt := range tests {
@@ -134,11 +134,11 @@ func TestAPIKeyAcceptsAnyValueVerbatim(t *testing.T) {
 		wantContain string
 		wantStored  string
 	}{
-		{"long key", "/apikey sk-1234567890abcdef", "API key set", "sk-1234567890abcdef"},
-		{"single char x", "/apikey x", "API key set", "x"},
-		{"nine chars", "/apikey 123456789", "API key set", "123456789"},
-		{"ten chars", "/apikey 1234567890", "API key set", "1234567890"},
-		{"no arg shows current", "/apikey", "API Key:", "sk-test-key-12345"},
+		{"long key", "/set apikey sk-1234567890abcdef", "API key set", "sk-1234567890abcdef"},
+		{"single char x", "/set apikey x", "API key set", "x"},
+		{"nine chars", "/set apikey 123456789", "API key set", "123456789"},
+		{"ten chars", "/set apikey 1234567890", "API key set", "1234567890"},
+		{"no arg shows current", "/set apikey", "apikey = sk-t...2345", "sk-test-key-12345"},
 	}
 
 	for _, tt := range tests {
@@ -167,11 +167,11 @@ func TestModelAcceptsAnyValueVerbatim(t *testing.T) {
 		wantContain string
 		wantStored  string
 	}{
-		{"gpt-4o", "/model gpt-4o", "Model switched to", "gpt-4o"},
-		{"claude-3.5-sonnet", "/model claude-3.5-sonnet", "Model switched to", "claude-3.5-sonnet"},
-		{"single char x", "/model x", "Model switched to", "x"},
-		{"no dot or dash", "/model foobar", "Model switched to", "foobar"},
-		{"no arg shows current", "/model", "Current model", "gpt-4o"},
+		{"gpt-4o", "/set model gpt-4o", "Model switched to", "gpt-4o"},
+		{"claude-3.5-sonnet", "/set model claude-3.5-sonnet", "Model switched to", "claude-3.5-sonnet"},
+		{"single char x", "/set model x", "Model switched to", "x"},
+		{"no dot or dash", "/set model foobar", "Model switched to", "foobar"},
+		{"no arg shows current", "/set model", "model = gpt-4o", "gpt-4o"},
 	}
 
 	for _, tt := range tests {
@@ -206,7 +206,7 @@ func TestProviderChangeWarnsWhenBaseURLLooksOpenAICompatible(t *testing.T) {
 	m.config.BaseURL = "http://127.0.0.1:3456"
 	m.agent.SetBaseURL(m.config.BaseURL)
 
-	result, _ := m.handleCommand("/provider anthropic")
+	result, _ := m.handleCommand("/set provider anthropic")
 	msgs := allMsgs(result)
 	if len(msgs) < 2 {
 		t.Fatalf("expected provider change plus warning, got %d messages", len(msgs))
@@ -214,7 +214,7 @@ func TestProviderChangeWarnsWhenBaseURLLooksOpenAICompatible(t *testing.T) {
 	if !strings.Contains(msgs[0].Content, "requests -> http://127.0.0.1:3456/messages") {
 		t.Fatalf("expected endpoint preview, got %q", msgs[0].Content)
 	}
-	if !strings.Contains(msgs[len(msgs)-1].Content, "If this server is OpenAI-compatible, switch with /provider openai.") {
+	if !strings.Contains(msgs[len(msgs)-1].Content, "If this server is OpenAI-compatible, switch with /set provider openai.") {
 		t.Fatalf("expected transport mismatch guidance, got %q", msgs[len(msgs)-1].Content)
 	}
 }
@@ -224,7 +224,7 @@ func TestBaseURLChangeWarnsWhenProviderLikelyMismatched(t *testing.T) {
 	m.config.Provider = "anthropic"
 	m.agent.SetProvider("anthropic")
 
-	result, _ := m.handleCommand("/baseurl http://127.0.0.1:3456")
+	result, _ := m.handleCommand("/set baseurl http://127.0.0.1:3456")
 	msgs := allMsgs(result)
 	if len(msgs) < 2 {
 		t.Fatalf("expected baseurl change plus warning, got %d messages", len(msgs))
@@ -245,7 +245,7 @@ func TestProfileNameThatMatchesProviderSuggestsProviderCommand(t *testing.T) {
 	if msg.Type != MsgError {
 		t.Fatalf("expected error message, got %v", msg.Type)
 	}
-	if !strings.Contains(msg.Content, "Use /provider anthropic") {
+	if !strings.Contains(msg.Content, "Use /set provider anthropic") {
 		t.Fatalf("expected provider guidance, got %q", msg.Content)
 	}
 }
@@ -258,7 +258,7 @@ func TestProfileLoadNameThatMatchesProviderSuggestsProviderCommand(t *testing.T)
 	if msg.Type != MsgError {
 		t.Fatalf("expected error message, got %v", msg.Type)
 	}
-	if !strings.Contains(msg.Content, "Use /provider openai") {
+	if !strings.Contains(msg.Content, "Use /set provider openai") {
 		t.Fatalf("expected provider guidance, got %q", msg.Content)
 	}
 }
@@ -290,7 +290,7 @@ func TestProfileCommandHintsWhenProviderNameIsUsed(t *testing.T) {
 	if msg.Type != MsgError {
 		t.Fatalf("expected error message, got %v", msg.Type)
 	}
-	for _, want := range []string{"provider, not a profile", "/provider anthropic"} {
+	for _, want := range []string{"provider, not a profile", "/set provider anthropic"} {
 		if !strings.Contains(msg.Content, want) {
 			t.Fatalf("expected %q in message, got %q", want, msg.Content)
 		}
@@ -333,7 +333,7 @@ func TestManualConnectionChangeClearsLoadedProfile(t *testing.T) {
 		t.Fatalf("expected openrouter profile, got %q", model.config.Profile)
 	}
 
-	result, _ = model.handleCommand("/provider anthropic")
+	result, _ = model.handleCommand("/set provider anthropic")
 	model = result.(Model)
 	if model.config.Profile != "" {
 		t.Fatalf("expected manual provider change to clear profile, got %q", model.config.Profile)
@@ -343,7 +343,7 @@ func TestManualConnectionChangeClearsLoadedProfile(t *testing.T) {
 func TestProviderMessageShowsEffectiveEndpoint(t *testing.T) {
 	m := newTestModel(t)
 
-	result, _ := m.handleCommand("/provider anthropic")
+	result, _ := m.handleCommand("/set provider anthropic")
 	text := allMsgText(result)
 
 	if !strings.Contains(text, "/messages") {
@@ -354,7 +354,7 @@ func TestProviderMessageShowsEffectiveEndpoint(t *testing.T) {
 func TestBaseURLMessageShowsEffectiveEndpoint(t *testing.T) {
 	m := newTestModel(t)
 
-	result, _ := m.handleCommand("/baseurl https://api.example.com/v1")
+	result, _ := m.handleCommand("/set baseurl https://api.example.com/v1")
 	text := allMsgText(result)
 
 	if !strings.Contains(text, "https://api.example.com/v1/chat/completions") {
@@ -387,7 +387,7 @@ func TestProfileLoadVerboseMasksAPIKeyAndShowsEndpoint(t *testing.T) {
 func TestBaseURLWarnsWhenEndpointSuffixIsIncluded(t *testing.T) {
 	m := newTestModel(t)
 
-	result, _ := m.handleCommand("/baseurl https://api.example.com/v1/chat/completions")
+	result, _ := m.handleCommand("/set baseurl https://api.example.com/v1/chat/completions")
 	msg := lastMsg(result)
 
 	for _, want := range []string{"warning ->", "omit /chat/completions"} {
@@ -400,9 +400,9 @@ func TestBaseURLWarnsWhenEndpointSuffixIsIncluded(t *testing.T) {
 func TestProviderWarnsForSuspiciousOpenAIBaseURLUnderAnthropic(t *testing.T) {
 	m := newTestModel(t)
 
-	result, _ := m.handleCommand("/provider anthropic")
+	result, _ := m.handleCommand("/set provider anthropic")
 	model := result.(Model)
-	result, _ = model.handleCommand("/baseurl https://api.openai.com/v1")
+	result, _ = model.handleCommand("/set baseurl https://api.openai.com/v1")
 	msg := lastMsg(result)
 
 	for _, want := range []string{"warning ->", "Anthropic transport with an OpenAI-style base URL looks suspicious"} {

@@ -26,7 +26,6 @@ var slashCommandRegistry = registerSlashCommands(
 	slashCommandSpec{names: []string{"/quit", "/q", "/exit"}, handler: handleQuitCommand},
 	slashCommandSpec{names: []string{"/help", "/h"}, handler: handleHelpCommand},
 	slashCommandSpec{names: []string{"/set"}, handler: handleSetCommand},
-	slashCommandSpec{names: []string{"/model"}, handler: handleModelCommand},
 	slashCommandSpec{names: []string{"/clear"}, handler: handleClearCommand},
 	slashCommandSpec{names: []string{"/restart"}, handler: handleRestartCommand},
 	slashCommandSpec{names: []string{"/compact"}, handler: handleCompactCommand},
@@ -41,9 +40,6 @@ var slashCommandRegistry = registerSlashCommands(
 	slashCommandSpec{names: []string{"/resume"}, handler: handleResumeCommand},
 	slashCommandSpec{names: []string{"/tree"}, handler: handleTreeCommand},
 	slashCommandSpec{names: []string{"/fork"}, handler: handleForkCommand},
-	slashCommandSpec{names: []string{"/baseurl"}, handler: handleBaseURLCommand},
-	slashCommandSpec{names: []string{"/apikey"}, handler: handleAPIKeyCommand},
-	slashCommandSpec{names: []string{"/provider"}, handler: handleProviderCommand},
 	slashCommandSpec{names: []string{"/profile"}, handler: handleProfileCommand},
 	slashCommandSpec{names: []string{"/join"}, handler: handleJoinCommand},
 	slashCommandSpec{names: []string{"/part"}, handler: handlePartCommand},
@@ -78,7 +74,9 @@ const helpCommandText = "Commands:\n" +
 	"  /set [key [value]]  Show or change a setting\n" +
 	"                        keys: provider, model, baseurl, apikey, service,\n" +
 	"                              nick, profile, sound, auto-next, auto-idea\n" +
+	"                        e.g. /set apikey sk-..., /set provider anthropic\n" +
 	"  /profile [cmd]      save/load/show/delete profiles (built-ins: ollama, openrouter, etc.)\n" +
+	"                        bare /profile <name> loads the named profile\n" +
 	"  /compact            Compact conversation context\n" +
 	"  /clear              Clear chat display\n" +
 	"  /restart            Reset agent and start a fresh conversation\n" +
@@ -202,7 +200,7 @@ func handleModelCommand(m Model, _ string, parts []string) (Model, tea.Cmd) {
 		m.addMessage(ChatMessage{
 			Time:    time.Now(),
 			Type:    MsgSystem,
-			Content: fmt.Sprintf("Current model: %s. Usage: /model <name>", m.agent.Model()),
+			Content: fmt.Sprintf("Current model: %s. Usage: /set model <name>", m.agent.Model()),
 		})
 		m.refreshViewport()
 		return m, nil
@@ -550,7 +548,7 @@ func handleForkCommand(m Model, _ string, _ []string) (Model, tea.Cmd) {
 
 func handleBaseURLCommand(m Model, _ string, parts []string) (Model, tea.Cmd) {
 	if len(parts) < 2 {
-		m.sysMsg(fmt.Sprintf("Base URL: %s\nUsage: /baseurl <url>", m.config.BaseURL))
+		m.sysMsg(fmt.Sprintf("Base URL: %s\nUsage: /set baseurl <url>", m.config.BaseURL))
 		return m, nil
 	}
 	url := parts[1]
@@ -570,7 +568,7 @@ func handleAPIKeyCommand(m Model, _ string, parts []string) (Model, tea.Cmd) {
 		if len(masked) > 8 {
 			masked = masked[:4] + "..." + masked[len(masked)-4:]
 		}
-		m.sysMsg(fmt.Sprintf("API Key: %s\nUsage: /apikey <key>", masked))
+		m.sysMsg(fmt.Sprintf("API Key: %s\nUsage: /set apikey <key>", masked))
 		return m, nil
 	}
 
@@ -585,7 +583,7 @@ func handleAPIKeyCommand(m Model, _ string, parts []string) (Model, tea.Cmd) {
 
 func handleProviderCommand(m Model, _ string, parts []string) (Model, tea.Cmd) {
 	if len(parts) < 2 {
-		m.sysMsg(fmt.Sprintf("Provider: %s\nUsage: /provider <openai|anthropic>", m.config.Provider))
+		m.sysMsg(fmt.Sprintf("Provider: %s\nUsage: /set provider <openai|anthropic>", m.config.Provider))
 		return m, nil
 	}
 	prov := parts[1]
@@ -818,7 +816,7 @@ func applyProfileToModel(m *Model, name string, p *config.Profile, verbose bool)
 			name, p.Provider, serviceDisplay(p.Service), p.Model))
 	}
 	if p.APIKey == "" {
-		m.sysMsg("This profile did not provide an API key. Set one with /apikey or the matching env var before connecting.")
+		m.sysMsg("This profile did not provide an API key. Set one with /set apikey <key> or the matching env var before connecting.")
 	}
 	if note := providerTransportHint(p.Provider, p.BaseURL); note != "" {
 		m.sysMsg(note)
@@ -877,7 +875,7 @@ func maskSecret(value string) string {
 func profileLookupMessage(name string) string {
 	name = strings.TrimSpace(strings.ToLower(name))
 	if name == "openai" || name == "anthropic" {
-		return fmt.Sprintf("%s is a provider, not a profile. Use /provider %s or /profile to list profiles.", name, name)
+		return fmt.Sprintf("%s is a provider, not a profile. Use /set provider %s or /profile to list profiles.", name, name)
 	}
 	return fmt.Sprintf("Unknown profile %q. Use /profile load <name> or /profile to list profiles.", name)
 }
@@ -914,13 +912,13 @@ func providerTransportHint(provider, baseURL string) string {
 	switch strings.TrimSpace(strings.ToLower(provider)) {
 	case "anthropic":
 		if looksOpenAIStyle {
-			warnings = append(warnings, "warning -> Anthropic transport with an OpenAI-style base URL looks suspicious. Requests will go to /messages. If this endpoint is OpenAI-compatible, switch with /provider openai.")
+			warnings = append(warnings, "warning -> Anthropic transport with an OpenAI-style base URL looks suspicious. Requests will go to /messages. If this endpoint is OpenAI-compatible, switch with /set provider openai.")
 		} else if !looksAnthropic && (looksLocal || looksGenericV1) {
-			warnings = append(warnings, "warning -> anthropic transport sends requests to /messages. If this server is OpenAI-compatible, switch with /provider openai.")
+			warnings = append(warnings, "warning -> anthropic transport sends requests to /messages. If this server is OpenAI-compatible, switch with /set provider openai.")
 		}
 	case "openai":
 		if looksAnthropic {
-			warnings = append(warnings, "warning -> openai transport sends requests to /chat/completions. If this endpoint is Anthropic-compatible, switch with /provider anthropic.")
+			warnings = append(warnings, "warning -> openai transport sends requests to /chat/completions. If this endpoint is Anthropic-compatible, switch with /set provider anthropic.")
 		}
 	}
 

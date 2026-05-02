@@ -212,24 +212,6 @@ func TestSetCommandServiceDoesNotClearProfile(t *testing.T) {
 	}
 }
 
-func TestProviderAliasStillWorks(t *testing.T) {
-	m := newTestModel(t)
-	result, _ := m.handleCommand("/provider anthropic")
-	model := result.(Model)
-	if model.config.Provider != "anthropic" {
-		t.Errorf("provider alias failed: %q", model.config.Provider)
-	}
-}
-
-func TestModelAliasStillWorks(t *testing.T) {
-	m := newTestModel(t)
-	result, _ := m.handleCommand("/model gpt-4o-mini")
-	model := result.(Model)
-	if model.config.Model != "gpt-4o-mini" {
-		t.Errorf("model alias failed: %q", model.config.Model)
-	}
-}
-
 // TestProfileShowDisplaysServiceWithoutLoading confirms /profile show prints a
 // profile's service identity (alongside provider/model/baseurl) without
 // mutating the active config.
