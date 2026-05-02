@@ -94,13 +94,50 @@ func TestWriteFile(t *testing.T) {
 	if err != nil {
 		t.Fatalf("write: %v", err)
 	}
-	if result != "Wrote 11 bytes to sub/dir/out.txt" {
-		t.Fatalf("unexpected result: %q", result)
+	expected := "Wrote 11 bytes to " + filepath.Join(dir, "sub/dir/out.txt")
+	if result != expected {
+		t.Fatalf("unexpected result: %q (want %q)", result, expected)
 	}
 
 	data, _ := os.ReadFile(filepath.Join(dir, "sub/dir/out.txt"))
 	if string(data) != "hello world" {
 		t.Fatalf("file content: %q", string(data))
+	}
+}
+
+func TestWriteSuccessMessageReportsResolvedPath(t *testing.T) {
+	dir := t.TempDir()
+	reg := NewRegistry(dir, t.TempDir())
+
+	result, err := reg.Execute(context.Background(), "write", `{"path":"sub/rel.txt","content":"abcd"}`)
+	if err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	resolved := filepath.Join(dir, "sub/rel.txt")
+	if !strings.Contains(result, resolved) {
+		t.Fatalf("success message %q should contain resolved path %q", result, resolved)
+	}
+	if strings.Contains(result, " sub/rel.txt") {
+		t.Fatalf("success message %q should not contain unresolved relative path", result)
+	}
+}
+
+func TestEditSuccessMessageReportsResolvedPath(t *testing.T) {
+	dir := t.TempDir()
+	resolved := filepath.Join(dir, "rel.txt")
+	os.WriteFile(resolved, []byte("foo\n"), 0644)
+
+	reg := NewRegistry(dir, t.TempDir())
+
+	result, err := reg.Execute(context.Background(), "edit", `{"path":"rel.txt","edits":[{"oldText":"foo","newText":"bar"}]}`)
+	if err != nil {
+		t.Fatalf("edit: %v", err)
+	}
+	if !strings.Contains(result, resolved) {
+		t.Fatalf("success message %q should contain resolved path %q", result, resolved)
+	}
+	if strings.Contains(result, " rel.txt") {
+		t.Fatalf("success message %q should not contain unresolved relative path", result)
 	}
 }
 
@@ -115,8 +152,9 @@ func TestEditFile(t *testing.T) {
 	if err != nil {
 		t.Fatalf("edit: %v", err)
 	}
-	if result != "Applied 1 edit(s) to edit.txt" {
-		t.Fatalf("unexpected result: %q", result)
+	expected := "Applied 1 edit(s) to " + path
+	if result != expected {
+		t.Fatalf("unexpected result: %q (want %q)", result, expected)
 	}
 
 	data, _ := os.ReadFile(path)

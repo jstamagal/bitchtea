@@ -513,7 +513,7 @@ func (r *Registry) execWrite(argsJSON string) (string, error) {
 		return "", fmt.Errorf("write %s: %w", args.Path, err)
 	}
 
-	return fmt.Sprintf("Wrote %d bytes to %s", len(args.Content), args.Path), nil
+	return fmt.Sprintf("Wrote %d bytes to %s", len(args.Content), path), nil
 }
 
 func (r *Registry) execEdit(argsJSON string) (string, error) {
@@ -556,7 +556,7 @@ func (r *Registry) execEdit(argsJSON string) (string, error) {
 		return "", fmt.Errorf("write %s: %w", args.Path, err)
 	}
 
-	return fmt.Sprintf("Applied %d edit(s) to %s", applied, args.Path), nil
+	return fmt.Sprintf("Applied %d edit(s) to %s", applied, path), nil
 }
 
 func (r *Registry) execSearchMemory(argsJSON string) (string, error) {
