@@ -347,6 +347,66 @@ func TestTerminalResizeUpdatesSnapshotDimensions(t *testing.T) {
 	}
 }
 
+// TestTerminalStartDoesNotSourceLoginDotfiles guards bt-h1u: terminal_start
+// must use `bash -c`, not `bash -lc`, so it does NOT source ~/.bashrc /
+// ~/.bash_profile. Sourcing them leaks the user's environment (aliases,
+// exported vars) into tool execution and makes behavior non-deterministic.
+func TestTerminalStartDoesNotSourceLoginDotfiles(t *testing.T) {
+	home := t.TempDir()
+	// Both files set a sentinel — we want to ensure NEITHER is sourced.
+	// -lc would source .bash_profile (preferred for login) or fall back
+	// to .bashrc; -c sources nothing.
+	bashrc := "export BITCHTEA_RC_SENTINEL=loaded-from-bashrc\n"
+	if err := os.WriteFile(filepath.Join(home, ".bashrc"), []byte(bashrc), 0o644); err != nil {
+		t.Fatalf("write .bashrc: %v", err)
+	}
+	bashProfile := "export BITCHTEA_RC_SENTINEL=loaded-from-bash_profile\n"
+	if err := os.WriteFile(filepath.Join(home, ".bash_profile"), []byte(bashProfile), 0o644); err != nil {
+		t.Fatalf("write .bash_profile: %v", err)
+	}
+	t.Setenv("HOME", home)
+	// Some bash builds also consult these — point them at the temp HOME
+	// so they cannot rescue a sentinel from the real user environment.
+	t.Setenv("BASH_ENV", "")
+	t.Setenv("ENV", "")
+
+	reg := NewRegistry(t.TempDir(), t.TempDir())
+	// Echo the sentinel; if the shell sourced the dotfile, output will
+	// contain "loaded-from-...". With bash -c, the var is unset and the
+	// shell prints "<unset>" via parameter expansion.
+	//
+	// We deliberately let the command finish on its own (printf then
+	// exit) instead of calling terminal_close from a defer — the defer
+	// path triggers the known bt-e4w race in vt.SafeEmulator
+	// (Close-vs-Read on emulator.closed). Terminal sessions are reaped
+	// when the process exits via wait(), so no leak.
+	cmdJSON := `{"command":"printf %s \"${BITCHTEA_RC_SENTINEL:-<unset>}\"","width":60,"height":5,"delay_ms":150}`
+	result, err := reg.Execute(context.Background(), "terminal_start", cmdJSON)
+	if err != nil {
+		t.Fatalf("terminal_start: %v", err)
+	}
+	id := terminalIDFromResult(t, result)
+
+	// Wait for the printf-then-exit command to finish.
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		result, err = reg.Execute(context.Background(), "terminal_snapshot", `{"id":"`+id+`"}`)
+		if err != nil {
+			t.Fatalf("terminal_snapshot: %v", err)
+		}
+		if strings.Contains(result, "exited") {
+			break
+		}
+		time.Sleep(25 * time.Millisecond)
+	}
+	if strings.Contains(result, "loaded-from-bashrc") || strings.Contains(result, "loaded-from-bash_profile") {
+		t.Fatalf("terminal_start sourced login dotfiles (bash -lc regression); snapshot:\n%s", result)
+	}
+	if !strings.Contains(result, "<unset>") {
+		t.Fatalf("expected sentinel to be <unset> (dotfiles not sourced); snapshot:\n%s", result)
+	}
+}
+
 func TestPreviewImage(t *testing.T) {
 	dir := t.TempDir()
 	img := image.NewRGBA(image.Rect(0, 0, 2, 2))

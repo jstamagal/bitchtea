@@ -81,7 +81,11 @@ func (m *terminalManager) Start(ctx context.Context, argsJSON string) (string, e
 	}
 
 	sessionCtx, cancel := context.WithCancel(context.Background())
-	cmd := exec.CommandContext(sessionCtx, "bash", "-lc", args.Command)
+	// Use bash -c (not -lc) so the shell does NOT source the user's
+	// login dotfiles (~/.bash_profile, ~/.bashrc). Sourcing them makes
+	// tool behavior depend on the host environment — aliases, exported
+	// vars, PROMPT_COMMAND, etc. — and breaks reproducibility.
+	cmd := exec.CommandContext(sessionCtx, "bash", "-c", args.Command)
 	cmd.Dir = m.workDir
 
 	if err := pty.Start(cmd); err != nil {

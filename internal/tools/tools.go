@@ -204,7 +204,7 @@ func (r *Registry) Definitions() []ToolDef {
 					"properties": map[string]interface{}{
 						"command": map[string]interface{}{
 							"type":        "string",
-							"description": "Command to run inside bash -lc",
+							"description": "Command to run inside bash -c",
 						},
 						"width": map[string]interface{}{
 							"type":        "integer",
