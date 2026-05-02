@@ -59,6 +59,38 @@ func TestSetCommandSetsAPIKey(t *testing.T) {
 	}
 }
 
+// TestSetCommandSetsAPIKeyVerbatim confirms /set apikey passes any value through
+// without validation — including short proxy tokens like "x".
+func TestSetCommandSetsAPIKeyVerbatim(t *testing.T) {
+	m := newTestModel(t)
+	result, _ := m.handleCommand("/set apikey x")
+	model := result.(Model)
+	if model.config.APIKey != "x" {
+		t.Errorf("apikey = %q, want %q", model.config.APIKey, "x")
+	}
+	for _, msg := range allMsgs(result) {
+		if msg.Type == MsgError {
+			t.Errorf("unexpected error: %q", msg.Content)
+		}
+	}
+}
+
+// TestSetCommandSetsModelVerbatim confirms /set model passes any value through
+// without warnings or rejection.
+func TestSetCommandSetsModelVerbatim(t *testing.T) {
+	m := newTestModel(t)
+	result, _ := m.handleCommand("/set model x")
+	model := result.(Model)
+	if model.config.Model != "x" {
+		t.Errorf("model = %q, want %q", model.config.Model, "x")
+	}
+	for _, msg := range allMsgs(result) {
+		if msg.Type == MsgError {
+			t.Errorf("unexpected error: %q", msg.Content)
+		}
+	}
+}
+
 func TestSetCommandSetsBaseURL(t *testing.T) {
 	m := newTestModel(t)
 	result, _ := m.handleCommand("/set baseurl https://api.example.com/v1")

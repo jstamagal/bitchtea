@@ -3,7 +3,6 @@ package ui
 import (
 	"context"
 	"fmt"
-	neturl "net/url"
 	"path/filepath"
 	"strings"
 	"time"
@@ -200,13 +199,6 @@ func handleModelCommand(m Model, _ string, parts []string) (Model, tea.Cmd) {
 	}
 
 	newModel := parts[1]
-	if (!strings.Contains(newModel, ".") && !strings.Contains(newModel, "-")) || len(newModel) < 3 || strings.Contains(newModel, " ") {
-		m.addMessage(ChatMessage{
-			Time:    time.Now(),
-			Type:    MsgError,
-			Content: fmt.Sprintf("Warning: model name %q looks suspicious. Expected something like gpt-4o, claude-3.5-sonnet, etc.", newModel),
-		})
-	}
 	m.agent.SetModel(newModel)
 	clearLoadedProfile(&m)
 	m.addMessage(ChatMessage{
@@ -552,11 +544,6 @@ func handleBaseURLCommand(m Model, _ string, parts []string) (Model, tea.Cmd) {
 		return m, nil
 	}
 	url := parts[1]
-	parsed, err := neturl.Parse(url)
-	if err != nil || parsed.Host == "" || (parsed.Scheme != "http" && parsed.Scheme != "https") {
-		m.errMsg(fmt.Sprintf("Invalid URL %q. Must start with http:// or https://.", url))
-		return m, nil
-	}
 	m.agent.SetBaseURL(url)
 	m.config.BaseURL = url
 	clearLoadedProfile(&m)
@@ -578,10 +565,6 @@ func handleAPIKeyCommand(m Model, _ string, parts []string) (Model, tea.Cmd) {
 	}
 
 	key := parts[1]
-	if len(key) < 10 {
-		m.errMsg(fmt.Sprintf("API key too short (%d chars). Must be at least 10 characters.", len(key)))
-		return m, nil
-	}
 	m.agent.SetAPIKey(key)
 	m.config.APIKey = key
 	clearLoadedProfile(&m)
@@ -596,10 +579,6 @@ func handleProviderCommand(m Model, _ string, parts []string) (Model, tea.Cmd) {
 		return m, nil
 	}
 	prov := parts[1]
-	if prov != "openai" && prov != "anthropic" {
-		m.errMsg(fmt.Sprintf("Invalid provider %q. Must be openai or anthropic.", prov))
-		return m, nil
-	}
 	m.config.Provider = prov
 	m.agent.SetProvider(prov)
 	clearLoadedProfile(&m)

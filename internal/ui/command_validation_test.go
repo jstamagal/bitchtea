@@ -48,185 +48,156 @@ func allMsgText(m tea.Model) string {
 	return strings.Join(parts, "\n")
 }
 
-func TestProviderValidation(t *testing.T) {
+func TestProviderAcceptsAnyValueVerbatim(t *testing.T) {
 	tests := []struct {
 		name        string
 		input       string
-		wantError   bool
 		wantContain string
+		wantStored  string
 	}{
-		{"valid openai", "/provider openai", false, "Provider set to: openai"},
-		{"valid anthropic", "/provider anthropic", false, "Provider set to: anthropic"},
-		{"invalid foo", "/provider foo", true, "Invalid provider"},
-		{"invalid google", "/provider google", true, "Invalid provider"},
-		{"invalid short", "/provider x", true, "Invalid provider"},
-		{"no arg shows current", "/provider", false, "Provider:"},
+		{"openai", "/provider openai", "Provider set to: openai", "openai"},
+		{"anthropic", "/provider anthropic", "Provider set to: anthropic", "anthropic"},
+		{"arbitrary value", "/provider foo", "Provider set to: foo", "foo"},
+		{"single char", "/provider x", "Provider set to: x", "x"},
+		{"no arg shows current", "/provider", "Provider:", "openai"},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			m := newTestModel(t)
 			result, _ := m.handleCommand(tt.input)
+			model := result.(Model)
 			msgs := allMsgs(result)
 			found := false
-			hasError := false
 			for _, msg := range msgs {
 				if strings.Contains(msg.Content, tt.wantContain) {
 					found = true
 				}
 				if msg.Type == MsgError {
-					hasError = true
+					t.Errorf("unexpected error message: %q", msg.Content)
 				}
 			}
 			if !found {
 				t.Errorf("expected message containing %q, got %#v", tt.wantContain, msgs)
 			}
-			if tt.wantError && !hasError {
-				t.Errorf("expected MsgError, got %#v", msgs)
-			}
-			if !tt.wantError && hasError {
-				t.Errorf("unexpected error in %#v", msgs)
+			if model.config.Provider != tt.wantStored {
+				t.Errorf("provider = %q, want %q", model.config.Provider, tt.wantStored)
 			}
 		})
 	}
 }
 
-func TestBaseURLValidation(t *testing.T) {
+func TestBaseURLAcceptsAnyValueVerbatim(t *testing.T) {
 	tests := []struct {
 		name        string
 		input       string
-		wantError   bool
 		wantContain string
+		wantStored  string
 	}{
-		{"valid https", "/baseurl https://api.example.com/v1", false, "Base URL set to"},
-		{"valid http", "/baseurl http://localhost:8080", false, "Base URL set to"},
-		{"invalid no scheme", "/baseurl api.example.com", true, "Invalid URL"},
-		{"invalid random text", "/baseurl notaurl", true, "Invalid URL"},
-		{"invalid ftp", "/baseurl ftp://example.com", true, "Invalid URL"},
-		{"no arg shows current", "/baseurl", false, "Base URL:"},
+		{"https", "/baseurl https://api.example.com/v1", "Base URL set to", "https://api.example.com/v1"},
+		{"http", "/baseurl http://localhost:8080", "Base URL set to", "http://localhost:8080"},
+		{"no scheme", "/baseurl api.example.com", "Base URL set to", "api.example.com"},
+		{"random text", "/baseurl notaurl", "Base URL set to", "notaurl"},
+		{"ftp", "/baseurl ftp://example.com", "Base URL set to", "ftp://example.com"},
+		{"no arg shows current", "/baseurl", "Base URL:", "https://api.openai.com/v1"},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			m := newTestModel(t)
 			result, _ := m.handleCommand(tt.input)
+			model := result.(Model)
 			msgs := allMsgs(result)
 			found := false
-			hasError := false
 			for _, msg := range msgs {
 				if strings.Contains(msg.Content, tt.wantContain) {
 					found = true
 				}
 				if msg.Type == MsgError {
-					hasError = true
+					t.Errorf("unexpected error: %q", msg.Content)
 				}
 			}
 			if !found {
 				t.Errorf("expected message containing %q, got %#v", tt.wantContain, msgs)
 			}
-			if tt.wantError && !hasError {
-				t.Errorf("expected MsgError, got %#v", msgs)
-			}
-			if !tt.wantError && hasError {
-				t.Errorf("unexpected error in %#v", msgs)
+			if model.config.BaseURL != tt.wantStored {
+				t.Errorf("baseurl = %q, want %q", model.config.BaseURL, tt.wantStored)
 			}
 		})
 	}
 }
 
-func TestAPIKeyValidation(t *testing.T) {
+func TestAPIKeyAcceptsAnyValueVerbatim(t *testing.T) {
 	tests := []struct {
 		name        string
 		input       string
-		wantError   bool
 		wantContain string
+		wantStored  string
 	}{
-		{"valid long key", "/apikey sk-1234567890abcdef", false, "API key set"},
-		{"too short 1 char", "/apikey x", true, "API key too short"},
-		{"too short 9 chars", "/apikey 123456789", true, "API key too short"},
-		{"exactly 10 chars ok", "/apikey 1234567890", false, "API key set"},
-		{"no arg shows current", "/apikey", false, "API Key:"},
+		{"long key", "/apikey sk-1234567890abcdef", "API key set", "sk-1234567890abcdef"},
+		{"single char x", "/apikey x", "API key set", "x"},
+		{"nine chars", "/apikey 123456789", "API key set", "123456789"},
+		{"ten chars", "/apikey 1234567890", "API key set", "1234567890"},
+		{"no arg shows current", "/apikey", "API Key:", "sk-test-key-12345"},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			m := newTestModel(t)
 			result, _ := m.handleCommand(tt.input)
+			model := result.(Model)
 			msg := lastMsg(result)
 			if !strings.Contains(msg.Content, tt.wantContain) {
 				t.Errorf("expected message containing %q, got %q", tt.wantContain, msg.Content)
 			}
-			if tt.wantError && msg.Type != MsgError {
-				t.Errorf("expected MsgError, got %v", msg.Type)
-			}
-			if !tt.wantError && msg.Type == MsgError {
+			if msg.Type == MsgError {
 				t.Errorf("unexpected error: %q", msg.Content)
+			}
+			if model.config.APIKey != tt.wantStored {
+				t.Errorf("apikey = %q, want %q", model.config.APIKey, tt.wantStored)
 			}
 		})
 	}
 }
 
-func TestModelNameWarning(t *testing.T) {
+func TestModelAcceptsAnyValueVerbatim(t *testing.T) {
 	tests := []struct {
 		name        string
 		input       string
-		wantWarning bool
 		wantContain string
+		wantStored  string
 	}{
-		{"valid gpt-4o", "/model gpt-4o", false, "Model switched to"},
-		{"valid claude-3.5-sonnet", "/model claude-3.5-sonnet", false, "Model switched to"},
-		{"suspicious short", "/model x", true, "suspicious"},
-		{"suspicious nodotdash", "/model foobar", true, "suspicious"},
-		{"no arg shows current", "/model", false, "Current model"},
+		{"gpt-4o", "/model gpt-4o", "Model switched to", "gpt-4o"},
+		{"claude-3.5-sonnet", "/model claude-3.5-sonnet", "Model switched to", "claude-3.5-sonnet"},
+		{"single char x", "/model x", "Model switched to", "x"},
+		{"no dot or dash", "/model foobar", "Model switched to", "foobar"},
+		{"no arg shows current", "/model", "Current model", "gpt-4o"},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			m := newTestModel(t)
 			result, _ := m.handleCommand(tt.input)
+			model := result.(Model)
 
 			msgs := allMsgs(result)
-			hasWarning := false
 			hasSwitch := false
 			for _, msg := range msgs {
-				if strings.Contains(msg.Content, "suspicious") && msg.Type == MsgError {
-					hasWarning = true
-				}
 				if strings.Contains(msg.Content, tt.wantContain) {
 					hasSwitch = true
+				}
+				if msg.Type == MsgError {
+					t.Errorf("unexpected error: %q", msg.Content)
 				}
 			}
 
 			if !hasSwitch {
 				t.Errorf("expected a message containing %q", tt.wantContain)
 			}
-			if tt.wantWarning && !hasWarning {
-				t.Errorf("expected suspicious model warning")
-			}
-			if !tt.wantWarning && hasWarning {
-				t.Error("unexpected suspicious model warning")
+			if model.config.Model != tt.wantStored {
+				t.Errorf("model = %q, want %q", model.config.Model, tt.wantStored)
 			}
 		})
-	}
-}
-
-func TestProviderDoesNotMutateOnInvalidInput(t *testing.T) {
-	m := newTestModel(t)
-	original := m.config.Provider
-	result, _ := m.handleCommand("/provider foobar")
-	model := result.(Model)
-	if model.config.Provider != original {
-		t.Errorf("provider should not change on invalid input, got %q", model.config.Provider)
-	}
-}
-
-func TestBaseURLDoesNotMutateOnInvalidInput(t *testing.T) {
-	m := newTestModel(t)
-	original := m.config.BaseURL
-	result, _ := m.handleCommand("/baseurl notaurl")
-	model := result.(Model)
-	if model.config.BaseURL != original {
-		t.Errorf("baseurl should not change on invalid input, got %q", model.config.BaseURL)
 	}
 }
 
@@ -307,16 +278,6 @@ func TestProfileLoadMasksAPIKeyAndAvoidsDuplicateMessages(t *testing.T) {
 	}
 	if strings.Contains(msg.Content, "sk-or-v1-1234567890ABCD") {
 		t.Fatalf("expected full api key to stay hidden, got %q", msg.Content)
-	}
-}
-
-func TestAPIKeyDoesNotMutateOnInvalidInput(t *testing.T) {
-	m := newTestModel(t)
-	original := m.config.APIKey
-	result, _ := m.handleCommand("/apikey short")
-	model := result.(Model)
-	if model.config.APIKey != original {
-		t.Errorf("apikey should not change on invalid input, got %q", model.config.APIKey)
 	}
 }
 
