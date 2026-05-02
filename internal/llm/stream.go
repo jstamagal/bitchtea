@@ -73,6 +73,16 @@ func (c *Client) streamOnce(ctx context.Context, msgs []Message, reg *tools.Regi
 
 	prompt, prior, systemPrompt := splitForFantasy(msgs)
 
+	// Snapshot Service / BootstrapMsgCount under the mutex so PrepareStep
+	// closes over a stable view even if a concurrent SetService runs while
+	// this turn is in flight. PrepareStep itself is invoked from inside the
+	// fantasy goroutine and must not take c.mu.
+	c.mu.Lock()
+	cacheService := c.Service
+	cacheBootstrap := c.BootstrapMsgCount
+	c.mu.Unlock()
+	cacheBoundaryIdx := bootstrapPreparedIndex(msgs, cacheBootstrap)
+
 	opts := []fantasy.AgentOption{
 		fantasy.WithStopConditions(fantasy.StepCountIs(maxAgentSteps)),
 	}
@@ -90,11 +100,19 @@ func (c *Client) streamOnce(ctx context.Context, msgs []Message, reg *tools.Regi
 		Prompt:   prompt,
 		Messages: prior,
 
-		PrepareStep: func(stepCtx context.Context, _ fantasy.PrepareStepFunctionOptions) (context.Context, fantasy.PrepareStepResult, error) {
+		PrepareStep: func(stepCtx context.Context, stepOpts fantasy.PrepareStepFunctionOptions) (context.Context, fantasy.PrepareStepResult, error) {
 			if sendErr := safeSend(stepCtx, events, StreamEvent{Type: "thinking"}); sendErr != nil {
 				return stepCtx, fantasy.PrepareStepResult{}, sendErr
 			}
-			return stepCtx, fantasy.PrepareStepResult{}, nil
+			// Per docs/phase-4-preparestep.md, cache markers run after queue
+			// drain and tool refresh on the final prepared.Messages shape.
+			// Until the full PrepareStep abstraction (bt-p4) lands, we
+			// operate on stepOpts.Messages directly — fantasy treats a nil
+			// prepared.Messages as "use stepOpts.Messages unchanged", so we
+			// have to substitute the slice we mutate.
+			prepared := fantasy.PrepareStepResult{Messages: stepOpts.Messages}
+			applyAnthropicCacheMarkers(&prepared, cacheService, cacheBoundaryIdx)
+			return stepCtx, prepared, nil
 		},
 
 		OnTextDelta: func(_, text string) error {

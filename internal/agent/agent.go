@@ -95,6 +95,7 @@ func osPrettyName() string {
 // NewAgentWithStreamer creates a new agent with an injectable chat streamer.
 func NewAgentWithStreamer(cfg *config.Config, streamer llm.ChatStreamer) *Agent {
 	client := llm.NewClient(cfg.APIKey, cfg.BaseURL, cfg.Model, cfg.Provider)
+	client.SetService(cfg.Service)
 	if streamer == nil {
 		streamer = client
 	}
@@ -150,8 +151,20 @@ func NewAgentWithStreamer(cfg *config.Config, streamer llm.ChatStreamer) *Agent 
 	a.messages = append(a.messages, personaAnchor...)
 
 	a.bootstrapMsgCount = len(a.messages)
+	a.pushBootstrapToClient()
 
 	return a
+}
+
+// pushBootstrapToClient mirrors the agent's bootstrapMsgCount into the LLM
+// client so PrepareStep can place the Anthropic prompt-cache marker on the
+// last surviving bootstrap message. Safe to call even when the streamer is a
+// test fake — it only mutates the underlying *llm.Client field.
+func (a *Agent) pushBootstrapToClient() {
+	if a.client == nil {
+		return
+	}
+	a.client.SetBootstrapMsgCount(a.bootstrapMsgCount)
 }
 
 // SendMessage processes a user message through the agent loop
@@ -522,6 +535,16 @@ func (a *Agent) SetAPIKey(key string) {
 func (a *Agent) SetProvider(provider string) {
 	a.config.Provider = provider
 	a.client.SetProvider(provider)
+}
+
+// SetService changes the upstream service identity (cfg.Service). This is
+// what gates per-service behavior like Anthropic prompt-cache markers; the
+// wire format / dialect stays governed by Provider. Does not invalidate the
+// cached provider because Service is consumed inside PrepareStep, not during
+// provider construction.
+func (a *Agent) SetService(service string) {
+	a.config.Service = service
+	a.client.SetService(service)
 }
 
 // SetDebugHook installs (or clears) the debug hook; rebuilds the HTTP
@@ -917,6 +940,7 @@ func (a *Agent) RestoreMessages(messages []llm.Message) {
 
 	// Reset session-local stats so resume starts with clean counters
 	a.bootstrapMsgCount = 0
+	a.pushBootstrapToClient()
 	a.TurnCount = 0
 	a.ToolCalls = make(map[string]int)
 	a.CostTracker = llm.NewCostTracker()
@@ -962,6 +986,7 @@ func (a *Agent) Reset() {
 
 	a.messages = append(a.messages, buildPersonaAnchor()...)
 	a.bootstrapMsgCount = len(a.messages)
+	a.pushBootstrapToClient()
 
 	a.injectedPaths = make(map[string]bool)
 	a.TurnCount = 0

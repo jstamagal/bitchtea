@@ -20,13 +20,29 @@ type Client struct {
 	Model    string
 	Provider string
 
+	// Service is the upstream service identity ("anthropic", "openai",
+	// "ollama", "openrouter", "zai-anthropic", ...). Used as a per-service
+	// behavior gate (e.g. Anthropic prompt-cache markers). Empty string
+	// means "no per-service gating", which is treated as off for every
+	// gated feature. Mutating Service does NOT invalidate the cached
+	// provider — the wire format is determined by Provider.
+	Service string
+
+	// BootstrapMsgCount mirrors agent.Agent.bootstrapMsgCount and is the
+	// count of session-start messages (system prompt + AGENTS.md/CLAUDE.md
+	// + persona anchor) that form the longest stable prefix in the
+	// conversation. The Anthropic cache marker rides on the last surviving
+	// bootstrap message in fantasy's `prior` slice. Zero means "no
+	// bootstrap known" and disables marker placement.
+	BootstrapMsgCount int
+
 	// DebugHook is invoked for each upstream HTTP request when non-nil.
 	// To set/clear it at runtime, use SetDebugHook (the cached provider
 	// must rebuild because its HTTP client wraps this hook).
 	DebugHook func(DebugInfo)
 
 	mu       sync.Mutex
-	provider fantasy.Provider     // cached, nil until first ensureModel
+	provider fantasy.Provider      // cached, nil until first ensureModel
 	model    fantasy.LanguageModel // cached, nil until first ensureModel
 }
 
@@ -67,6 +83,26 @@ func (c *Client) SetProvider(provider string) {
 	defer c.mu.Unlock()
 	c.Provider = provider
 	c.invalidateLocked()
+}
+
+// SetService updates the upstream service identity used for per-service
+// behavior gates (e.g. Anthropic prompt-cache markers). Does not invalidate
+// the cached provider because Service is consumed inside PrepareStep, not
+// during provider construction.
+func (c *Client) SetService(service string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.Service = service
+}
+
+// SetBootstrapMsgCount mirrors the agent's bootstrap-message count into the
+// client so PrepareStep can place the Anthropic cache marker on the last
+// surviving bootstrap message. Cheap to call before every StreamChat — there
+// is no provider invalidation.
+func (c *Client) SetBootstrapMsgCount(n int) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.BootstrapMsgCount = n
 }
 
 // SetDebugHook installs (or clears) the DebugHook. nil → nil is a no-op so
