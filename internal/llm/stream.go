@@ -83,6 +83,20 @@ func (c *Client) streamOnce(ctx context.Context, msgs []Message, reg *tools.Regi
 	c.mu.Unlock()
 	cacheBoundaryIdx := bootstrapPreparedIndex(msgs, cacheBootstrap)
 
+	// Create a per-turn ToolContextManager so each tool call gets its own
+	// cancellable context. The manager is stored on the client so the agent
+	// can expose CancelTool to the UI.
+	toolCtxMgr := NewToolContextManager(ctx)
+	c.mu.Lock()
+	c.toolCtx = toolCtxMgr
+	c.mu.Unlock()
+	defer func() {
+		toolCtxMgr.CancelAll()
+		c.mu.Lock()
+		c.toolCtx = nil
+		c.mu.Unlock()
+	}()
+
 	opts := []fantasy.AgentOption{
 		fantasy.WithStopConditions(fantasy.StepCountIs(maxAgentSteps)),
 	}
@@ -97,7 +111,8 @@ func (c *Client) streamOnce(ctx context.Context, msgs []Message, reg *tools.Regi
 		// individual tools, and a fully-failed listing should still let
 		// the local tool surface stay usable for this turn.
 		mcpTools, _ := MCPTools(ctx, c.MCPManager())
-		opts = append(opts, fantasy.WithTools(AssembleAgentTools(reg, mcpTools)...))
+		assembled := AssembleAgentTools(reg, mcpTools)
+		opts = append(opts, fantasy.WithTools(wrapToolsWithContext(assembled, toolCtxMgr)...))
 	}
 
 	fa := fantasy.NewAgent(model, opts...)

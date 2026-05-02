@@ -52,6 +52,11 @@ type Client struct {
 	// opted in" — behavior matches pre-Phase-6. Wiring is owned by the
 	// agent bootstrap (Agent.SetMCPManager), not by this package.
 	mcpManager *mcp.Manager
+
+	// toolCtx holds the per-turn ToolContextManager. Set at the start of
+	// each streamOnce call, cleared when the turn ends. The agent reads
+	// it to expose CancelTool to the UI.
+	toolCtx *ToolContextManager
 }
 
 // NewClient builds a Client. The provider/model are not constructed until the
@@ -144,6 +149,15 @@ func (c *Client) MCPManager() *mcp.Manager {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	return c.mcpManager
+}
+
+// ToolContextManager returns the per-turn tool context manager for the
+// currently active stream, or nil if no stream is active. The agent uses
+// this to expose CancelTool to the UI.
+func (c *Client) ToolContextManager() *ToolContextManager {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.toolCtx
 }
 
 // SetDebugHook installs (or clears) the DebugHook. nil → nil is a no-op so

@@ -205,6 +205,27 @@ func (a *Agent) SendFollowUp(ctx context.Context, req *FollowUpRequest, events c
 	a.sendMessage(ctx, req.Prompt, req.Kind, events)
 }
 
+// CancelTool cancels the context for a specific active tool call without
+// cancelling the entire turn. Returns an error if no active tool with that
+// ID exists (e.g., the tool already finished).
+func (a *Agent) CancelTool(toolCallID string) error {
+	mgr := a.client.ToolContextManager()
+	if mgr == nil {
+		return fmt.Errorf("no active turn")
+	}
+	return mgr.CancelTool(toolCallID)
+}
+
+// ActiveToolIDs returns the IDs of currently executing tool calls. Returns
+// nil if no turn is active.
+func (a *Agent) ActiveToolIDs() []string {
+	mgr := a.client.ToolContextManager()
+	if mgr == nil {
+		return nil
+	}
+	return mgr.ActiveToolIDs()
+}
+
 // sendMessage runs one user turn through the streamer. fantasy owns the
 // LLM/tool loop now: it streams text, dispatches tool calls into bitchteaTool
 // (which calls Registry.Execute), and emits StreamEvents back through the
@@ -268,15 +289,17 @@ func (a *Agent) sendMessage(ctx context.Context, userMsg string, kind followUpKi
 				a.ToolCalls[ev.ToolName]++
 				events <- Event{Type: "state", State: StateToolCall}
 				events <- Event{
-					Type:     "tool_start",
-					ToolName: ev.ToolName,
-					ToolArgs: ev.ToolArgs,
+					Type:       "tool_start",
+					ToolName:   ev.ToolName,
+					ToolCallID: ev.ToolCallID,
+					ToolArgs:   ev.ToolArgs,
 				}
 
 			case "tool_result":
 				events <- Event{
 					Type:       "tool_result",
 					ToolName:   ev.ToolName,
+					ToolCallID: ev.ToolCallID,
 					ToolResult: ev.Text,
 				}
 
@@ -1027,6 +1050,9 @@ func (a *Agent) RestoreMessages(messages []fantasy.Message) {
 	a.activeFollowUpKind = followUpKindNone
 	a.lastCompletedFollowUp = followUpKindNone
 	a.lastAssistantRaw = ""
+
+	// Sync the context map so the current context points to the restored messages.
+	a.contextMsgs[a.currentContext] = a.messages
 }
 
 // Reset clears the conversation history back to its bootstrap state — system
@@ -1067,6 +1093,15 @@ func (a *Agent) Reset() {
 	a.activeFollowUpKind = followUpKindNone
 	a.lastCompletedFollowUp = followUpKindNone
 	a.lastAssistantRaw = ""
+
+	// Reset per-context storage to just the default context.
+	a.currentContext = DefaultContextKey
+	a.contextMsgs = map[ContextKey][]fantasy.Message{
+		DefaultContextKey: a.messages,
+	}
+	a.contextSavedIdx = map[ContextKey]int{
+		DefaultContextKey: 0,
+	}
 }
 
 // Elapsed returns time since agent creation

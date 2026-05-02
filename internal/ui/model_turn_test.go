@@ -215,6 +215,7 @@ func TestFirstEscDuringStreamingPromptsForTurnCancel(t *testing.T) {
 	cfg.SessionDir = t.TempDir()
 
 	model := NewModel(&cfg)
+	model.toolPanel.Visible = false // skip panel-close step
 	model.streaming = true
 	model.queued = []queuedMsg{{text: "first", queuedAt: time.Now()}, {text: "second", queuedAt: time.Now()}}
 	canceled := false
@@ -243,6 +244,7 @@ func TestSecondEscCancelsTurnWithoutClearingQueue(t *testing.T) {
 	cfg.SessionDir = t.TempDir()
 
 	model := NewModel(&cfg)
+	model.toolPanel.Visible = false // skip panel-close step
 	model.streaming = true
 	model.queued = []queuedMsg{{text: "first", queuedAt: time.Now()}, {text: "second", queuedAt: time.Now()}}
 	canceled := false
@@ -264,8 +266,8 @@ func TestSecondEscCancelsTurnWithoutClearingQueue(t *testing.T) {
 	if !got.queueClearArmed {
 		t.Fatal("expected second esc to arm queue clearing")
 	}
-	if len(got.messages) == 0 || !strings.Contains(got.messages[len(got.messages)-1].Content, "press Esc again to clear them") {
-		t.Fatalf("expected second esc feedback to report queued messages, got %#v", got.messages)
+	if len(got.messages) == 0 || !strings.Contains(got.messages[len(got.messages)-1].Content, "Interrupted by Esc.") {
+		t.Fatalf("expected second esc feedback, got %#v", got.messages)
 	}
 }
 
@@ -275,12 +277,14 @@ func TestThirdEscClearsQueueAfterTurnCancel(t *testing.T) {
 	cfg.SessionDir = t.TempDir()
 
 	model := NewModel(&cfg)
+	model.toolPanel.Visible = false // skip panel-close step
 	model.streaming = true
 	model.queued = []queuedMsg{{text: "first", queuedAt: time.Now()}, {text: "second", queuedAt: time.Now()}}
 	model.cancel = func() {}
 
 	updated, _ := model.Update(tea.KeyMsg{Type: tea.KeyEsc})
 	updated, _ = updated.(Model).Update(tea.KeyMsg{Type: tea.KeyEsc})
+	// After turn cancel, queueClearArmed is set. Next Esc clears the queue.
 	updated, _ = updated.(Model).Update(tea.KeyMsg{Type: tea.KeyEsc})
 	got := updated.(Model)
 
@@ -298,6 +302,7 @@ func TestEscSequenceResetsAfterTimeout(t *testing.T) {
 	cfg.SessionDir = t.TempDir()
 
 	model := NewModel(&cfg)
+	model.toolPanel.Visible = false // skip panel-close step
 	model.streaming = true
 	model.queued = []queuedMsg{{text: "first", queuedAt: time.Now()}}
 	canceled := false
@@ -319,14 +324,16 @@ func TestEscSequenceResetsAfterTimeout(t *testing.T) {
 	}
 }
 
-func TestFirstEscDuringRunningToolFallsBackToTurnCancel(t *testing.T) {
+func TestFirstEscDuringRunningToolCancelsToolOnly(t *testing.T) {
 	cfg := config.DefaultConfig()
 	cfg.WorkDir = t.TempDir()
 	cfg.SessionDir = t.TempDir()
 
 	model := NewModel(&cfg)
+	model.toolPanel.Visible = false // skip panel-close step
 	model.streaming = true
 	model.activeToolName = "bash"
+	model.activeToolCallID = "call-123"
 	model.queued = []queuedMsg{{text: "next", queuedAt: time.Now()}}
 	canceled := false
 	model.cancel = func() { canceled = true }
@@ -334,17 +341,19 @@ func TestFirstEscDuringRunningToolFallsBackToTurnCancel(t *testing.T) {
 	updated, _ := model.Update(tea.KeyMsg{Type: tea.KeyEsc})
 	got := updated.(Model)
 
-	if !canceled {
-		t.Fatal("expected first esc during active tool to cancel current turn fallback")
+	// Per-tool cancel: the turn should NOT be cancelled.
+	if canceled {
+		t.Fatal("expected first esc during active tool to cancel tool only, not the turn")
 	}
-	if got.streaming {
-		t.Fatal("expected active-tool fallback to stop streaming")
+	if !got.streaming {
+		t.Fatal("expected tool-only cancel to leave streaming active")
 	}
 	if len(got.queued) != 1 {
-		t.Fatalf("expected active-tool fallback to preserve queue, got %#v", got.queued)
+		t.Fatalf("expected tool-only cancel to preserve queue, got %#v", got.queued)
 	}
-	if len(got.messages) == 0 || !strings.Contains(got.messages[len(got.messages)-1].Content, "Tool-only cancel is not wired yet") {
-		t.Fatalf("expected active-tool fallback feedback, got %#v", got.messages)
+	// escStage resets to 0 after tool cancel (no graduation needed).
+	if got.escStage != 0 {
+		t.Fatalf("expected esc stage to reset after tool cancel, got %d", got.escStage)
 	}
 }
 

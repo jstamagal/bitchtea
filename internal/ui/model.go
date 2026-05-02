@@ -114,6 +114,7 @@ type Model struct {
 	streaming          bool
 	streamBuffer       *strings.Builder // accumulates current agent response (pointer to avoid copy panic)
 	activeToolName     string
+	activeToolCallID   string // fantasy tool call ID for per-tool cancellation
 	focus              *FocusManager
 	membership         *MembershipManager
 	backgroundActivity []BackgroundActivity
@@ -133,8 +134,9 @@ type Model struct {
 
 	// Session
 	session         *session.Session
-	lastSavedMsgIdx int        // index into agent.Messages() of last saved entry
-	turnContext     IRCContext // active context when current/last turn was submitted
+	lastSavedMsgIdx int              // index into agent.Messages() of last saved entry
+	contextSavedIdx map[string]int   // per-context session-save watermark
+	turnContext     IRCContext        // active context when current/last turn was submitted
 	transcript      *TranscriptLogger
 
 	// Debug mode - verbose API logging
@@ -200,21 +202,22 @@ func NewModel(cfg *config.Config) Model {
 	ag.SetScope(ircContextToMemoryScope(fm.Active()))
 
 	return Model{
-		config:       cfg,
-		agent:        ag,
-		agentState:   agent.StateIdle,
-		input:        ta,
-		spinner:      sp,
-		toolPanel:    NewToolPanel(),
-		mp3:          newMP3Controller(),
-		messages:     []ChatMessage{},
-		history:      []string{},
-		historyIdx:   -1,
-		streamBuffer: &strings.Builder{},
-		focus:        fm,
-		membership:   mm,
-		session:      sess,
-		transcript:   transcript,
+		config:          cfg,
+		agent:           ag,
+		agentState:      agent.StateIdle,
+		input:           ta,
+		spinner:         sp,
+		toolPanel:       NewToolPanel(),
+		mp3:             newMP3Controller(),
+		messages:        []ChatMessage{},
+		history:         []string{},
+		historyIdx:      -1,
+		streamBuffer:    &strings.Builder{},
+		focus:           fm,
+		membership:      mm,
+		session:         sess,
+		transcript:      transcript,
+		contextSavedIdx: map[string]int{ircContextToKey(fm.Active()): 0},
 	}
 }
 
@@ -228,11 +231,48 @@ func NewModel(cfg *config.Config) Model {
 // fantasy parts the same way the in-flight conversion does.
 func (m *Model) ResumeSession(sess *session.Session) {
 	m.session = sess
-	messages := session.FantasyFromEntries(sess.Entries)
-	if len(messages) > 0 {
-		m.agent.RestoreMessages(messages)
-		m.lastSavedMsgIdx = len(messages)
+
+	// Group entries by context label for per-context restore.
+	type ctxGroup struct {
+		entries []session.Entry
 	}
+	groups := map[string]*ctxGroup{}
+	for _, e := range sess.Entries {
+		key := e.Context
+		if key == "" {
+			key = agent.DefaultContextKey
+		}
+		if _, ok := groups[key]; !ok {
+			groups[key] = &ctxGroup{}
+		}
+		groups[key].entries = append(groups[key].entries, e)
+	}
+
+	// Restore default context via RestoreMessages (sets bootstrap prefix).
+	defaultKey := agent.DefaultContextKey
+	if dg, ok := groups[defaultKey]; ok {
+		msgs := session.FantasyFromEntries(dg.entries)
+		if len(msgs) > 0 {
+			m.agent.RestoreMessages(msgs)
+			m.agent.SetSavedIdx(defaultKey, len(msgs))
+			m.lastSavedMsgIdx = len(msgs)
+		}
+	}
+
+	// Restore other contexts via RestoreContextMessages.
+	for key, g := range groups {
+		if key == defaultKey {
+			continue
+		}
+		msgs := session.FantasyFromEntries(g.entries)
+		if len(msgs) > 0 {
+			m.agent.RestoreContextMessages(key, msgs)
+			m.agent.SetSavedIdx(key, len(msgs))
+		}
+	}
+
+	// Initialize contextSavedIdx for the active context.
+	m.contextSavedIdx = map[string]int{ircContextToKey(m.focus.Active()): 0}
 
 	toolNames := make(map[string]string)
 	for _, e := range sess.Entries {
@@ -598,6 +638,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.eventCh = nil
 		m.cancel = nil
 		m.activeToolName = ""
+		m.activeToolCallID = ""
 		m.escStage = 0
 		m.escLast = time.Time{}
 		m.ctrlCStage = 0
@@ -616,13 +657,14 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 
 		// Save new messages to session (incremental), stamping the turn context.
-		// Phase 3: write fantasy-native v1 entries via EntryFromFantasy. The
-		// dual-write writer also populates the legacy fields so a downgraded
-		// binary can keep reading the JSONL file.
+		// Uses per-context savedIdx so each context's session watermark is tracked
+		// independently across /join and /query switches.
 		if m.session != nil {
+			ctxKey := ircContextToKey(m.turnContext)
 			msgs := m.agent.Messages()
+			savedIdx := m.agent.SavedIdx(ctxKey)
 			ctxLabel := m.turnContext.Label()
-			for i := m.lastSavedMsgIdx; i < len(msgs); i++ {
+			for i := savedIdx; i < len(msgs); i++ {
 				e := session.EntryFromFantasyWithBootstrap(
 					msgs[i],
 					i < m.agent.BootstrapMessageCount(),
@@ -630,6 +672,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				e.Context = ctxLabel
 				_ = m.session.Append(e)
 			}
+			m.agent.SetSavedIdx(ctxKey, len(msgs))
 			m.lastSavedMsgIdx = len(msgs)
 		}
 
@@ -765,6 +808,7 @@ func (m *Model) handleAgentEvent(ev agent.Event) (tea.Model, tea.Cmd) {
 
 	case "tool_start":
 		m.activeToolName = ev.ToolName
+		m.activeToolCallID = ev.ToolCallID
 		m.addMessage(ChatMessage{
 			Time:    time.Now(),
 			Type:    MsgTool,
@@ -779,6 +823,7 @@ func (m *Model) handleAgentEvent(ev agent.Event) (tea.Model, tea.Cmd) {
 	case "tool_result":
 		if m.activeToolName == ev.ToolName {
 			m.activeToolName = ""
+			m.activeToolCallID = ""
 		}
 		// Truncate tool output for display
 		result := ev.ToolResult
@@ -817,6 +862,7 @@ func (m *Model) handleAgentEvent(ev agent.Event) (tea.Model, tea.Cmd) {
 
 	case "error":
 		m.activeToolName = ""
+		m.activeToolCallID = ""
 		errText := fmt.Sprintf("Error: %v", ev.Error)
 		if hint := llm.ErrorHint(ev.Error); hint != "" {
 			errText += "\n  hint: " + hint
@@ -883,7 +929,12 @@ func (m *Model) startAgentTurn(start func(context.Context, chan agent.Event)) te
 	m.ctrlCStage = 0
 	m.ctrlCLast = time.Time{}
 	m.activeToolName = ""
+	m.activeToolCallID = ""
 	m.turnContext = m.focus.Active()
+	ctxKey := ircContextToKey(m.turnContext)
+	m.agent.InitContext(ctxKey)
+	m.agent.SetContext(ctxKey)
+	m.lastSavedMsgIdx = m.agent.SavedIdx(ctxKey)
 	m.agent.SetScope(ircContextToMemoryScope(m.turnContext))
 	ctx, cancel := context.WithCancel(context.Background())
 	m.cancel = cancel
@@ -906,6 +957,7 @@ func (m *Model) cancelActiveTurn(message string, clearQueue bool) {
 	m.cancel = nil
 	m.eventCh = nil
 	m.activeToolName = ""
+	m.activeToolCallID = ""
 	m.escStage = 0
 	m.escLast = time.Time{}
 	if clearQueue {
@@ -991,53 +1043,70 @@ func (m *Model) handleEscKey() {
 	now := time.Now()
 	if !m.escLast.IsZero() && now.Sub(m.escLast) > escGraduationWindow {
 		m.escStage = 0
+		m.queueClearArmed = false
 	}
 	m.escLast = now
 
+	// Close panel if open (does not count toward the cancel ladder).
+	if m.toolPanel != nil && m.toolPanel.Visible {
+		m.toolPanel.Visible = false
+		m.sysMsg("Tool panel closed.")
+		return
+	}
+	if m.mp3 != nil && m.mp3.visible {
+		m.mp3.visible = false
+		m.sysMsg("MP3 panel closed.")
+		return
+	}
+
+	// Queue clearing: when armed after a previous cancel.
 	if m.queueClearArmed && len(m.queued) > 0 {
+		cleared := len(m.queued)
 		m.queued = nil
 		m.queueClearArmed = false
 		m.escStage = 0
-		m.addMessage(ChatMessage{
-			Time:    now,
-			Type:    MsgSystem,
-			Content: "Cleared queued messages.",
-		})
-		m.refreshViewport()
+		m.sysMsg(fmt.Sprintf("Cleared %d queued message(s).", cleared))
 		return
 	}
 
+	// Not streaming: reset and bail.
 	if !m.streaming || m.cancel == nil {
-		return
-	}
-
-	if m.activeToolName != "" {
-		message := fmt.Sprintf("Tool-only cancel is not wired yet; cancelled the current turn while %s was running.", m.activeToolName)
-		if len(m.queued) > 0 {
-			message = fmt.Sprintf("%s %d queued message(s) remain; press Esc again to clear them.", message, len(m.queued))
-			m.queueClearArmed = true
-		}
-		m.cancelActiveTurn(message, false)
+		m.escStage = 0
+		m.queueClearArmed = false
 		return
 	}
 
 	m.escStage++
-	if m.escStage == 1 {
-		m.addMessage(ChatMessage{
-			Time:    now,
-			Type:    MsgSystem,
-			Content: "Press Esc again to cancel the turn.",
-		})
-		m.refreshViewport()
-		return
-	}
 
-	message := "Interrupted by Esc."
+	switch m.escStage {
+	case 1:
+		// First meaningful Esc: cancel the active tool only, leaving the
+		// turn alive so fantasy can process the cancelled tool result and
+		// continue with remaining tool calls or the next LLM step.
+		if m.activeToolName != "" {
+			if err := m.agent.CancelTool(m.activeToolCallID); err != nil {
+				m.sysMsg(fmt.Sprintf("Could not cancel %s: %v", m.activeToolName, err))
+			} else {
+				m.sysMsg(fmt.Sprintf("Cancelled %s.", m.activeToolName))
+			}
+			m.escStage = 0
+			return
+		}
+		m.sysMsg("Press Esc again to cancel the turn.")
+
+	case 2:
+		m.cancelActiveTurnWithQueueArm("Interrupted by Esc.")
+
+	default:
+		m.escStage = 0
+	}
+}
+
+func (m *Model) cancelActiveTurnWithQueueArm(message string) {
+	m.cancelActiveTurn(message, false)
 	if len(m.queued) > 0 {
-		message = fmt.Sprintf("Interrupted by Esc. %d queued message(s) remain; press Esc again to clear them.", len(m.queued))
 		m.queueClearArmed = true
 	}
-	m.cancelActiveTurn(message, false)
 }
 
 func (m *Model) syncLastAssistantMessage() {

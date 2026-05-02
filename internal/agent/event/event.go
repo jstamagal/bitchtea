@@ -22,6 +22,7 @@ type Event struct {
 	Text string // for text events (streamed tokens)
 
 	ToolName   string // for tool events
+	ToolCallID string // for tool events — the fantasy tool call ID
 	ToolArgs   string
 	ToolResult string
 	ToolError  error

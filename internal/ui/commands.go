@@ -254,6 +254,7 @@ func handleRestartCommand(m Model, _ string, _ []string) (Model, tea.Cmd) {
 		m.session = newSess
 	}
 	m.lastSavedMsgIdx = 0
+	m.contextSavedIdx = map[string]int{ircContextToKey(m.focus.Active()): 0}
 
 	m.sysMsg("*** Conversation restarted. Fresh context.")
 	return m, nil
