@@ -87,6 +87,71 @@ func TestReadOffsetPastEOF(t *testing.T) {
 	}
 }
 
+func TestReadBinaryFile(t *testing.T) {
+	dir := t.TempDir()
+	binary := []byte{0x00, 0x01, 0x02, 'b', 'i', 'n', '\n', 0xff, 0xfe}
+	if err := os.WriteFile(filepath.Join(dir, "blob.bin"), binary, 0644); err != nil {
+		t.Fatalf("write binary fixture: %v", err)
+	}
+
+	reg := NewRegistry(dir, t.TempDir())
+	result, err := reg.Execute(context.Background(), "read", `{"path":"blob.bin"}`)
+	if err != nil {
+		t.Fatalf("read binary: %v", err)
+	}
+	if result != string(binary) {
+		t.Fatalf("read should return raw file bytes as a Go string, got %q want %q", result, string(binary))
+	}
+}
+
+func TestReadOffsetZero(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "lines.txt"), []byte("line1\nline2\nline3"), 0644); err != nil {
+		t.Fatalf("write fixture: %v", err)
+	}
+
+	reg := NewRegistry(dir, t.TempDir())
+	result, err := reg.Execute(context.Background(), "read", `{"path":"lines.txt","offset":0,"limit":1}`)
+	if err != nil {
+		t.Fatalf("read offset zero: %v", err)
+	}
+	if result != "line1" {
+		t.Fatalf("offset=0 should start at line 1 when limit is set, got %q", result)
+	}
+
+	result, err = reg.Execute(context.Background(), "read", `{"path":"lines.txt","offset":1,"limit":1}`)
+	if err != nil {
+		t.Fatalf("read offset one: %v", err)
+	}
+	if result != "line1" {
+		t.Fatalf("offset=1 should also start at line 1, got %q", result)
+	}
+}
+
+func TestReadLimitZero(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "lines.txt"), []byte("line1\nline2\nline3"), 0644); err != nil {
+		t.Fatalf("write fixture: %v", err)
+	}
+
+	reg := NewRegistry(dir, t.TempDir())
+	result, err := reg.Execute(context.Background(), "read", `{"path":"lines.txt","limit":0}`)
+	if err != nil {
+		t.Fatalf("read limit zero: %v", err)
+	}
+	if result != "line1\nline2\nline3" {
+		t.Fatalf("limit=0 should mean unlimited, got %q", result)
+	}
+
+	result, err = reg.Execute(context.Background(), "read", `{"path":"lines.txt","offset":2,"limit":0}`)
+	if err != nil {
+		t.Fatalf("read offset with limit zero: %v", err)
+	}
+	if result != "line2\nline3" {
+		t.Fatalf("limit=0 with offset should read through EOF, got %q", result)
+	}
+}
+
 func TestWriteFile(t *testing.T) {
 	dir := t.TempDir()
 	reg := NewRegistry(dir, t.TempDir())
@@ -164,6 +229,56 @@ func TestEditFile(t *testing.T) {
 	}
 }
 
+func TestEditMultipleEditsOrdering(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "order.txt")
+	if err := os.WriteFile(path, []byte("one two three"), 0644); err != nil {
+		t.Fatalf("write fixture: %v", err)
+	}
+
+	reg := NewRegistry(dir, t.TempDir())
+	result, err := reg.Execute(context.Background(), "edit", `{"path":"order.txt","edits":[{"oldText":"one","newText":"two"},{"oldText":"two two three","newText":"ordered"}]}`)
+	if err != nil {
+		t.Fatalf("edit multiple ordered: %v", err)
+	}
+	if result != "Applied 2 edit(s) to "+path {
+		t.Fatalf("unexpected result: %q", result)
+	}
+
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read edited file: %v", err)
+	}
+	if string(data) != "ordered" {
+		t.Fatalf("edits should be applied in declared order, got %q", data)
+	}
+}
+
+func TestEditEmptyFile(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "empty-after-edit.txt")
+	if err := os.WriteFile(path, []byte("delete me"), 0644); err != nil {
+		t.Fatalf("write fixture: %v", err)
+	}
+
+	reg := NewRegistry(dir, t.TempDir())
+	result, err := reg.Execute(context.Background(), "edit", `{"path":"empty-after-edit.txt","edits":[{"oldText":"delete me","newText":""}]}`)
+	if err != nil {
+		t.Fatalf("edit to empty file: %v", err)
+	}
+	if result != "Applied 1 edit(s) to "+path {
+		t.Fatalf("unexpected result: %q", result)
+	}
+
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read edited file: %v", err)
+	}
+	if string(data) != "" {
+		t.Fatalf("edit should be able to create an empty file, got %q", data)
+	}
+}
+
 func TestEditFileNonUnique(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "dup.txt")
@@ -224,6 +339,48 @@ func TestBash(t *testing.T) {
 		t.Fatalf("bash: %v", err)
 	}
 	if result != "hello\nworld\n" {
+		t.Fatalf("unexpected output: %q", result)
+	}
+}
+
+func TestBashOutputTruncation(t *testing.T) {
+	dir := t.TempDir()
+	reg := NewRegistry(dir, t.TempDir())
+
+	result, err := reg.Execute(context.Background(), "bash", `{"command":"yes x | head -c 60000"}`)
+	if err != nil {
+		t.Fatalf("bash large output: %v", err)
+	}
+	if !strings.HasSuffix(result, "\n... (truncated)") {
+		t.Fatalf("expected truncation marker, got tail %q", result[max(0, len(result)-32):])
+	}
+	if len(result) != 50*1024+len("\n... (truncated)") {
+		t.Fatalf("expected 50KB cap plus marker, got %d bytes", len(result))
+	}
+}
+
+func TestBashStderrOnly(t *testing.T) {
+	dir := t.TempDir()
+	reg := NewRegistry(dir, t.TempDir())
+
+	result, err := reg.Execute(context.Background(), "bash", `{"command":"printf 'only stderr' >&2"}`)
+	if err != nil {
+		t.Fatalf("bash stderr only: %v", err)
+	}
+	if result != "only stderr" {
+		t.Fatalf("stderr should be captured in output, got %q", result)
+	}
+}
+
+func TestBashTimeoutZero(t *testing.T) {
+	dir := t.TempDir()
+	reg := NewRegistry(dir, t.TempDir())
+
+	result, err := reg.Execute(context.Background(), "bash", `{"command":"printf done","timeout":0}`)
+	if err != nil {
+		t.Fatalf("bash timeout zero should use default timeout, got: %v", err)
+	}
+	if result != "done" {
 		t.Fatalf("unexpected output: %q", result)
 	}
 }
@@ -420,6 +577,42 @@ func TestWriteMemoryTool(t *testing.T) {
 	// Channel scope without name fails.
 	if _, err := reg.Execute(context.Background(), "write_memory", `{"content":"x","scope":"channel"}`); err == nil {
 		t.Fatal("expected error when channel scope missing name")
+	}
+}
+
+func TestWriteMemoryExplicitChannelScope(t *testing.T) {
+	workDir := t.TempDir()
+	sessionDir := filepath.Join(t.TempDir(), "sessions")
+	reg := NewRegistry(workDir, sessionDir)
+
+	rootScope := memorypkg.RootScope()
+	currentQueryScope := memorypkg.QueryScope("alice", &rootScope)
+	reg.SetScope(currentQueryScope)
+
+	out, err := reg.Execute(context.Background(), "write_memory",
+		`{"content":"brand-new channel memory","title":"new channel","scope":"channel","name":"#brand-new"}`)
+	if err != nil {
+		t.Fatalf("write_memory explicit channel: %v", err)
+	}
+
+	channelScope := memorypkg.ChannelScope("#brand-new", &rootScope)
+	channelHot := memorypkg.HotPath(sessionDir, workDir, channelScope)
+	if !strings.Contains(out, channelHot) {
+		t.Fatalf("result %q should report explicit channel hot path %q", out, channelHot)
+	}
+	data, err := os.ReadFile(channelHot)
+	if err != nil {
+		t.Fatalf("read explicit channel hot memory: %v", err)
+	}
+	if !strings.Contains(string(data), "new channel") || !strings.Contains(string(data), "brand-new channel memory") {
+		t.Fatalf("channel memory missing entry:\n%s", data)
+	}
+
+	if _, err := os.Stat(memorypkg.HotPath(sessionDir, workDir, currentQueryScope)); !os.IsNotExist(err) {
+		t.Fatalf("scope override should not write current query hot memory, stat err=%v", err)
+	}
+	if _, err := os.Stat(filepath.Join(workDir, "MEMORY.md")); !os.IsNotExist(err) {
+		t.Fatalf("scope override should not write root memory, stat err=%v", err)
 	}
 }
 
