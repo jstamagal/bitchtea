@@ -181,3 +181,99 @@ Tests in `internal/llm/tools_test.go` cover edge cases:
 - `TestFilterRequiredEmptyAfterFilterMarshalsWithoutRequiredKey` (line 303): regression guard (bt-qna) proving that nil required omits the `"required"` JSON key.
 - `TestTranslateToolsExtractsFantasyParameterShape` (line 17): end-to-end assertion that `translateTools` output never carries bogus top-level schema keys.
 - `TestTranslateToolsProducesValidSchemasForRealRegistryDefinitions` (line 376): every registered tool's schema round-trips through flattening safely.
+
+## Tool-Call Round-Trip
+
+Every tool call from the model follows the same path through fantasy, the tool
+wrapper layer, and the registry back to the streaming event loop:
+
+```text
+fantasy.Agent.Stream
+  │
+  │  model generates "tool_use" content block
+  ▼
+stream.go:OnToolCall (fantasy callback)
+  │  ① fantasy invokes registered OnToolCall with call (name, input, id).
+  │     StreamEvent{tool_call, ToolName, ToolArgs, ToolCallID} sent to agent.
+  ▼
+fantasy.AgentTool.Run(ctx, call)
+  │  ② fantasy dispatches to the typed or generic tool wrapper.
+  │
+  ├─ typed wrapper (typed_*.go)
+  │    json.Unmarshal(call.Input, &args)
+  │    check ctx.Err() for cancellation
+  │    ↓
+  │    reg.Execute(ctx, call.Name, call.Input)
+  │       or direct helper (typed wrappers bottom out in Registry)
+  │    ↓
+  │    fantasy.NewTextResponse(out)  or  NewTextErrorResponse(err)  on error
+  │    return (response, nil)  ← nil Go error keeps stream alive
+  │
+  └─ legacy bitchteaTool adapter (tools.go:26)
+       t.reg.Execute(ctx, call.Name, call.Input)
+       ↓
+       fantasy.NewTextResponse(out)  or  NewTextErrorResponse(err)  on error
+       return (response, nil)
+  │
+  ▼
+internal/tools/tools.go:Registry.Execute(ctx, name, argsJSON)
+  │  ③ dispatches by name:
+  │     execRead    → resolvePath → os.ReadFile
+  │     execWrite   → resolvePath → os.WriteFile
+  │     execEdit    → resolvePath → string replacement
+  │     execBash    → cmd.Run with 30s timeout
+  │     execSearchMemory → filepath.Walk over scoped memory dirs
+  │     execWriteMemory → append or overwrite memory file
+  │     execTerminalStart → create PTY session via xpty
+  │     execTerminalSend  → pty.Write(input)
+  │     ... (14 tools total)
+  │
+  ▼
+result string returned up the call stack
+  │
+  ▼
+stream.go:OnToolResult (fantasy callback)
+  │  ④ fantasy invokes registered OnToolResult with result.
+  │     StreamEvent{tool_result, ToolCallID, ToolName, Text} sent to agent.
+  ▼
+agent/agent.go:sendMessage select loop
+  │  ⑤ agent maps to agent.Event{tool_result, ToolName, ToolCallID, ToolResult}
+  │     → TUI displays truncated result, clears activeToolName
+  ▼
+fantasy continues streaming
+  │  model can issue more text or another tool_use
+  ▼
+next OnTextDelta or next OnToolCall (repeat cycle)
+```
+
+### Cancellation path (per-tool)
+
+When Esc x1 is pressed during a tool call:
+
+```text
+UI handleEscKey
+  → agent.CancelTool(toolCallID)           agent/agent.go:225
+    → client.ToolContextManager()
+      → toolCtxMgr.CancelTool(toolCallID)  llm/tool_context.go
+        → cancel() on the child context
+          → typed wrapper's ctx.Err() check
+            → NewTextErrorResponse("Error: context canceled")
+              → fantasy OnToolResult receives cancellation text
+                → model sees "Error: context canceled" and can proceed
+```
+
+The parent turn context is NOT cancelled. The model receives the cancellation
+text as a normal tool result and can continue streaming — it may re-issue the
+same tool call or move on.
+
+### File reference
+
+| Hop | File | Function |
+|-----|------|----------|
+| ① | `internal/llm/stream.go:152` | `OnToolCall` callback |
+| ② | `internal/llm/typed_read.go:50` | typed wrapper `Run` (6 tools) |
+| ② | `internal/llm/tools.go:26` | legacy `bitchteaTool.Run` (8 tools) |
+| ③ | `internal/tools/tools.go:73` | `Registry.Execute` dispatcher |
+| ④ | `internal/llm/stream.go:161` | `OnToolResult` callback |
+| ⑤ | `internal/agent/agent.go:351` | agent `tool_call` → `tool_start` mapping |
+| ⑤ | `internal/agent/agent.go:361` | agent `tool_result` → `Event{tool_result}` |
