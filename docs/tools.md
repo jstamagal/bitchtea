@@ -58,19 +58,99 @@ The terminal manager implements sophisticated locking to prevent races:
 - **`closing` atomic**: Signals I/O goroutines to exit before teardown.
 - **WaitGroups**: Ensure all buffers are drained before the emulator is closed.
 
-## Tool Surface Reference
+## Complete Tool Reference
 
-### File System
-- **`read`**: Supports `offset` and `limit` for surgical reading of large files.
-- **`write`**: Overwrites files and automatically creates parent directories.
-- **`edit`**: Implements unique-string replacement. Fails if `oldText` is ambiguous or missing.
+All 14 tools from `internal/tools/tools.go` `Definitions()`. Typed Wrapper indicates
+whether the tool has a dedicated `internal/llm/typed_*.go` fantasy wrapper or falls
+through to the generic `bitchteaTool` adapter in `internal/llm/tools.go`.
 
-### System
-- **`bash`**: Standard shell execution with a default 30s timeout. Captures combined stdout/stderr.
+| Tool | Category | Description | Typed Wrapper |
+| :--- | :--- | :--- | :--- |
+| `read` | File System | Read file contents with offset/limit for large files. | Yes (`typed_read.go`) |
+| `write` | File System | Overwrite or create a file; auto-creates parent directories. | Yes (`typed_write.go`) |
+| `edit` | File System | Unique-string replacement; fails if `oldText` is ambiguous or missing. | Yes (`typed_edit.go`) |
+| `bash` | System | Shell execution with 30s timeout; captures combined stdout/stderr. | Yes (`typed_bash.go`) |
+| `search_memory` | Memory | Query hot (`MEMORY.md`/`HOT.md`) and daily archive files in current scope. | Yes (`typed_search_memory.go`) |
+| `write_memory` | Memory | Persist notes into current or specified scope; optional daily mode. | Yes (`typed_write_memory.go`) |
+| `terminal_start` | Terminal | Boot a new persistent PTY session; returns initial snapshot. | No (legacy adapter) |
+| `terminal_send` | Terminal | Send raw text to a running PTY session. | No (legacy adapter) |
+| `terminal_keys` | Terminal | Send control key sequences (Esc, Enter, Ctrl-C, arrows, etc.). | No (legacy adapter) |
+| `terminal_snapshot` | Terminal | Capture current terminal screen as plain text or ANSI. | No (legacy adapter) |
+| `terminal_wait` | Terminal | Poll screen buffer and block until target text appears. | No (legacy adapter) |
+| `terminal_resize` | Terminal | Resize PTY and virtual emulator dimensions. | No (legacy adapter) |
+| `terminal_close` | Terminal | Kill the process and clean up PTY resources. | No (legacy adapter) |
+| `preview_image` | Visual | Render PNG/JPEG/GIF into terminal-friendly ANSI block art for the LLM to "see". | No (legacy adapter) |
 
-### Memory
-- **`search_memory`**: Queries hot (`MEMORY.md`) and daily archive files.
-- **`write_memory`**: Persists notes into the current or specified scope.
+Tool counts: 6 typed wrappers, 8 legacy adapter (7 terminal + 1 preview_image).
+Total: 14, matching `tools.Definitions()`.
 
-### Visuals
-- **`preview_image`**: (`image.go`) Renders PNG/JPEG/GIF into terminal-friendly ANSI block art for the LLM to "see" screenshots.
+## Tool Assembly Pipeline
+
+Tools are assembled at stream time by `translateTools` in `internal/llm/tools.go`,
+then merged with MCP tools by `AssembleAgentTools` in `internal/llm/mcp_tools.go`.
+The assembly order and dispatch logic:
+
+```
+Registry.Definitions() (14 tool defs)
+    |
+    v
+translateTools()                          internal/llm/tools.go:48
+    |
+    +-- typedToolFor(name, reg)           internal/llm/tools.go:99
+    |       |
+    |       +-- match: edit   -> typed_edit.go
+    |       +-- match: read   -> typed_read.go
+    |       +-- match: write  -> typed_write.go
+    |       +-- match: bash   -> typed_bash.go
+    |       +-- match: search_memory -> typed_search_memory.go
+    |       +-- match: write_memory  -> typed_write_memory.go
+    |       +-- no match: fall through to legacy bitchteaTool adapter
+    |
+    v
+[]fantasy.AgentTool (14 tools, 6 typed + 8 legacy)
+    |
+    v
+MCPTools() + AssembleAgentTools()         internal/llm/mcp_tools.go
+    |
+    v
+final []fantasy.AgentTool (local + MCP, local-wins on collision)
+```
+
+### Typed Wrappers (fantasy.NewAgentTool)
+
+Six tools dispatch through dedicated typed wrappers that validate args with
+`json.Unmarshal` into per-tool Go structs, check cancellation, and delegate
+to the Registry. Each wrapper file follows the same pattern:
+
+```go
+// internal/llm/typed_read.go (representative)
+func readTool(reg *tools.Registry) fantasy.AgentTool {
+    return fantasy.NewAgentTool(fantasy.ToolInfo{...},
+        func(ctx context.Context, call fantasy.ToolCall) (fantasy.ToolResponse, error) {
+            var args readArgs
+            json.Unmarshal(call.Input, &args)
+            // ... execute via reg.Execute or direct helper ...
+        },
+    )
+}
+```
+
+Typed wrappers return tool errors as `NewTextErrorResponse` (Go error is nil)
+to keep the fantasy stream alive on tool failures.
+
+### Legacy Adapter (bitchteaTool)
+
+Eight tools without typed wrappers use the generic `bitchteaTool` adapter
+(`internal/llm/tools.go:16`). The adapter passes the raw JSON input directly
+to `Registry.Execute(name, json.RawMessage)`, which dispatches to the
+per-tool `exec<ToolName>` handler in `internal/tools/tools.go`.
+
+The legacy path is compatibility code. New tools added to the Registry must
+also add a typed wrapper and wire it into `typedToolFor`.
+
+### MCP Integration
+
+`AssembleAgentTools(local, mcpTools)` merges the local tool surface with MCP
+tools from `internal/mcp`. Local tools always win on name collision. MCP tool
+names use the `mcp__<server>__<tool>` namespace prefix, guaranteeing no
+collision with local tool names (none start with `mcp__`).
