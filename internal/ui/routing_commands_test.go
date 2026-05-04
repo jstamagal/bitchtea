@@ -116,6 +116,21 @@ func TestHandleQueryCommand_noArg(t *testing.T) {
 	}
 }
 
+func TestHandleQueryCommand_updatesAgentContextAndScopeWhenIdle(t *testing.T) {
+	m := newTestModel(t)
+
+	result, _ := handleQueryCommand(m, "/query claude", []string{"/query", "claude"})
+
+	if result.agent.ContextKey() != "claude" {
+		t.Fatalf("agent context = %q, want claude", result.agent.ContextKey())
+	}
+
+	scope := result.agent.Scope()
+	if scope.Kind != agent.MemoryScopeQuery || scope.Name != "claude" {
+		t.Fatalf("agent scope = %#v, want query claude", scope)
+	}
+}
+
 // --- /msg ---
 
 func TestHandleMsgCommand_noArg(t *testing.T) {
