@@ -15,6 +15,8 @@ import (
 
 	"github.com/jstamagal/bitchtea/internal/agent"
 	"github.com/jstamagal/bitchtea/internal/config"
+	"github.com/jstamagal/bitchtea/internal/daemon"
+	daemonjobs "github.com/jstamagal/bitchtea/internal/daemon/jobs"
 	"github.com/jstamagal/bitchtea/internal/llm"
 	"github.com/jstamagal/bitchtea/internal/session"
 	"github.com/jstamagal/bitchtea/internal/sound"
@@ -1292,6 +1294,46 @@ func (m Model) View() string {
 // with callers that only know a string label; prefer focus.SetFocus directly.
 func (m *Model) SetActiveContext(label string) {
 	m.focus.SetFocus(Channel(label))
+}
+
+// submitDaemonCheckpoint submits a session-checkpoint job to the daemon
+// mailbox if the daemon is currently running. If no daemon is locked, the
+// submission is silently skipped — the TUI already wrote an inline checkpoint
+// above, so the daemon path is strictly additive.
+func (m *Model) submitDaemonCheckpoint() {
+	paths := daemon.Layout(config.BaseDir())
+	locked, err := daemon.IsLocked(paths.LockPath)
+	if err != nil || !locked {
+		return
+	}
+
+	sessionPath := ""
+	if m.session != nil {
+		sessionPath = m.session.Path
+	}
+	if sessionPath == "" {
+		return
+	}
+
+	mailbox := daemon.New(config.BaseDir())
+	job := daemon.Job{
+		Kind:         daemonjobs.KindSessionCheckpoint,
+		WorkDir:      m.config.WorkDir,
+		SessionPath:  sessionPath,
+		SubmittedAt:  time.Now().UTC(),
+		RequestorPID: os.Getpid(),
+	}
+	id, err := mailbox.Submit(job)
+	if err != nil {
+		m.errMsg(fmt.Sprintf("daemon submit failed: %v", err))
+		return
+	}
+
+	m.NotifyBackgroundActivity(BackgroundActivity{
+		Time:    time.Now(),
+		Context: m.focus.ActiveLabel(),
+		Summary: fmt.Sprintf("session-checkpoint submitted to daemon (%s)", id),
+	})
 }
 
 func (m *Model) NotifyBackgroundActivity(activity BackgroundActivity) {
