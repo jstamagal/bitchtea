@@ -760,8 +760,8 @@ recoverCrashedJobs(mailbox, startTime, logger)
 | ① | `internal/daemon/mailbox.go:52` | `Mailbox.Submit` |
 | ② | `internal/daemon/run.go:43` | `Run` — lock, init, poll loop |
 | ③ | `internal/daemon/run.go:141` | `processOnce` — list + dispatch |
-| ④ | `internal/daemon/jobs/handler.go` | `Handle` — kind dispatch |
-| ⑤ | `internal/daemon/jobs/session_checkpoint.go` | `handleSessionCheckpoint` |
+| ④ | `internal/daemon/jobs/jobs.go:39` | `Handle` — kind dispatch |
+| ⑤ | `internal/daemon/jobs/checkpoint.go` | `handleSessionCheckpoint` |
 | ⑥ | `internal/daemon/mailbox.go:121` | `Mailbox.Complete` |
 | ⑦ | `internal/daemon/mailbox.go:138` | `Mailbox.Fail` |
 | ⑧ | `internal/daemon/run.go:197` | `recoverCrashedJobs` |
