@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 	"unicode/utf8"
@@ -533,6 +534,74 @@ func TestTerminalResizeUpdatesSnapshotDimensions(t *testing.T) {
 	}
 	if !strings.Contains(result, "terminal session "+id+" (50x8) running") {
 		t.Fatalf("expected resized snapshot dimensions, got %q", result)
+	}
+}
+
+func TestTerminalCloseCleanup(t *testing.T) {
+	reg := NewRegistry(t.TempDir(), t.TempDir())
+
+	result, err := reg.Execute(context.Background(), "terminal_start", `{"command":"cat","width":40,"height":10,"delay_ms":50}`)
+	if err != nil {
+		t.Fatalf("terminal_start: %v", err)
+	}
+	id := terminalIDFromResult(t, result)
+
+	result, err = reg.Execute(context.Background(), "terminal_close", `{"id":"`+id+`"}`)
+	if err != nil {
+		t.Fatalf("terminal_close: %v", err)
+	}
+	if !strings.Contains(result, "closed terminal session "+id) {
+		t.Fatalf("unexpected close result: %q", result)
+	}
+
+	if _, err := reg.Execute(context.Background(), "terminal_snapshot", `{"id":"`+id+`"}`); err == nil {
+		t.Fatal("expected closed terminal session to be removed from registry")
+	}
+
+	reg.terminals.mu.Lock()
+	_, stillTracked := reg.terminals.terms[id]
+	reg.terminals.mu.Unlock()
+	if stillTracked {
+		t.Fatalf("terminal session %s still tracked after close", id)
+	}
+}
+
+func TestTerminalConcurrentSendOnSameSession(t *testing.T) {
+	reg := NewRegistry(t.TempDir(), t.TempDir())
+
+	result, err := reg.Execute(context.Background(), "terminal_start", `{"command":"cat","width":80,"height":20,"delay_ms":50}`)
+	if err != nil {
+		t.Fatalf("terminal_start: %v", err)
+	}
+	id := terminalIDFromResult(t, result)
+	defer reg.Execute(context.Background(), "terminal_close", `{"id":"`+id+`"}`) //nolint:errcheck
+
+	lines := []string{"alpha", "bravo", "charlie", "delta", "echo"}
+	var wg sync.WaitGroup
+	errs := make(chan error, len(lines))
+	for _, line := range lines {
+		line := line
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			_, err := reg.Execute(context.Background(), "terminal_send", `{"id":"`+id+`","text":"`+line+`\n","delay_ms":25}`)
+			errs <- err
+		}()
+	}
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		if err != nil {
+			t.Fatalf("terminal_send: %v", err)
+		}
+	}
+
+	result, err = reg.Execute(context.Background(), "terminal_wait", `{"id":"`+id+`","text":"echo","timeout_ms":1000,"interval_ms":25}`)
+	if err != nil {
+		t.Fatalf("terminal_wait: %v", err)
+	}
+	if !strings.Contains(result, "echo") {
+		t.Fatalf("expected final snapshot to contain concurrent input, got %q", result)
 	}
 }
 
