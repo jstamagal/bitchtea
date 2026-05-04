@@ -1409,6 +1409,59 @@ Invalid usage shows:
 Usage: /debug on|off
 ```
 
+#### Hook installation path
+
+`handleDebugCommand` (`internal/ui/commands.go:306`) calls `m.agent.SetDebugHook(...)` with a closure that formats a `DebugInfo` struct as a system message visible in the chat viewport.
+
+`Agent.SetDebugHook` (`internal/agent/agent.go:696`) delegates to `Client.SetDebugHook(hook)` (`internal/llm/client.go:181`). That call installs the hook on the client struct AND invalidates the cached provider/model (`c.invalidateLocked()`), so the next agent turn rebuilds the HTTP transport with the debug wrapper. A `nil → nil` call is a no-op that preserves the cache.
+
+When `ensureModel` rebuilds the provider on the next turn, `toProviderConfigLocked` (`internal/llm/client.go:225`) checks `c.DebugHook` and, if non-nil, constructs:
+
+```go
+cfg.http = &http.Client{Transport: newDebugTransport(http.DefaultTransport, c.DebugHook)}
+```
+
+`newDebugTransport` (`internal/llm/debug.go:28`) returns a `debugRoundTripper` that wraps `http.DefaultTransport` and calls the hook before (for errors) or after (for success) each `RoundTrip`.
+
+#### `DebugInfo` shape
+
+`DebugInfo` (`internal/llm/types.go:61`) captures:
+
+```
+Method         string
+URL            string
+RequestHeaders  map[string][]string
+RequestBody    string
+ResponseStatus int
+ResponseHeaders map[string][]string
+ResponseBody   string
+```
+
+#### Redaction
+
+`debugRoundTripper.RoundTrip` (`internal/llm/debug.go:37`) clones request headers through `redactRequestHeader` (`internal/llm/debug.go:136`), which replaces values for these header keys with `[REDACTED]`:
+
+- `Authorization` — scheme prefix is preserved when present (e.g., `Bearer [REDACTED]`)
+- `Proxy-Authorization`
+- `X-Api-Key`, `Api-Key`, `Openai-Api-Key`, `Anthropic-Api-Key`
+
+Response headers are NOT redacted (no filter function is passed to `cloneHeader` for the response side).
+
+#### SSE response bodies
+
+`responseBodyKind` (`internal/llm/debug.go:102`) inspects `Content-Type` to decide how much of the response body to capture:
+
+| `Content-Type`                | Behavior                                        |
+|-------------------------------|--------------------------------------------------|
+| `text/event-stream`           | Body reported as `"(stream)"` literal            |
+| `application/json`            | Full body captured as string                     |
+| `text/plain`                  | Full body captured as string                     |
+| anything else                 | Body is skipped (empty string in `ResponseBody`) |
+
+#### Provider cache invalidation
+
+Because `SetDebugHook` always calls `c.invalidateLocked()` (for non-noop transitions), the cached `fantasy.Provider` and `fantasy.LanguageModel` are discarded. The next agent turn calls `ensureModel`, which rebuilds both from scratch. This ensures the HTTP client with the debug transport is always fresh, but also means the first turn after `/debug on` or `/debug off` pays a one-time provider initialization cost.
+
 ### `/set model <name>`
 
 Calls `Agent.SetModel`, which updates `config.Model` and `Client.SetModel`.
