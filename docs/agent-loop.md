@@ -2542,3 +2542,122 @@ loop never blocks — it schedules `waitForAgentEvent` as a `tea.Cmd`, processes
 the returned `agentEventMsg` in `Update`, and immediately schedules the next
 `waitForAgentEvent` for the same channel. Only the `agentDoneMsg` handler
 terminates the chain.
+
+## Focus / Context Switch Flow
+
+When the user switches IRC contexts (`/join`, `/query`, `/part`) or the session
+resumes, the focus manager and agent coordinate to swap the active message
+history and memory scope.
+
+### Slash-command path (interactive)
+
+```text
+User types /join #channel  (or /query nick, /part)
+  │
+  ▼
+commands.go:handleJoinCommand
+  │  ① m.focus.SetFocus(Channel("#channel"))
+  │     → updates FocusManager.active index
+  │     → saves to .bitchtea_focus.json
+  ▼
+model.go:syncAgentContextIfIdle(ctx)
+  │  ② (no-op if streaming — context swap deferred to next turn)
+  │
+  │  If idle:
+  │    agent.InitContext(ctxKey)
+  │      → if ctxKey not in contextMsgs, clone bootstrap prefix into new slice
+  │    agent.SetContext(ctxKey)
+  │      → save a.messages → contextMsgs[oldKey]
+  │      → load contextMsgs[ctxKey] → a.messages
+  │      → set currentContext = ctxKey
+  │    agent.SetScope(memoryScope)
+  │      → update agent.scope + tools.SetScope
+  │      → inject HOT.md if not previously injected
+  │    m.lastSavedIdx = agent.SavedIdx(ctxKey)
+  ▼
+Next agent turn: model.go:startAgentTurn
+  │  ③ Called on next user message (or auto follow-up).
+  │     Re-runs InitContext, SetContext, SetScope to refresh even
+  │     if syncAgentContextIfIdle already ran.
+  │     This is where per-context history diverges:
+  │     each context gets its own []fantasy.Message slice.
+  ▼
+agent.sendMessage appends to active a.messages
+  │  The appended messages belong to the focused context.
+  │  Other contexts' histories are untouched in contextMsgs.
+```
+
+### Deferred switch during streaming
+
+When a context switch command runs while the agent is streaming (m.streaming ==
+true), `syncAgentContextIfIdle` returns without touching the agent:
+
+```text
+/join #help  (while streaming)
+  │
+  ▼
+focus.SetFocus("#help")                   ① focus updates immediately
+  ▼
+syncAgentContextIfIdle → returns early     ② streaming guard
+  ▼
+(agent still streaming against old context)
+  ▼
+Turn ends → agentDoneMsg                   ③ session persist uses frozen m.turnContext
+  ▼
+Next user message → startAgentTurn         ④ picks up #help via active focus:
+  InitContext("#help")
+  SetContext("#help")
+  SetScope("#help memory scope")
+```
+
+The session persistence at `agentDoneMsg` uses `m.turnContext`, which was frozen
+at turn start. So a streaming turn that started in `#general` persists its
+messages under `#general` even if the user switches focus to `#help` mid-turn.
+
+### Restore path (session resume)
+
+```text
+main.go:buildStartupModel
+  │
+  ▼
+ui.NewModel(cfg)
+  │  agent.NewAgent(cfg)                   ① fresh agent, empty contextMsgs
+  │  LoadFocusManager(cfg.SessionDir)       ② restore FocusManager from JSON
+  │  session.New(cfg.SessionDir)
+  ▼
+m.ResumeSession(sess)
+  │  ③ session.FantasyFromEntries per group
+  │     group by Entry.Context ("#main", "#channel", "nick", ...)
+  │
+  ├─ RestoreMessages(defaultGroup)
+  │     → force system prompt, reset counters
+  │     → a.messages = restored slice
+  │
+  ├─ RestoreContextMessages("#channel", group)
+  │     → agent.contextMsgs["#channel"] = restored slice
+  │     → force system prompt at index 0
+  │
+  ├─ RestoreContextMessages("nick", group)
+  │     → agent.contextMsgs["nick"] = restored slice
+  │
+  └─ SetSavedIdx per group                 ④ per-context session watermarks
+```
+
+`RestoreContextMessages` never switches the active context — it only populates
+`contextMsgs` so lazy `SetContext` on the first turn will find preloaded
+history. The active context after resume is whatever `FocusManager.Active()`
+returns from the restored `.bitchtea_focus.json`.
+
+### File references
+
+| Step | File | Function |
+|------|------|----------|
+| ① focus | `internal/ui/context.go:100` | `FocusManager.SetFocus` |
+| ② sync | `internal/ui/model.go:912` | `syncAgentContextIfIdle` |
+| ② init | `internal/agent/context_switch.go:34` | `Agent.InitContext` |
+| ② swap | `internal/agent/context_switch.go:47` | `Agent.SetContext` |
+| ② scope | `internal/agent/agent.go:688` | `Agent.SetScope` |
+| ③ turn | `internal/ui/model.go:941` | `startAgentTurn` |
+| resume-① | `internal/ui/model.go:234` | `ResumeSession` |
+| resume-② | `internal/agent/context_switch.go:75` | `RestoreContextMessages` |
+| resume-③ | `internal/session/session.go:396` | `FantasyFromEntries` |
