@@ -1805,3 +1805,217 @@ Known gaps that junior models should not assume away:
 - `/compact` blocks inside the command handler while it consumes stream events;
   unlike normal turns, it is not routed through the non-blocking Bubble Tea
   event pipeline.
+
+## Per-Context Message Isolation
+
+Per-context isolation lives in `internal/agent/context_switch.go` and the
+`Agent` fields declared in `internal/agent/agent.go`. The canonical active
+history is still:
+
+```go
+messages []fantasy.Message
+```
+
+The isolated histories are stored beside it:
+
+```go
+contextMsgs     map[ContextKey][]fantasy.Message
+contextSavedIdx map[ContextKey]int
+currentContext  ContextKey
+```
+
+`ContextKey` is a string alias. The default context is `DefaultContextKey`,
+whose value is `"#main"`. UI routing converts IRC focus to keys with
+`ircContextToKey`: channels become `#channel`, subchannels become
+`#channel.sub`, direct queries become the target nick, and unknown focus falls
+back to `agent.DefaultContextKey`.
+
+### `contextMsgs` structure
+
+`contextMsgs map[ContextKey][]fantasy.Message` owns one fantasy-native message
+slice per chat context. The comments in `Agent` are load-bearing: each context
+gets its own conversation slice, and the bootstrap prefix is duplicated into
+each slice so `/join` and `/query` do not share ongoing conversation history.
+
+At startup, `NewAgentWithStreamer` builds the normal bootstrap messages:
+system prompt, discovered context files, root memory, and persona anchor. It
+then records:
+
+```go
+a.bootstrapMsgCount = len(a.messages)
+a.currentContext = DefaultContextKey
+a.contextMsgs = map[ContextKey][]fantasy.Message{
+    DefaultContextKey: a.messages,
+}
+a.contextSavedIdx = map[ContextKey]int{
+    DefaultContextKey: 0,
+}
+```
+
+### `SetContext` message slice swap
+
+`SetContext(key ContextKey)` is the active-context swap. If `key` already
+matches `a.currentContext`, it returns without changing anything. Otherwise it
+first stores the currently active slice back into the map:
+
+```go
+a.contextMsgs[a.currentContext] = a.messages
+```
+
+Then it sets `a.currentContext = key`. If `contextMsgs[key]` exists, that slice
+becomes `a.messages`. If it does not exist, `SetContext` clones only the
+bootstrap prefix from the current active slice:
+
+```go
+a.messages = append([]fantasy.Message(nil), a.messages[:a.bootstrapMsgCount]...)
+a.contextMsgs[key] = a.messages
+```
+
+That means a new context inherits startup/system grounding but not the prior
+chat turns from the context the user switched away from.
+
+### `InitContext` bootstrap cloning
+
+`InitContext(key ContextKey)` prepares a context without switching to it. If
+the key already exists, it is a no-op. Otherwise it clones:
+
+```go
+bootstrap := append([]fantasy.Message(nil), a.messages[:a.bootstrapMsgCount]...)
+```
+
+and stores:
+
+```go
+a.contextMsgs[key] = bootstrap
+a.contextSavedIdx[key] = 0
+```
+
+The TUI uses this before every agent turn in `Model.startAgentTurn`:
+
+```go
+m.agent.InitContext(ctxKey)
+m.agent.SetContext(ctxKey)
+m.lastSavedMsgIdx = m.agent.SavedIdx(ctxKey)
+m.agent.SetScope(ircContextToMemoryScope(m.turnContext))
+```
+
+`InitContext` is what lets the UI create a channel/query history before
+`SetContext` makes that history active.
+
+### `InjectNoteInContext` cross-context notes
+
+`InjectNoteInContext(key ContextKey, note string)` appends a synthetic note to
+a target context without switching to it. If `contextMsgs[key]` exists, it
+appends to that stored slice:
+
+```go
+newUserMessage(note)
+newAssistantMessage("Understood.")
+```
+
+If the target key does not exist, it appends the same synthetic exchange to
+the current active `a.messages` slice instead. That fallback is deliberate in
+the current code; callers that need strict off-context injection must ensure
+the target has been initialized first.
+
+### `RestoreContextMessages` on resume
+
+`Model.ResumeSession` groups restored session entries by `Entry.Context`. Empty
+context labels are treated as `agent.DefaultContextKey`.
+
+For the default context, `ResumeSession` calls:
+
+```go
+m.agent.RestoreMessages(msgs)
+m.agent.SetSavedIdx(defaultKey, len(msgs))
+```
+
+For non-default contexts, it calls:
+
+```go
+m.agent.RestoreContextMessages(key, msgs)
+m.agent.SetSavedIdx(key, len(msgs))
+```
+
+`RestoreContextMessages(key ContextKey, messages []fantasy.Message)` restores
+a specific context without switching to it. It copies the provided slice,
+forces the first message to be the freshly built system prompt, and stores the
+result in `a.contextMsgs[key]`. If the restored slice does not start with a
+system message, it prepends one. Unlike `RestoreMessages`, it does not reset
+turn counters, cost tracking, or follow-up state; it only restores that
+context's stored transcript.
+
+### Bootstrap duplication policy
+
+Bootstrap messages are duplicated per context, not shared by reference as a
+global transcript. A newly initialized or newly switched-to context receives
+`a.messages[:a.bootstrapMsgCount]` copied into a new slice. Those bootstrap
+messages include whatever startup built before `bootstrapMsgCount` was
+captured: system prompt, discovered context files, root memory if present, and
+the persona anchor.
+
+`RestoreMessages` and `RestoreContextMessages` have a separate resume policy:
+they refresh or prepend only the system prompt for restored history. On
+`RestoreMessages`, `bootstrapMsgCount` is reset to 0 before the active context
+map entry is synced. On `RestoreContextMessages`, the restored context is
+stored with its refreshed system message, but `bootstrapMsgCount` is not
+changed. Session persistence still uses `BootstrapMessageCount()` to decide
+which leading messages are bootstrap when writing new entries.
+
+### `contextSavedIdx` watermarks
+
+`contextSavedIdx map[ContextKey]int` is the agent-side per-context session-save
+watermark. The accessors are:
+
+```go
+SavedIdx(key ContextKey) int
+SetSavedIdx(key ContextKey, idx int)
+```
+
+At `agentDoneMsg`, the UI freezes the context at turn start in
+`m.turnContext`, converts it to `ctxKey`, and saves only new messages from that
+context:
+
+```go
+msgs := m.agent.Messages()
+savedIdx := m.agent.SavedIdx(ctxKey)
+for i := savedIdx; i < len(msgs); i++ {
+    e := session.EntryFromFantasyWithBootstrap(
+        msgs[i],
+        i < m.agent.BootstrapMessageCount(),
+    )
+    e.Context = ctxLabel
+    m.session.Append(e)
+}
+m.agent.SetSavedIdx(ctxKey, len(msgs))
+```
+
+This prevents a turn in one channel/query from advancing the persistence
+watermark for another channel/query. There is also a UI-local
+`m.contextSavedIdx map[string]int` used by `saveCurrentContextMessages`, but
+normal agent-turn persistence uses the agent's `SavedIdx`/`SetSavedIdx`
+watermark.
+
+### Compaction is per active context
+
+`Agent.Compact(ctx)` operates only on the currently active `a.messages` slice.
+It does not iterate over `contextMsgs` and does not compact inactive contexts.
+After it rebuilds the active history as bootstrap prefix, summary message, and
+last four messages, it writes the compacted result back to only the active map
+entry:
+
+```go
+a.contextMsgs[a.currentContext] = a.messages
+a.contextSavedIdx[a.currentContext] = len(a.messages)
+```
+
+The daily-memory flush inside compaction also uses the agent's current memory
+scope, which the TUI sets at turn start with:
+
+```go
+m.agent.SetScope(ircContextToMemoryScope(m.turnContext))
+```
+
+So `/compact` summarizes the active context history and records its new save
+watermark. Other contexts remain in `contextMsgs` exactly as they were until
+the user switches to them and compacts those histories separately.
