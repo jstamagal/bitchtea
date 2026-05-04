@@ -53,6 +53,8 @@ func newTestAgent(t *testing.T, streamer *fakeStreamer) *Agent {
 	cfg.WorkDir = t.TempDir()
 	cfg.SessionDir = t.TempDir()
 	a := NewAgentWithStreamer(&cfg, streamer)
+	a.bootstrapMsgCount = 1
+	a.contextMsgs[a.currentContext] = a.messages[:1]
 	return a
 }
 
@@ -90,9 +92,169 @@ func TestCompactNoOpExactlySixMessages(t *testing.T) {
 		t.Fatalf("Compact returned error: %v", err)
 	}
 
-	// With 6 messages, compaction fires: system + summary + ack + last 4 = 7.
+	// With 6 messages, compaction fires.
 	if streamer.calls != 2 {
 		t.Fatalf("expected 2 streamer calls, got %d", streamer.calls)
+	}
+}
+
+func TestCompact_fewMessagesIsNoOp(t *testing.T) {
+	streamer := summaryStreamer("unused")
+	agent := newTestAgent(t, streamer)
+	agent.messages = makeMessages(5)
+	agent.SetSavedIdx(DefaultContextKey, len(agent.messages))
+
+	before := append([]fantasy.Message(nil), agent.messages...)
+
+	if err := agent.Compact(context.Background()); err != nil {
+		t.Fatalf("Compact returned error: %v", err)
+	}
+
+	if streamer.calls != 0 {
+		t.Fatalf("expected 0 streamer calls, got %d", streamer.calls)
+	}
+	if len(agent.messages) != len(before) {
+		t.Fatalf("expected %d messages unchanged, got %d", len(before), len(agent.messages))
+	}
+	for i := range before {
+		if agent.messages[i].Role != before[i].Role || msgText(agent.messages[i]) != msgText(before[i]) {
+			t.Fatalf("message %d changed: got {%s,%q}, want {%s,%q}",
+				i, agent.messages[i].Role, msgText(agent.messages[i]), before[i].Role, msgText(before[i]))
+		}
+	}
+	if got := agent.SavedIdx(DefaultContextKey); got != len(before) {
+		t.Fatalf("expected saved idx unchanged at %d, got %d", len(before), got)
+	}
+}
+
+func TestCompact_noneResponseSkipsMemory(t *testing.T) {
+	streamer := summaryStreamer("summary still happens")
+	agent := newTestAgent(t, streamer)
+	agent.messages = makeMessages(8)
+
+	if err := agent.Compact(context.Background()); err != nil {
+		t.Fatalf("Compact returned error: %v", err)
+	}
+
+	if streamer.calls != 2 {
+		t.Fatalf("expected 2 streamer calls, got %d", streamer.calls)
+	}
+	path := DailyMemoryPath(agent.config.SessionDir, agent.config.WorkDir, time.Now())
+	if data, err := os.ReadFile(path); !os.IsNotExist(err) {
+		t.Fatalf("expected no daily memory file for NONE response, err=%v data=%q", err, string(data))
+	}
+	if got := msgText(agent.messages[1]); !strings.Contains(got, "summary still happens") {
+		t.Fatalf("expected compact summary to be written to history, got %q", got)
+	}
+}
+
+func TestCompact_streamerErrorPropagates(t *testing.T) {
+	wantErr := errors.New("summary failed")
+	streamer := &fakeStreamer{
+		responses: []func(chan<- llm.StreamEvent){
+			func(events chan<- llm.StreamEvent) {
+				events <- llm.StreamEvent{Type: "text", Text: "NONE"}
+				events <- llm.StreamEvent{Type: "done"}
+			},
+			func(events chan<- llm.StreamEvent) {
+				events <- llm.StreamEvent{Type: "error", Error: wantErr}
+			},
+		},
+	}
+	agent := newTestAgent(t, streamer)
+	agent.messages = makeMessages(8)
+	before := append([]fantasy.Message(nil), agent.messages...)
+
+	err := agent.Compact(context.Background())
+	if !errors.Is(err, wantErr) {
+		t.Fatalf("expected %v, got %v", wantErr, err)
+	}
+	if len(agent.messages) != len(before) {
+		t.Fatalf("expected messages unchanged after error, got %d want %d", len(agent.messages), len(before))
+	}
+	if streamer.calls != 2 {
+		t.Fatalf("expected 2 streamer calls, got %d", streamer.calls)
+	}
+}
+
+func TestCompact_bootstrapBoundaryRespected(t *testing.T) {
+	streamer := summaryStreamer("middle compacted")
+	agent := newTestAgent(t, streamer)
+	agent.messages = []fantasy.Message{
+		fantasyTextMessage("system", "system prompt"),
+		fantasyTextMessage("user", "bootstrap context"),
+		fantasyTextMessage("assistant", "bootstrap ack"),
+		fantasyTextMessage("user", "old user detail"),
+		fantasyTextMessage("assistant", "old assistant detail"),
+		fantasyTextMessage("user", "recent one"),
+		fantasyTextMessage("assistant", "recent two"),
+		fantasyTextMessage("user", "recent three"),
+		fantasyTextMessage("assistant", "recent four"),
+	}
+	agent.bootstrapMsgCount = 3
+	bootstrap := append([]fantasy.Message(nil), agent.messages[:agent.bootstrapMsgCount]...)
+
+	if err := agent.Compact(context.Background()); err != nil {
+		t.Fatalf("Compact returned error: %v", err)
+	}
+
+	for i, want := range bootstrap {
+		got := agent.messages[i]
+		if got.Role != want.Role || msgText(got) != msgText(want) {
+			t.Fatalf("bootstrap message %d changed: got {%s,%q}, want {%s,%q}",
+				i, got.Role, msgText(got), want.Role, msgText(want))
+		}
+	}
+	if got := msgText(agent.messages[agent.bootstrapMsgCount]); !strings.Contains(got, "middle compacted") {
+		t.Fatalf("expected summary after bootstrap prefix, got %q", got)
+	}
+}
+
+func TestCompact_rebuildsAsSystemSummaryLast4(t *testing.T) {
+	const summaryText = "compact summary"
+	streamer := summaryStreamer(summaryText)
+	agent := newTestAgent(t, streamer)
+	msgs := makeMessages(10)
+	agent.messages = msgs
+	last4 := append([]fantasy.Message(nil), msgs[len(msgs)-4:]...)
+
+	if err := agent.Compact(context.Background()); err != nil {
+		t.Fatalf("Compact returned error: %v", err)
+	}
+
+	if len(agent.messages) != 6 {
+		t.Fatalf("expected system + summary + last 4 = 6 messages, got %d", len(agent.messages))
+	}
+	if agent.messages[0].Role != fantasy.MessageRoleSystem {
+		t.Fatalf("expected system at index 0, got %q", agent.messages[0].Role)
+	}
+	if agent.messages[1].Role != fantasy.MessageRoleUser {
+		t.Fatalf("expected summary user message at index 1, got %q", agent.messages[1].Role)
+	}
+	if got := msgText(agent.messages[1]); !strings.Contains(got, summaryText) {
+		t.Fatalf("summary missing text %q: got %q", summaryText, got)
+	}
+	for i, want := range last4 {
+		got := agent.messages[2+i]
+		if got.Role != want.Role || msgText(got) != msgText(want) {
+			t.Fatalf("last4 message %d changed: got {%s,%q}, want {%s,%q}",
+				i, got.Role, msgText(got), want.Role, msgText(want))
+		}
+	}
+}
+
+func TestCompact_savedIdxAfter(t *testing.T) {
+	streamer := summaryStreamer("summary")
+	agent := newTestAgent(t, streamer)
+	agent.messages = makeMessages(10)
+	agent.SetSavedIdx(DefaultContextKey, len(agent.messages))
+
+	if err := agent.Compact(context.Background()); err != nil {
+		t.Fatalf("Compact returned error: %v", err)
+	}
+
+	if got, want := agent.SavedIdx(DefaultContextKey), len(agent.messages); got != want {
+		t.Fatalf("expected saved idx reconciled to compacted length %d, got %d", want, got)
 	}
 }
 
@@ -113,9 +275,9 @@ func TestCompactRetainsSystemPromptAndLastFour(t *testing.T) {
 		t.Fatalf("Compact returned error: %v", err)
 	}
 
-	// Structure: system + summary_msg + ack + last4 = 7
-	if len(agent.messages) != 7 {
-		t.Fatalf("expected 7 messages after compact, got %d", len(agent.messages))
+	// Structure: system + summary_msg + last4 = 6
+	if len(agent.messages) != 6 {
+		t.Fatalf("expected 6 messages after compact, got %d", len(agent.messages))
 	}
 
 	// [0] must be the original system prompt.
@@ -128,18 +290,13 @@ func TestCompactRetainsSystemPromptAndLastFour(t *testing.T) {
 		t.Fatalf("summary message missing summary text; got %q", msgText(agent.messages[1]))
 	}
 
-	// [2] must be the assistant acknowledgement.
-	if agent.messages[2].Role != fantasy.MessageRoleAssistant {
-		t.Fatalf("expected assistant ack at index 2, got role %q", agent.messages[2].Role)
-	}
-
-	// [3..6] must match the original last 4 messages.
+	// [2..5] must match the original last 4 messages.
 	for i := 0; i < 4; i++ {
-		got := agent.messages[3+i]
+		got := agent.messages[2+i]
 		want := last4[i]
 		if got.Role != want.Role || msgText(got) != msgText(want) {
 			t.Fatalf("message at index %d differs: got {%s,%q}, want {%s,%q}",
-				3+i, got.Role, msgText(got), want.Role, msgText(want))
+				2+i, got.Role, msgText(got), want.Role, msgText(want))
 		}
 	}
 }
@@ -190,6 +347,7 @@ func TestCompactFlushesDailyMemoryBeforeSummaryRewrite(t *testing.T) {
 	}
 
 	agent := NewAgentWithStreamer(&cfg, streamer)
+	agent.bootstrapMsgCount = 1
 	agent.messages = makeMessages(8)
 
 	if err := agent.Compact(context.Background()); err != nil {
@@ -232,13 +390,13 @@ func TestCompactPreservesToolMetadata(t *testing.T) {
 		t.Fatalf("Compact returned error: %v", err)
 	}
 
-	// After compaction: system + summary + ack + last4 = 7
-	if len(agent.messages) != 7 {
-		t.Fatalf("expected 7 messages, got %d", len(agent.messages))
+	// After compaction: system + summary + last4 = 6
+	if len(agent.messages) != 6 {
+		t.Fatalf("expected 6 messages, got %d", len(agent.messages))
 	}
 
-	// The tool call message should be at index 4 (3 + offset 1 within last4).
-	toolMsg := agent.messages[4]
+	// The tool call message should be at index 3 (2 + offset 1 within last4).
+	toolMsg := agent.messages[3]
 	calls := msgToolCalls(toolMsg)
 	if len(calls) != 1 {
 		t.Fatalf("expected 1 tool call, got %d", len(calls))
@@ -250,8 +408,8 @@ func TestCompactPreservesToolMetadata(t *testing.T) {
 		t.Fatalf("tool call function name not preserved: got %q", calls[0].Function.Name)
 	}
 
-	// The tool result message should be at index 5.
-	resultMsg := agent.messages[5]
+	// The tool result message should be at index 4.
+	resultMsg := agent.messages[4]
 	if msgToolCallID(resultMsg) != "call_abc" {
 		t.Fatalf("tool result ToolCallID not preserved: got %q", msgToolCallID(resultMsg))
 	}
@@ -285,6 +443,7 @@ func TestCompactFlushesDailyMemoryToScopedPath(t *testing.T) {
 
 	// Set a channel scope before compacting.
 	ag.SetScope(ChannelMemoryScope("engineering", nil))
+	ag.bootstrapMsgCount = 1
 	ag.messages = makeMessages(8)
 
 	if err := ag.Compact(context.Background()); err != nil {
@@ -300,7 +459,8 @@ func TestCompactFlushesDailyMemoryToScopedPath(t *testing.T) {
 
 	if !os.IsNotExist(rootErr) {
 		t.Fatalf("expected root daily path to not exist, got: %v (rootErr=%v)", string(func() []byte {
-			d, _ := os.ReadFile(rootDailyPath); return d
+			d, _ := os.ReadFile(rootDailyPath)
+			return d
 		}()), rootErr)
 	}
 	if scopedErr != nil {
@@ -362,6 +522,7 @@ func TestCompactReturnsCanceledContextWithoutStartingStream(t *testing.T) {
 
 	streamer := &blockingStreamer{}
 	agent := NewAgentWithStreamer(&cfg, streamer)
+	agent.bootstrapMsgCount = 1
 	agent.messages = makeMessages(8)
 
 	ctx, cancel := context.WithCancel(context.Background())

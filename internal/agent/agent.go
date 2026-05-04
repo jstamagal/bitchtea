@@ -399,7 +399,10 @@ func (a *Agent) sendMessage(ctx context.Context, userMsg string, kind followUpKi
 			// Context was cancelled (ctrl+c / signal). Drain streamEvents
 			// in the background so the StreamChat goroutine can close the
 			// channel and exit without blocking.
-			go func() { for range streamEvents {} }()
+			go func() {
+				for range streamEvents {
+				}
+			}()
 			a.lastTurnState = turnStateCanceled
 			events <- Event{Type: "state", State: StateIdle}
 			events <- Event{Type: "error", Error: ctx.Err()}
@@ -732,7 +735,15 @@ func (a *Agent) Compact(ctx context.Context) error {
 	}
 
 	end := len(a.messages) - 4
-	if err := a.flushCompactedMessagesToDailyMemory(ctx, a.messages[1:end]); err != nil {
+	bootstrapEnd := a.bootstrapMsgCount
+	if bootstrapEnd < 1 {
+		bootstrapEnd = 1
+	}
+	if bootstrapEnd > end {
+		return nil
+	}
+	compacted := a.messages[bootstrapEnd:end]
+	if err := a.flushCompactedMessagesToDailyMemory(ctx, compacted); err != nil {
 		return err
 	}
 
@@ -741,8 +752,8 @@ func (a *Agent) Compact(ctx context.Context) error {
 	sb.WriteString("Summarize the following conversation concisely, preserving all important ")
 	sb.WriteString("technical details, decisions made, files modified, and current state:\n\n")
 
-	// Everything except system prompt and last 4 messages
-	for _, m := range a.messages[1:end] {
+	// Everything except the bootstrap prefix and last 4 messages.
+	for _, m := range compacted {
 		sb.WriteString(fmt.Sprintf("[%s]: %s\n", m.Role, truncateStr(messageText(m), 500)))
 	}
 
@@ -758,19 +769,25 @@ func (a *Agent) Compact(ctx context.Context) error {
 		if err := ctx.Err(); err != nil {
 			return err
 		}
-		if ev.Type == "text" {
+		switch ev.Type {
+		case "text":
 			summary.WriteString(ev.Text)
+		case "error":
+			if ev.Error != nil {
+				return ev.Error
+			}
+			return fmt.Errorf("compact summary stream error")
 		}
 	}
 
-	// Rebuild messages: system + summary + last 4
+	// Rebuild messages: bootstrap prefix + summary + last 4.
 	keep := a.messages[end:]
-	a.messages = []fantasy.Message{
-		a.messages[0], // system prompt
-		newUserMessage("[Previous conversation summary]:\n" + summary.String()),
-		newAssistantMessage("Got it, I have the context from the summary."),
-	}
+	rebuilt := append([]fantasy.Message(nil), a.messages[:bootstrapEnd]...)
+	rebuilt = append(rebuilt, newUserMessage("[Previous conversation summary]:\n"+summary.String()))
+	a.messages = rebuilt
 	a.messages = append(a.messages, keep...)
+	a.contextMsgs[a.currentContext] = a.messages
+	a.contextSavedIdx[a.currentContext] = len(a.messages)
 
 	return nil
 }
@@ -799,8 +816,14 @@ func (a *Agent) flushCompactedMessagesToDailyMemory(ctx context.Context, message
 		if err := ctx.Err(); err != nil {
 			return err
 		}
-		if ev.Type == "text" {
+		switch ev.Type {
+		case "text":
 			summary.WriteString(ev.Text)
+		case "error":
+			if ev.Error != nil {
+				return ev.Error
+			}
+			return fmt.Errorf("compact memory stream error")
 		}
 	}
 

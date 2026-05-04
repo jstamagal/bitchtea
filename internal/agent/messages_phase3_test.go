@@ -285,15 +285,16 @@ func TestPhase3CompactionFlushesFantasyMessagesToMemory(t *testing.T) {
 	}
 
 	a := NewAgentWithStreamer(&cfg, streamer)
+	a.bootstrapMsgCount = 1
 	a.messages = makeMessages(10)
 
 	if err := a.Compact(context.Background()); err != nil {
 		t.Fatalf("Compact returned error: %v", err)
 	}
 
-	// Compaction shape: system + summary + ack + last 4 = 7 fantasy messages.
-	if len(a.messages) != 7 {
-		t.Fatalf("expected 7 messages after compact, got %d", len(a.messages))
+	// Compaction shape: system + summary + last 4 = 6 fantasy messages.
+	if len(a.messages) != 6 {
+		t.Fatalf("expected 6 messages after compact, got %d", len(a.messages))
 	}
 	for i, m := range a.messages {
 		if len(m.Content) == 0 {
