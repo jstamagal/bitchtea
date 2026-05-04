@@ -508,12 +508,27 @@ mcp__<server>__<tool>
 
 MCP tool failures are also returned as text error responses, not Go errors.
 
-### Per-tool cancellation
+## Per-Tool Cancellation
 
-Each `streamOnce` creates a `ToolContextManager` rooted at the turn context.
-It stores that manager on the client until the turn ends:
+Per-tool cancellation is the operational version of the phase-8 cancellation
+state-machine design. The current implementation is centered on
+`internal/llm/tool_context.go`:
+
+- `NewToolContextManager(turnCtx)` creates a manager rooted at the turn
+  context.
+- `NewToolContext(toolCallID)` derives a child context for one tool call and
+  stores its cancel function under the fantasy tool call ID.
+- `CancelTool(toolCallID)` cancels one stored child context without cancelling
+  the parent turn context.
+- `CancelAll()` cancels every stored tool child context and clears the map.
+
+### Manager lifetime in `streamOnce`
+
+Every `Client.streamOnce` creates exactly one `ToolContextManager` for that
+stream attempt:
 
 ```go
+toolCtxMgr := NewToolContextManager(ctx)
 c.toolCtx = toolCtxMgr
 defer func() {
     toolCtxMgr.CancelAll()
@@ -521,18 +536,127 @@ defer func() {
 }()
 ```
 
-`wrapToolsWithContext` wraps every tool. For each tool run it derives a child
-context keyed by fantasy's tool call ID. `Agent.CancelTool(toolCallID)` calls
-`ToolContextManager.CancelTool(toolCallID)`.
+That deferred cleanup is the turn-end cleanup path. It runs on successful
+completion, provider/tool errors that make `streamOnce` return, Esc turn
+cancellation, Ctrl+C turn cancellation, signal cancellation, and any other
+path that unwinds `streamOnce`. The UI does not call `CancelAll` directly; it
+cancels the turn context, then `streamOnce` runs the defer and cancels any
+tool contexts still present.
 
-If no active tool with that ID exists, the exact error text is:
+### Child contexts per tool call
+
+When tools are assembled, `streamOnce` wraps them with:
+
+```go
+fantasy.WithTools(wrapToolsWithContext(assembled, toolCtxMgr)...)
+```
+
+`wrapToolsWithContext` returns `toolContextWrapper` instances. For each tool
+invocation, `toolContextWrapper.Run` calls:
+
+```go
+toolCtx, cleanup := w.mgr.NewToolContext(call.ID)
+defer cleanup()
+return w.inner.Run(toolCtx, call)
+```
+
+The key is the fantasy `ToolCall.ID`, which also flows through UI events as
+`ToolCallID`. `cleanup` cancels the child context and removes the map entry
+when the tool returns, so completed tools are no longer cancellable.
+
+If the parent turn context is already cancelled when `NewToolContext` runs, it
+returns that already-done turn context and a no-op cleanup instead of storing
+a child cancel function.
+
+### Esc x1: cancel one active tool
+
+The UI tracks the active tool from `tool_start` events:
+
+```text
+activeToolName = ev.ToolName
+activeToolCallID = ev.ToolCallID
+```
+
+When the first meaningful Esc press arrives during streaming and
+`activeToolName != ""`, `handleEscKey` calls:
+
+```go
+m.agent.CancelTool(m.activeToolCallID)
+```
+
+`Agent.CancelTool(toolCallID)` fetches the current manager with
+`a.client.ToolContextManager()`. If there is no active stream manager, it
+returns:
+
+```text
+no active turn
+```
+
+Otherwise it calls `ToolContextManager.CancelTool(toolCallID)`. If the tool
+already finished and `cleanup` removed the entry, the exact error text is:
 
 ```text
 no active tool with id <toolCallID>
 ```
 
-At turn end, `toolCtxMgr.CancelAll()` cancels every active tool context and
-clears the map.
+The UI renders success and failure as system messages:
+
+```text
+Cancelled <activeToolName>.
+Could not cancel <activeToolName>: <error>
+```
+
+On this path `handleEscKey` resets `escStage` to 0 and returns. It does not
+call `cancelActiveTurn`, does not cancel `m.cancel`, and does not clear queued
+messages. The parent turn context remains alive so fantasy can receive the
+tool response and continue the model/tool loop.
+
+### Tool result shape after a child-context cancel
+
+Tool cancellation reaches the actual tool as `ctx.Done()` on the child context
+passed to `Run`. The current tool wrappers keep cancellation model-visible by
+returning fantasy tool responses rather than Go errors that abort the whole
+stream:
+
+- typed wrappers check `ctx.Err()` up front and return
+  `fantasy.NewTextErrorResponse(fmt.Sprintf("Error: %v", err)), nil`.
+- typed wrappers also wrap `Registry.Execute` errors with the same
+  `"Error: %v"` text-error response shape.
+- the generic `bitchteaTool` adapter wraps `Registry.Execute` errors with
+  `fantasy.NewTextErrorResponse(fmt.Sprintf("Error: %v", err)), nil`.
+
+This is different from the older phase-8 design note, which proposed a normal
+text result of `"user cancelled this tool call"` for Esc x1. The current code
+does not special-case that string; the invariant that matters operationally is
+that the wrapper returns a `fantasy.ToolResponse` with `nil` Go error, so the
+fantasy stream can stay alive.
+
+`OnToolResult` then emits a lower-level `tool_result` event with the original
+tool call ID. The agent maps that to `agent.Event{Type:"tool_result"}` and the
+TUI clears `activeToolName` / `activeToolCallID` when the result matches the
+active tool.
+
+### Esc x2, Ctrl+C, and turn cancellation
+
+Whole-turn cancellation is separate from per-tool cancellation:
+
+- Esc x2 calls `cancelActiveTurnWithQueueArm("Interrupted by Esc.")`.
+- Ctrl+C stage 1 while streaming calls `cancelActiveTurn(...)`.
+- Ctrl+C stage 3 while streaming calls `cancelActiveTurn("Interrupted.", true)`.
+- OS `SignalMsg` while streaming calls
+  `cancelActiveTurn("Interrupted by signal.", true)`.
+- `tea.QuitMsg` while streaming calls `m.cancel()` directly during shutdown.
+
+`cancelActiveTurn` invokes the turn-level `m.cancel()` cancel function, marks
+the UI idle, clears `activeToolName` and `activeToolCallID`, resets Esc state,
+and optionally clears the steering queue. Because every per-tool child context
+inherits from the turn context, cancelling the turn context also cancels all
+active tool child contexts. When `streamOnce` unwinds, its deferred
+`toolCtxMgr.CancelAll()` runs as a final cleanup and clears any still-registered
+tool contexts.
+
+Ctrl+C is intentionally blunter than Esc: it never calls `Agent.CancelTool` and
+therefore never attempts tool-only cancellation.
 
 ### PrepareStep
 

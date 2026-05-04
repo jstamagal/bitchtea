@@ -79,8 +79,8 @@ The Esc tool-only path is wired through these layers:
 5. `ToolContextManager.CancelTool` looks up the tool call ID and invokes that
    context's cancel function. If the ID is missing, it returns
    `"no active tool with id %s"`.
-6. Tool wrappers surface cancellation as synthetic, model-visible tool results,
-   not Go errors that abort the fantasy stream. The generic adapter returns
+6. Tool wrappers surface cancellation as model-visible tool responses, not Go
+   errors that abort the fantasy stream. The generic adapter returns
    `fantasy.NewTextErrorResponse(fmt.Sprintf("Error: %v", err))`; typed tools
    use the same `"Error: %v"` shape for cancelled contexts.
 7. Fantasy emits the resulting tool result through `OnToolResult`, which the UI
@@ -89,7 +89,12 @@ The Esc tool-only path is wired through these layers:
 Turn cancellation is different: `cancelActiveTurn` invokes the turn-level
 `m.cancel()`, finishes the transcript agent message, marks the agent idle,
 clears active tool IDs, resets Esc state, optionally clears queued messages,
-and emits the supplied system message.
+and emits the supplied system message. Since every tool context is a child of
+the turn context, Esc x2 and streaming Ctrl+C cancel active tools through the
+parent context rather than through `Agent.CancelTool`. When `streamOnce`
+unwinds, its deferred `toolCtxMgr.CancelAll()` cancels and clears any remaining
+tool child contexts. See `docs/agent-loop.md` section `Per-Tool Cancellation`
+for the full manager lifecycle.
 
 ## 5. Picker-mode Key Overrides
 
