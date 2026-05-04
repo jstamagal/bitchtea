@@ -1590,6 +1590,11 @@ valid persona name. They are:
 The session `Entry.Target` field (`internal/session/session.go:88`) records the
 persona or nick for direct-message routing.
 
+**Wiring gap**: Persona membership is metadata-only today. Inviting a persona
+to a channel or DMing one does not inject that persona into the agent's system
+prompt or tool routing. The agent only knows about its own built-in Code Ape
+persona. Cross-reference `bt-wire.4` (tracked in beads) for the fix.
+
 ## `internal/ui/membership.go` and `internal/ui/invite.go`
 
 ### `MembershipManager`
@@ -2538,6 +2543,8 @@ shape of the behavior.
 - `FocusManager.RestoreState()` does not explicitly clamp negative active
   indexes.
 - `/invite` and `/kick` ignore membership save errors.
+- Persona membership is metadata-only; invited personas are not injected into
+  the agent's system prompt or tool routing (tracked as bt-wire.4).
 - session append errors at turn end are ignored.
 - `handleRestartCommand()` ignores `session.New()` failure.
 - `/theme` is informational only; there is no runtime theme switch.
