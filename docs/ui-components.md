@@ -2588,3 +2588,122 @@ shape of the behavior.
 - `toolPanel.Stats` order is map-order dependent.
 - queue draining happens only after `agentDoneMsg`.
 - stale queued messages are discarded only when the current turn ends.
+
+## Input History Recall
+
+The TUI maintains an in-memory input history for the textarea prompt. It does
+**not** persist between sessions — history is lost on process exit.
+
+### Fields
+
+```go
+// internal/ui/model.go:125-127
+history    []string
+historyIdx int
+```
+
+- `history` is a slice of all submitted input strings, appended on every
+  Enter press (`model.go:524`).
+- `historyIdx` is the current position in the history buffer, starting at
+  `len(history)` (one past the last entry). It is initialized to `-1` and
+  set to `len(history)` on first submit.
+
+### Keybindings
+
+Four keybindings navigate input history. They are implemented in the
+`tea.KeyMsg` handler at `model.go:469-573`.
+
+#### Up arrow — history backward
+
+Condition: cursor is on the first line of the textarea (`m.input.Line() == 0`).
+
+1. **Unqueue first** (lines 473-486): If the textarea is empty and there are
+   queued messages (messages typed while the agent was busy), the most recent
+   queued message is pulled back into the textarea. The textarea shows the
+   unqueued message, and a system message in the viewport confirms the action.
+2. **History navigation** (lines 487-491): If the textarea is empty or already
+   showing a history entry, decrements `historyIdx` and loads
+   `m.history[m.historyIdx]` into the textarea. Cursor is positioned at end.
+
+#### Down arrow — history forward
+
+Condition: cursor is on the **last** line of the textarea
+(`m.input.Line() >= m.input.LineCount()-1`).
+
+- If `historyIdx < len(history)-1`, increments `historyIdx` and loads the
+  next-newer entry (lines 496-499).
+- If `historyIdx == len(history)-1`, sets `historyIdx = len(history)` and
+  clears the textarea (lines 500-503). This returns the user to a blank
+  prompt after reaching the newest history entry.
+
+#### Ctrl+P — explicit history up
+
+Always navigates backward in history regardless of cursor position or queued
+messages (lines 556-562):
+
+```go
+case "ctrl+p":
+    if len(m.history) > 0 && m.historyIdx > 0 {
+        m.historyIdx--
+        m.input.SetValue(m.history[m.historyIdx])
+    }
+```
+
+No unqueue behavior — Ctrl+P is purely history navigation. Cursor is not
+explicitly repositioned (SetValue resets it to the beginning).
+
+#### Ctrl+N — explicit history down
+
+Always navigates forward in history regardless of cursor position (lines
+564-573):
+
+```go
+case "ctrl+n":
+    if m.historyIdx < len(m.history)-1 {
+        m.historyIdx++
+        m.input.SetValue(m.history[m.historyIdx])
+    } else {
+        m.historyIdx = len(m.history)
+        m.input.SetValue("")
+    }
+```
+
+When at the most recent entry, the textarea is cleared (returns to blank
+prompt state).
+
+### History persistence policy
+
+- **In-memory only**: history is a `[]string` field on the `Model` struct.
+  It is never written to disk. It does not survive `SIGTERM`, restart, or
+  `/restart`.
+- **Per-process, not per-context**: there is a single global history slice
+  for the process. All IRC contexts (channels, queries) share the same
+  history. Switching to a different channel/query does not switch to a
+  per-context history buffer.
+- **Deduplication**: none. If the user submits the same input twice, it
+  appears twice in the history. There is no dedup logic.
+- **Bounded**: no. The slice grows without bound for the lifetime of the
+  process. There is no maximum history depth or eviction policy.
+- **Append on Enter**: history is saved only via the Enter key path
+  (`model.go:524`). Messages queued while the agent is busy are not saved
+  to history (they go to `m.queued` instead).
+- **Blank lines**: skipped. If the trimmed input is empty, the handler
+  returns early before reaching the history append (`model.go:517-519`).
+
+### Interaction with queue
+
+When Up arrow is pressed and the textarea is empty, the handler checks
+`len(m.queued) > 0` before checking history. If queued messages exist, the
+most recent one is "unqueued" — pulled back into the textarea and removed
+from the queue. This takes priority over history navigation.
+
+After unqueue, the message is still saved to history when re-submitted with
+Enter, so it is not lost.
+
+### Test coverage
+
+- `internal/ui/model_turn_test.go:69` — a basic history navigation test that
+  sends `tea.KeyUp` and asserts the model state is updated.
+- No dedicated unit tests exist for Ctrl+P, Ctrl+N, unqueue interaction,
+  or history bounds checking. These are exercised only through manual
+  testing and the structural test at `model_turn_test.go`.
