@@ -311,9 +311,22 @@ Replay appends `ChatMessage{Time: e.Timestamp, Type: ..., Nick: ..., Content:
 ...}`. `addMessage` is not used, so replay does not re-log old messages to the
 transcript logger.
 
+`ResumeSession` does not clear `m.messages` before replaying entries. The
+`/resume` command therefore appends the resumed viewport history below whatever
+was already visible. Startup resume normally begins from a fresh model, so that
+path does not show duplication; repeated in-app `/resume` calls can show old
+visible history above the newly replayed session.
+
 Important: resume does not replay tool execution. A resumed tool result is a
 viewport message and an agent-history message only; it does not create live
 tool panel running state.
+
+Default-context resume calls `Agent.RestoreMessages`. That function forces a
+fresh system prompt at the front of the restored slice and then sets
+`bootstrapMsgCount = 0`. Non-default contexts use `Agent.RestoreContextMessages`,
+which also forces a fresh system prompt for that stored context but does not
+switch to it. Saved indexes are set by `ResumeSession` after conversion, not by
+the session package.
 
 ## Post-Turn Session Save
 
@@ -455,6 +468,10 @@ Example:
 `LoadFocusManager(dir)` creates a default manager first, then restores state if
 loading succeeded and the file had at least one context.
 
+If `.bitchtea_focus.json` is invalid JSON or unreadable, `LoadFocusManager`
+silently keeps the default `#main` manager. The lower-level `session.LoadFocus`
+returns the error, but the UI manager loader does not surface it.
+
 `RestoreState` drops invalid records:
 
 - unknown kind is dropped;
@@ -536,6 +553,11 @@ one leading `#`, and lowercases.
 
 `LoadMembership(dir)` returns empty state with no error if the sidecar does not
 exist.
+
+`LoadMembershipManager(dir)` silently falls back to an empty manager if
+`.bitchtea_membership.json` is invalid JSON or unreadable. The lower-level
+`session.LoadMembership` returns the error, but the UI manager loader ignores
+it.
 
 ## Checkpoint State
 
@@ -1175,6 +1197,11 @@ assert the pre-prepend saved index shape instead of this failure mode.
 `Session.Load` silently skips malformed JSON lines. That protects against one
 bad line killing resume, but it also hides corruption.
 
+Repeated in-app `/resume` calls append replayed entries to the visible chat
+buffer instead of replacing it. This is display-only duplication; the agent
+history is restored from the selected session, but the viewport can contain
+older messages above the replay.
+
 `Session.Fork` ignores marshal/write errors for individual entries, does not
 flock, does not set `BranchTag`, and treats missing `fromID` as "copy all".
 
@@ -1257,4 +1284,3 @@ Missing high-value tests:
   explicitly remain UI-only with tests pinning that.
 - Session sidecars should have tests for partial/invalid JSON handling at the
   UI load-manager layer, not only the session package layer.
-
