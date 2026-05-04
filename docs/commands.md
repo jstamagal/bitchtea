@@ -80,12 +80,19 @@ When a command or message is committed (Enter), the model undergoes a transition
 - **Logic**: This bypasses the persistent `/query` focus but tells the agent exactly who is being addressed via the `[to:...]` prefix, which the agent's system prompt (Persona) is trained to understand as a routing hint.
 
 #### `/join <#channel>`
-- **Handshake**: Calls `m.focus.SetFocus` and `m.agent.SetScope`.
-- **Under the Hood**:
-  1. Updates the TUI's active context label.
-  2. Triggers `agent.SetScope`, which checks for a scoped `HOT.md` in the memory archive.
-  3. **Context Injection**: If `HOT.md` exists for the channel, it is injected into the LLM as a context message immediately.
+- **Immediate Handshake**: `handleJoinCommand` (`internal/ui/commands.go`) calls `m.focus.SetFocus(ctx)` and `m.focus.Save(m.config.SessionDir)`. Nothing else fires synchronously — the agent is not touched.
+- **Deferred (next agent turn)**: `startAgentTurn` (`internal/ui/model.go`) reads `m.focus.Active()`, then calls `m.agent.InitContext`, `m.agent.SetContext`, and `m.agent.SetScope(ircContextToMemoryScope(...))`. Any scoped `HOT.md` injection happens through that `SetScope` path on the *next* user message, not at `/join` time.
 - **Viewport Output**: `Joined #channel`.
+
+#### `/query <persona>`
+- **Immediate Handshake**: `handleQueryCommand` (`internal/ui/commands.go`) calls `m.focus.SetFocus(Direct(persona))` and `m.focus.Save`. The agent's context and scope are unchanged at this point.
+- **Deferred (next agent turn)**: Same lazy swap as `/join` — `startAgentTurn` picks up the new active context and calls `InitContext` / `SetContext` / `SetScope` then.
+- **Viewport Output**: `Query open: @persona`.
+
+#### `/part [target]`
+- **Immediate Handshake**: `handlePartCommand` (`internal/ui/commands.go`) calls `m.focus.Remove(target)` (defaulting to the active context) and persists via `m.focus.Save`. Refuses to part the last remaining context. The agent is not notified inline.
+- **Deferred (next agent turn)**: If the part changed the active focus, the next `startAgentTurn` is what actually swaps `agent.SetContext` + `agent.SetScope` to match.
+- **Viewport Output**: `Parted <label> — now in <new active label>`.
 
 ### 📜 COMMAND VERBATIM MAP
 
@@ -93,7 +100,9 @@ When a command or message is committed (Enter), the model undergoes a transition
 | :--- | :--- | :--- |
 | `/set model <m>` | `*** Model switched to: <m>` | `a.SetModel(<m>)` (Immediate config sync) |
 | `/tokens` | `~X tokens \| $Y \| Z msgs` | None (Local stat read) |
-| `/join #ch` | `Joined #ch` | `a.SetScope(ChannelScope("#ch"))` |
+| `/join #ch` | `Joined #ch` | None inline — `focus.SetFocus` + `focus.Save`; `agent.SetContext`/`SetScope` deferred to next `startAgentTurn` |
+| `/query nick` | `Query open: @nick` | None inline — `focus.SetFocus(Direct("nick"))` + `focus.Save`; agent swap deferred to next `startAgentTurn` |
+| `/part [target]` | `Parted <label> — now in <new>` | None inline — `focus.Remove` + `focus.Save`; agent swap deferred to next `startAgentTurn` |
 | `/debug on` | `Debug mode: ON` | `a.SetDebugHook(fn)` (Wraps HTTP transport) |
 | `/set k v` | `K set to: V` | Syncs `a.SetProvider/Model/etc` if profile-related |
 
