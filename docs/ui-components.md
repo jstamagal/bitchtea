@@ -1298,227 +1298,51 @@ These are formatting helpers:
 - `indentTranscriptContent` indents every line with four spaces
 - `sanitizeTranscriptText` strips ANSI and normalizes newlines
 
-## `internal/ui/mp3.go`
-
-The MP3 controller is a stateful widget with its own process management.
-
-### Constants
-
-- `mp3PanelWidth = 34`
-- `mp3StatusBarWidth = 38`
-- `mp3VisualizerBars = 8`
-- `mp3ProgressBarWidth = 10`
-- `mp3DefaultTrackWidth = 24`
-
-### Defaults and seams
-
-- `mp3LibraryDir` defaults to `~/.bitchtea/mp3` or `.bitchtea/mp3`
-- `mp3DurationReader` can be swapped in tests
-- `mp3ProcessStarter` can be swapped in tests
-
-### `mp3Controller`
-
-Fields:
-
-- `tracks`
-- `current`
-- `visible`
-- `playing`
-- `paused`
-- `startedAt`
-- `offset`
-- `process`
-- `generation`
-
-### `newMP3Controller()`
-
-Creates the controller with the default library path, duration reader, process
-starter, and clock.
-
-### `scan()`
-
-Reads the library directory and rebuilds the track list.
-
-Behavior:
-
-- missing directory is not an error
-- only `.mp3` files are kept
-- durations are read with the injected reader
-- duration read failures are ignored and treated as zero
-- tracks are sorted case-insensitively by name
-- the current track is preserved by path when possible
-
-### `rescan()`
-
-Returns one of:
-
-```text
-MP3 scan failed: <error>
-No MP3s found in <dir>
-Loaded <n> track(s) from <dir>
-```
-
-When no tracks are found, playback is stopped.
-
-### `toggle()`
-
-Toggles the MP3 panel visibility.
-
-Behavior:
-
-- hide -> `MP3 panel hidden.` (playback continues)
-- show with no tracks -> rescan result
-- show while already playing -> `MP3 panel ready. <track>`
-- show while idle -> starts playback of the current track
-
-### `stop()`
-
-Resets playback state and sends a stop signal to the current process if one is
-running.
-
-Important detail:
-
-- `generation` is incremented so stale `mp3DoneMsg` events can be ignored.
-
-### `playIndex(idx int)`
-
-Starts playback at a specific index, wrapping around the list.
-
-Returns:
-
-```text
-Now playing: <track>
-MP3 playback failed: <error>
-No MP3s found in <dir>
-```
-
-It also returns a command that waits on the player's `Done()` channel and then
-emits `mp3DoneMsg`.
-
-### `next()` and `prev()`
-
-Advance or reverse by one track with wraparound.
-
-### `togglePause()`
-
-Behavior:
-
-- no active process -> `No MP3 track is playing.`
-- paused -> resume the process and emit `Resumed: <track>`
-- playing -> pause the process and emit `Paused: <track>`
-
-Errors are surfaced as:
-
-```text
-Resume failed: <error>
-Pause failed: <error>
-```
-
-### `elapsed()`
-
-Returns the current elapsed time:
-
-- `0` when not playing
-- `offset` when paused
-- `offset + now - startedAt` while playing
-
-### `statusText()`
-
-Exact shapes:
-
-```text
-♫ idle
-♫ <track> ▶ [████······] 00:12/03:45 ▂▆▁...
-♫ <track> ▌▌ [████······] 00:12/03:45 ▂▆▁...
-♫ <track> ■ [████······] 00:12/03:45 ▂▆▁...
-```
-
-Details:
-
-- no tracks -> `♫ idle`
-- playing icon -> `▶`
-- paused icon -> `▌▌`
-- stopped icon -> `■`
-- progress bar uses `█` and `·`
-- missing duration renders as `?:??`
-- visualizer is 8 rune bars generated from a hash of track path and elapsed
-
-### `handleDone(msg mp3DoneMsg)`
-
-Uses the generation guard to ignore stale completion events.
-
-Behavior:
-
-- clears the process and marks playback stopped
-- preserves finished duration in `offset`
-- error -> `MP3 playback ended: <err>`
-- one track -> `Finished: <track>`
-- multiple tracks -> auto-advances to the next track
-
-### `renderPanel(height int)`
-
-The panel returns an empty string when hidden or when the available height is
-below 4.
-
-Visible output:
-
-- rounded yellow border
-- `MP3 Player`
-- `Dir: <library>`
-- `Controls: space pause, ←/j prev, →/k next`
-- the playlist is windowed around the current track
-- the current track is marked with `▶`
-- either:
-  - `Drop .mp3 files into the library dir.`
-  - or a `Now Playing` section plus a `Playlist`
-
-### `readMP3Duration(path string)`
-
-Opens the file with `go-mp3`, computes duration from sample count and sample
-rate, and returns `0` for sample-rate-zero files.
-
-### `startMP3Process(path string)`
-
-Player order:
-
-1. `mpv --no-video --really-quiet --no-terminal <path>`
-2. `ffplay -nodisp -autoexit -loglevel error <path>`
-3. `mpg123 -q <path>`
-
-Behavior:
-
-- stdout / stderr are discarded
-- the first installed player wins
-- a background goroutine waits for exit and sends the result to `Done()`
-- negative exit codes are treated as clean completion
-
-If no player is available, the error is:
-
-```text
-no supported audio player found (tried mpv, ffplay, mpg123)
-```
-
-### Shell process helpers
-
-`Pause()` sends `SIGSTOP`, `Resume()` sends `SIGCONT`, and `Stop()` sends
-`SIGKILL`.
-
-`Done()` exposes the completion channel.
-
-`signal()` is a nil-safe wrapper around `Process.Signal`.
-
-### Rendering helpers
-
-- `renderMP3ProgressBar(total, elapsed, width)` clamps the width to at least 4,
-  clamps elapsed into range, and renders dots when total is zero.
-- `renderMP3Visualizer(seed, elapsed, bars)` hashes the track path and elapsed
-  seconds into one of 8 rune levels.
-- `formatDuration(d)` returns:
-  - `?:??` for non-positive durations
-  - `MM:SS` for durations under one hour
-  - `H:MM:SS` for one hour or more
-- `truncateRunes(s, limit)` truncates by rune count and uses `…` when needed.
-- `mp3TickCmd()` posts a tick every second.
+## MP3 Player
+
+The MP3 controller (`internal/ui/mp3.go`) is a stateful widget that embeds a functional audio player directly into the TUI. It manages process execution, panel rendering, and track state.
+
+### 1. Library Directory
+The player scans the library directory, which defaults to `~/.bitchtea/mp3` (falling back to `.bitchtea/mp3` if the home directory cannot be determined). Users drop `.mp3` files here for the player to discover.
+
+### 2. Player Detection Chain
+To ensure cross-platform compatibility without heavy audio dependencies, the player delegates playback to an external shell process. It probes for installed players in the following order and uses the first one found:
+1. `mpv` (`--no-video --really-quiet --no-terminal`)
+2. `ffplay` (`-nodisp -autoexit -loglevel error`)
+3. `mpg123` (`-q`)
+
+Standard output and standard error from the subprocess are discarded.
+
+### 3. Pause and Resume via OS Signals
+Instead of relying on player-specific RPC protocols, the controller achieves pause and resume functionality by sending OS-level process control signals:
+- **Pause**: Sends `SIGSTOP` (`syscall.SIGSTOP`) to freeze the player process.
+- **Resume**: Sends `SIGCONT` (`syscall.SIGCONT`) to resume execution.
+- **Stop**: Sends `SIGKILL` (`syscall.SIGKILL`) to terminate the process instantly.
+
+### 4. Panel Rendering and Layout
+When toggled visible, the MP3 panel renders as a sidebar with a rounded yellow border (`mp3PanelWidth = 34`). It only renders if there is enough vertical space (height >= 4). 
+The panel includes:
+- A header (`MP3 Player`) and library directory path.
+- A controls cheat sheet.
+- A `Now Playing` section showing the status text.
+- A scrollable `Playlist` windowed around the current track, with the active track highlighted green and marked with `▶`.
+
+### 5. Key Bindings
+While the MP3 panel is visible and the input line is empty, the player accepts direct keyboard control:
+- **`space`**: Toggles Pause/Resume.
+- **`←` or `j`**: Skips to the previous track.
+- **`→` or `k`**: Skips to the next track.
+
+### 6. Track Scanning and Playlist Navigation
+The `scan()` method reads the library directory, keeping only `.mp3` files. It computes track durations using `go-mp3` and sorts the playlist case-insensitively by name. Navigation methods (`next()` and `prev()`) support wraparound, moving from the last track to the first and vice versa.
+
+### 7. Progress Bar and Visualizer Rendering
+The player computes elapsed time based on process start time and any paused offset. The status line features two dynamic components:
+- **Progress Bar**: Rendered as a 10-character wide bracketed bar using `█` for filled segments and `·` for remaining time.
+- **Visualizer**: An 8-character pseudo-random audio visualizer block. It hashes the track's file path combined with the elapsed seconds to deterministically pick from 8 block-character height levels (`▁`, `▂`, `▃`, `▄`, `▅`, `▆`, `▇`, `█`), simulating a graphic equalizer.
+
+### 8. Auto-Advance on Track Completion
+A background goroutine waits on the player process to exit, sending an event to the `Done()` channel. To prevent race conditions with user interactions, a `generation` counter acts as an epoch guard. When an `mp3DoneMsg` arrives with the correct epoch, the controller automatically advances to the next track if the playlist contains more than one song.
 
 ## `internal/ui/context.go` and `internal/ui/context_helpers.go`
 

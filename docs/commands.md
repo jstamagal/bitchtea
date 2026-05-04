@@ -38,7 +38,7 @@ Concrete example: the `openrouter` built-in is `provider=openai service=openrout
 - **`/copy [n]`**: Copy the last (or nth) assistant response to the clipboard.
 - **`/tokens`**: Show estimated token usage and session cost.
 - **`/debug [on|off]`**: Toggle verbose HTTP logging for API calls.
-- **`/mp3 [cmd]`**: Control the built-in MP3 player (rescan, play, next, prev).
+- **`/mp3 [cmd]`**: Control the built-in MP3 player (rescan, play, next, prev). See [MP3 Player](ui-components.md#mp3-player).
 - **`/clear`**: Clear the scrollback buffer from the TUI.
 - **`/help`** (or **`/h`**): Show the quick help menu.
 - **`/quit`** (or **`/q`**): Exit bitchtea.
