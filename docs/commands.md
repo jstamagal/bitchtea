@@ -25,6 +25,25 @@ Slash commands control the TUI. Use them to bend the session to your will.
 
 Concrete example: the `openrouter` built-in is `provider=openai service=openrouter` because OpenRouter speaks the OpenAI wire format but is not OpenAI; behavior gates that fire only for native OpenAI must check `service`, not `provider`. Full migration notes live in [`phase-9-service-identity.md`](phase-9-service-identity.md).
 
+### /set Key Reference
+
+| Key | Accepted Values | Effect | Profile Cleared | Persistence |
+| :--- | :--- | :--- | :--- | :--- |
+| `provider` | `openai`, `anthropic` (any string accepted, but transport only speaks these two wire formats) | Switches wire-format transport (request body, auth, stream parsing). Also sets `service = "custom"`. | Yes | Memory only (session runtime). Persisted in saved profiles. |
+| `model` | Any model name string (e.g., `gpt-4o`, `claude-3-5-sonnet-20241022`) | Pushes model name to the agent's LLM client for the next turn. Also clears loaded profile. | Yes | Memory only. |
+| `baseurl` | Any URL string (no validation; `http`, `https`, no scheme all accepted) | Redirects API endpoint. Also sets `service = "custom"` and clears loaded profile. | Yes | Memory only. |
+| `apikey` | Any string (bare key or `sk-...` prefixed) | Pushes API key to the agent's LLM client. Clears loaded profile. | Yes | Memory only. |
+| `service` | Any string (labels: `openai`, `anthropic`, `ollama`, `openrouter`, `zai-openai`, `custom`, etc.) | Metadata relabel for per-service behavior gates (caching, reasoning, etc.). Does NOT clear profile — treated as a metadata edit. | No | Memory only. Persisted in saved profiles from `/profile save`. |
+| `nick` | Any string | Sets the user display name sent with messages (`UserNick`). No agent sync. | No | Memory only. |
+| `profile` | Any saved profile name | Loads the named profile and applies all its values (provider, service, model, baseurl, apikey). | N/A (sets profile) | N/A — loads a profile. |
+| `sound` | `on`, `true`, `1`, `yes` → enabled; anything else → disabled | Toggles notification sounds (`NotificationSound`). Config-only; no agent sync. | No | Memory only. |
+| `auto-next` | `on`, `true`, `1`, `yes` → enabled; anything else → disabled | Toggles automatic "next steps" injection after each agent turn (`AutoNextSteps`). Config-only; no agent sync. | No | Memory only. |
+| `auto-idea` | `on`, `true`, `1`, `yes` → enabled; anything else → disabled | Toggles automatic improvement-idea generation after each agent turn (`AutoNextIdea`). Config-only; no agent sync. | No | Memory only. |
+
+**Clobber rules**: Setting `provider` or `baseurl` silently rewrites `service = "custom"` because once you redirect the transport or change the wire format, the previous service identity can no longer be trusted. Setting `provider`, `model`, `baseurl`, or `apikey` clears the loaded profile name (`cfg.Profile = ""`) so the topbar reflects the manual override. The remaining keys (`service`, `nick`, `sound`, `auto-next`, `auto-idea`) are metadata edits that leave the profile tag intact.
+
+> All `/set` values live only in process memory. They are persisted to disk only through two mechanisms: (1) saving a profile via `/profile save <name>`, or (2) writing `set <key> <value>` lines into `~/.bitchtearc` (loaded at startup by `config.ParseRC` + `ApplyRCSetCommands`). There is no auto-save.
+
 ## 💾 SESSION & MEMORY
 
 - **`/sessions`** (or **`/ls`**): List saved sessions in the session directory.
