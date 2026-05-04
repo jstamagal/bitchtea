@@ -16,6 +16,7 @@ import (
 	"github.com/jstamagal/bitchtea/internal/config"
 	"github.com/jstamagal/bitchtea/internal/llm"
 	"github.com/jstamagal/bitchtea/internal/mcp"
+	memorypkg "github.com/jstamagal/bitchtea/internal/memory"
 	"github.com/jstamagal/bitchtea/internal/tools"
 )
 
@@ -837,7 +838,7 @@ func (a *Agent) flushCompactedMessagesToDailyMemory(ctx context.Context, message
 		return nil
 	}
 
-	return AppendScopedDailyMemory(a.config.SessionDir, a.config.WorkDir, a.scope, time.Now(), text)
+	return AppendScopedDailyMemory(a.config.SessionDir, a.config.WorkDir, a.scope, time.Now(), memorypkg.SourceCompaction, text)
 }
 
 // AutoNextPrompt returns the auto-next-steps prompt

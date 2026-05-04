@@ -626,7 +626,7 @@ func (r *Registry) execWriteMemory(argsJSON string) (string, error) {
 		if t := strings.TrimSpace(args.Title); t != "" {
 			body = "### " + t + "\n\n" + body
 		}
-		if err := memorypkg.AppendDailyForScope(r.SessionDir, r.WorkDir, scope, now, body); err != nil {
+		if err := memorypkg.AppendDailyForScope(r.SessionDir, r.WorkDir, scope, now, memorypkg.SourceToolWrite, body); err != nil {
 			return "", err
 		}
 		return fmt.Sprintf("Appended %d bytes to daily memory (%s)", len(args.Content), memorypkg.DailyPathForScope(r.SessionDir, r.WorkDir, scope, now)), nil
