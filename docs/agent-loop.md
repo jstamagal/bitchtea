@@ -1341,8 +1341,30 @@ On success it shows:
 Compacted: ~<before> -> ~<after> tokens
 ```
 
-`Agent.Compact` is a tool-less LLM flow. It first flushes compacted messages
-to daily memory by asking the streamer:
+#### Internal flow (`Agent.Compact`, `internal/agent/agent.go:734`)
+
+`Agent.Compact` is a tool-less LLM flow. It blocks inside the slash command
+handler and reads lower-level stream events directly. The method does NOT emit
+normal UI streaming events.
+
+**Early-return thresholds.** If `len(a.messages) < 6`, compaction is a no-op —
+there are too few messages to compact. If `a.bootstrapMsgCount >= end` (where
+`end = len(a.messages) - 4`), compaction also returns nil — the compactable
+window is empty.
+
+**Compaction window.** The window to be compacted is the slice
+`a.messages[bootstrapEnd:end]` where `end = len(a.messages) - 4` and
+`bootstrapEnd = max(a.bootstrapMsgCount, 1)`. In practice this means:
+
+- The bootstrap prefix (system prompt, context files, persona anchor) is
+  preserved untouched.
+- The last 4 messages (typically the last two user/assistant exchanges) are
+  preserved as the conversational "landing zone" after the summary.
+- Everything between bootstrap and the last 4 is candidate for compaction.
+
+**Step 1: memory extraction** (`flushCompactedMessagesToDailyMemory`,
+`internal/agent/agent.go:800`). The compaction window is sent to the LLM
+with this prompt verbatim:
 
 ```text
 Extract durable memory from this conversation slice before it is compacted.
@@ -1350,24 +1372,44 @@ Return concise markdown bullets covering only lasting facts: user preferences, d
 Skip transient chatter and tool noise. If nothing deserves durable memory, reply with exactly NONE.
 ```
 
-Then it asks for a summary with:
+If the LLM returns empty or exactly `NONE` (case-insensitive), no daily memory
+is written. Otherwise the output is appended to the scoped daily memory file
+via `AppendScopedDailyMemory`.
+
+**Step 2: summary.** The compaction window is sent to the LLM again with this
+prompt verbatim:
 
 ```text
 Summarize the following conversation concisely, preserving all important technical details, decisions made, files modified, and current state:
 ```
 
-The compacted `a.messages` becomes:
+Each message text is truncated to 500 characters in the prompt. The summary
+stream runs without tools (`reg = nil`).
+
+**Step 3: rebuilt transcript.** The compacted `a.messages` is assembled as:
 
 ```text
-system prompt
+messages[:bootstrapEnd]          (bootstrap prefix preserved as-is)
 user: [Previous conversation summary]:
-<summary>
-assistant: Got it, I have the context from the summary.
-last 4 original messages
+<summary from step 2>
+messages[end:]                   (last 4 original messages, the "landing zone")
 ```
 
-Compaction does not emit normal UI streaming events. It blocks inside the slash
-command handler and reads lower-level stream events directly.
+There is no synthetic `"Got it"` assistant message inserted after the summary.
+The last 4 original messages already include the existing assistant response
+that followed the final compacted user message.
+
+**bootstrapMsgCount is NOT reset** after compaction. The value remains what it
+was before, which continues to point at the bootstrap prefix boundary of the
+compacted array. Since the bootstrap prefix is copied verbatim into the rebuilt
+slice, the old count is still correct.
+
+**contextSavedIdx IS reset** to `len(a.messages)`, which means all messages in
+the compacted array are marked as saved. This creates a session-save watermark
+gap: the pre-compaction messages were already written to the session JSONL file,
+but the compacted structure (summary message + last-4 re-insertion) is never
+re-saved to the session log. New messages added after compaction will be
+persisted normally from the new watermark.
 
 ### `/tokens`
 
