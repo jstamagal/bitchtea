@@ -6,6 +6,8 @@ Welcome to the Green Dark. This is the master index for the soul of bitchtea.
 
 1. **[Architecture](architecture.md)**: The high-level package map, dependency rationale, and runtime state machine.
 2. **[Agent Loop](agent-loop.md)**: Deep dive into the `SendMessage` flow, tool execution, and autonomous follow-up logic.
+3. **[Providers](providers.md)**: Provider routing, env var detection, built-in profiles, and /profile commands.
+4. **[Model Catalog](catalog.md)**: Catalog refresh, on-disk cache, embedded fallback, ETag handling, and /models integration.
 
 ## 🗺️ QUICK MAP
 
