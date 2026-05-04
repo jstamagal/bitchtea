@@ -648,7 +648,30 @@ If that marks a HOT path as injected, then `ResumeSession` replaces the
 message slice, the injection is lost but the path stays marked. Later turns
 never re-inject.
 
-### 10.6 Daily memory heading always says "pre-compaction flush"
+### 10.6 daemon_cli.go missing Dispatch — daemon rejects all jobs (FIXED)
+
+`daemon_cli.go:66-69` called `daemon.Run()` without `Dispatch: jobs.Handle`.
+The standalone binary (`cmd/daemon/main.go:42-45`) correctly passes it.
+This meant `bitchtea daemon start` from the TUI binary launched a daemon
+that filed every submitted job to `failed/` with "no handler registered".
+
+**Severity:** Critical (daemon is non-functional via `bitchtea daemon start`).
+
+**Fix:** Added `Dispatch: jobs.Handle` and the `jobs` import. Fixed in this
+audit session.
+
+### 10.7 Daemon-TUI IPC is one-way (no job submission from TUI)
+
+The TUI has no code that calls `daemon.Mailbox.Submit()`. The daemon can
+process jobs but nothing in `internal/ui/` ever enqueues one. The
+`backgroundActivity` field in `model.go` is purely UI state with no daemon
+caller. This means the daemon builds, runs, and processes its mailbox — but
+nothing ever puts mail in the box from the TUI side.
+
+**Severity:** Medium (architectural gap — daemon works standalone but is not
+integrated into the TUI workflow).
+
+### 10.8 Daily memory heading always says "pre-compaction flush"
 
 `docs/memory.md:463-469`: Even `write_memory` daily writes use
 `AppendDailyForScope` which stamps the heading as "pre-compaction flush".
@@ -714,4 +737,6 @@ Commands registered in `slashCommandRegistry` (commands.go:33-60):
 | 17 | **P3** | Per-tool cancellation (ToolContextManager) not in operational docs |
 | 18 | **P3** | Prompt caching (cache.go) not documented |
 | 19 | **P3** | Cost tracking pipeline not documented |
+| 21 | **P0** | ~~daemon_cli.go missing Dispatch — daemon rejects all jobs~~ **FIXED** |
+| 22 | **P2** | Daemon-TUI IPC is one-way — TUI never submits jobs to daemon |
 | 20 | **P3** | cmd/daemon/main.go vs daemon_cli.go relationship undocumented |

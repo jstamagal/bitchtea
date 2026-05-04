@@ -11,6 +11,7 @@ import (
 
 	"github.com/jstamagal/bitchtea/internal/config"
 	"github.com/jstamagal/bitchtea/internal/daemon"
+	"github.com/jstamagal/bitchtea/internal/daemon/jobs"
 )
 
 // runDaemon implements `bitchtea daemon <subcommand>`. It dispatches before
@@ -64,8 +65,9 @@ func daemonStart(stderr io.Writer) int {
 	logger := log.New(io.MultiWriter(stderr, logFile), "daemon: ", log.LstdFlags)
 
 	err = daemon.Run(context.Background(), daemon.RunOptions{
-		BaseDir: base,
-		Logger:  logger,
+		BaseDir:  base,
+		Logger:   logger,
+		Dispatch: jobs.Handle,
 	})
 	if err == nil {
 		return 0
