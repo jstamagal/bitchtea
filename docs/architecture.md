@@ -4,29 +4,37 @@ This document serves as the architectural source of truth for the `bitchtea` cod
 
 ## 1. Acyclic Dependency Graph
 
-The runtime splits across a set of packages. The theoretical dependency graph dictates an acyclic structure. Based on empirical analysis of imports, the actual dependency graph is:
+The runtime splits across a set of packages plus two external Charm libraries (`charm.land/fantasy` for LLM message/tool types, `charm.land/catwalk` for the model catalog). The graph is acyclic: every internal arrow points downward in the ordering shown below, and the two external libraries are pure leaves (they import nothing from this repo). Based on empirical analysis of `go list -f '{{.Imports}}'` across `./...`, the dependency graph is:
 
 ```text
-main
-├── cmd/daemon
-├── internal/agent
-├── internal/catalog
-├── internal/config
-├── internal/daemon
-├── internal/llm
-├── internal/session
-└── internal/ui
+Binaries (cmd/*):
+  main (./)        -> internal/{agent, catalog, config, daemon, daemon/jobs, llm, session, ui}
+  cmd/daemon       -> internal/{config, daemon, daemon/jobs}
+  cmd/trace        -> internal/tools          (developer scratchpad; not shipped)
 
-cmd/daemon -> internal/config, internal/daemon, internal/daemon/jobs
-cmd/trace -> internal/tools
+Internal packages (top-down; arrows point at dependencies):
+  internal/ui          -> internal/{agent, catalog, config, llm, session, sound}
+                          + charm.land/catwalk
+  internal/agent       -> internal/{agent/event, config, llm, mcp, memory, tools}
+                          + charm.land/fantasy
+  internal/agent/event -> (leaf; no internal deps)
+  internal/session     -> internal/llm
+                          + charm.land/fantasy
+  internal/daemon/jobs -> internal/{daemon, memory, session}
+  internal/llm         -> internal/{catalog, mcp, tools}
+                          + charm.land/fantasy, charm.land/catwalk
+  internal/catalog     -> internal/config
+                          + charm.land/catwalk
+  internal/tools       -> internal/memory
+  internal/mcp         -> (leaf; external github.com/modelcontextprotocol/go-sdk)
+  internal/config      -> (leaf; stdlib only)
+  internal/daemon      -> (leaf; stdlib + golang.org/x/sys)
+  internal/memory      -> (leaf; stdlib only)
+  internal/sound       -> (leaf; stdlib only)
 
-internal/ui -> internal/agent, internal/catalog, internal/config, internal/llm, internal/session, internal/sound
-internal/agent -> internal/config, internal/llm, internal/mcp, internal/memory, internal/tools
-internal/daemon/jobs -> internal/daemon, internal/memory, internal/session
-internal/session -> internal/llm
-internal/llm -> internal/catalog, internal/mcp, internal/tools
-internal/mcp -> (external MCP SDKs)
-internal/tools -> internal/memory
+External critical edges:
+  charm.land/fantasy   <- internal/{agent, llm, session}        (LLM message + tool types)
+  charm.land/catwalk   <- internal/{catalog, llm, ui}           (model registry / picker)
 ```
 
 ### Wiring Notes & Architectural State
