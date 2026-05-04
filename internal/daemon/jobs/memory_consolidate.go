@@ -20,12 +20,18 @@ import (
 // helper takes. scope_kind / scope_name reconstruct a memory.Scope without
 // importing the agent package (where the live MemoryScope lives). since is
 // a YYYY-MM-DD date; only daily files dated >= since are folded into hot.
+//
+// scope_parent_kind / scope_parent_name let callers express the parent scope
+// hierarchy (e.g. a query scope under a channel). When both are non-empty,
+// buildScope constructs the parent scope first and supplies it to the child.
 type memoryConsolidateArgs struct {
-	SessionDir string `json:"session_dir"`
-	WorkDir    string `json:"work_dir"`
-	ScopeKind  string `json:"scope_kind,omitempty"` // "root" | "channel" | "query"; defaults to root
-	ScopeName  string `json:"scope_name,omitempty"`
-	Since      string `json:"since,omitempty"` // YYYY-MM-DD; empty means all
+	SessionDir       string `json:"session_dir"`
+	WorkDir          string `json:"work_dir"`
+	ScopeKind        string `json:"scope_kind,omitempty"`        // "root" | "channel" | "query"; defaults to root
+	ScopeName        string `json:"scope_name,omitempty"`
+	ScopeParentKind  string `json:"scope_parent_kind,omitempty"`  // parent scope kind (e.g. "channel")
+	ScopeParentName  string `json:"scope_parent_name,omitempty"`  // parent scope name
+	Since            string `json:"since,omitempty"`              // YYYY-MM-DD; empty means all
 }
 
 // memoryConsolidateOutput summarises what the run did. dailies_seen counts
@@ -102,7 +108,7 @@ func handleMemoryConsolidate(ctx context.Context, job daemon.Job) daemon.Result 
 		return errorResult(kind, started, fmt.Errorf("memory-consolidate: session_dir is required"))
 	}
 
-	scope, err := buildScope(args.ScopeKind, args.ScopeName)
+	scope, err := buildScope(args.ScopeKind, args.ScopeName, args.ScopeParentKind, args.ScopeParentName)
 	if err != nil {
 		return errorResult(kind, started, fmt.Errorf("memory-consolidate: %w", err))
 	}
@@ -166,10 +172,22 @@ func handleMemoryConsolidate(ctx context.Context, job daemon.Job) daemon.Result 
 	return successResult(kind, started, out)
 }
 
-// buildScope reconstructs a memory.Scope from the wire kind/name pair.
-// Channel and query scopes are flat (no parent) — the caller can chain
-// scopes themselves if they ever need a deeper lineage.
-func buildScope(kind, name string) (memory.Scope, error) {
+// buildScope reconstructs a memory.Scope from the wire kind/name/parent fields.
+// When parentKind and parentName are both non-empty, the parent scope is
+// constructed first and supplied to the child scope so the resulting scope
+// hierarchy mirrors what runtime memory writes produce (e.g. a query scope
+// under a channel scope, yielding path channels/<chan>/queries/<nick>/HOT.md
+// instead of the flat queries/<nick>/HOT.md).
+func buildScope(kind, name, parentKind, parentName string) (memory.Scope, error) {
+	var parent *memory.Scope
+	if parentKind != "" && parentName != "" {
+		p, err := buildScope(parentKind, parentName, "", "")
+		if err != nil {
+			return memory.Scope{}, fmt.Errorf("parent scope: %w", err)
+		}
+		parent = &p
+	}
+
 	switch memory.ScopeKind(kind) {
 	case "", memory.ScopeRoot:
 		return memory.RootScope(), nil
@@ -177,12 +195,12 @@ func buildScope(kind, name string) (memory.Scope, error) {
 		if name == "" {
 			return memory.Scope{}, fmt.Errorf("scope_name is required for channel scope")
 		}
-		return memory.ChannelScope(name, nil), nil
+		return memory.ChannelScope(name, parent), nil
 	case memory.ScopeQuery:
 		if name == "" {
 			return memory.Scope{}, fmt.Errorf("scope_name is required for query scope")
 		}
-		return memory.QueryScope(name, nil), nil
+		return memory.QueryScope(name, parent), nil
 	default:
 		return memory.Scope{}, fmt.Errorf("unknown scope_kind %q", kind)
 	}

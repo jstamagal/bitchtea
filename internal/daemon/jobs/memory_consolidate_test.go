@@ -287,3 +287,48 @@ func TestMemoryConsolidateRequiresSessionDir(t *testing.T) {
 		t.Fatalf("error = %q", res.Error)
 	}
 }
+
+func TestMemoryConsolidateQueryUnderChannelPreservesParent(t *testing.T) {
+	f := newMemoryFixture(t)
+	channelScope := memory.ChannelScope("dev", nil)
+	// Query scope under channel: runtime writes use this hierarchy where
+	// the daily and hot files land under channels/<chan>/queries/<nick>/
+	// NOT flat under queries/<nick>/.
+	scope := memory.QueryScope("tj", &channelScope)
+
+	f.writeDaily(t, scope, "2026-04-30", [][2]string{
+		{"2026-04-30T09:00:00Z", "query under channel"},
+	})
+
+	args, _ := json.Marshal(memoryConsolidateArgs{
+		SessionDir:      f.sessionDir,
+		WorkDir:         f.workDir,
+		ScopeKind:       string(memory.ScopeQuery),
+		ScopeName:       "tj",
+		ScopeParentKind: string(memory.ScopeChannel),
+		ScopeParentName: "dev",
+	})
+	res := Handle(context.Background(), daemon.Job{
+		Kind: KindMemoryConsolidate,
+		Args: args,
+	})
+	if !res.Success {
+		t.Fatalf("query under channel: %+v", res)
+	}
+
+	// The hot path should be nested, not flat.
+	hotPath := memory.HotPath(f.sessionDir, f.workDir, scope)
+	if !strings.Contains(hotPath, filepath.Join("channels", "dev", "queries", "tj")) {
+		t.Fatalf("hot path %q should contain channels/dev/queries/tj", hotPath)
+	}
+	// It must NOT be the flat queries/<nick>/HOT.md.
+	flatHot := memory.HotPath(f.sessionDir, f.workDir, memory.QueryScope("tj", nil))
+	if hotPath == flatHot {
+		t.Fatalf("hot path %q should differ from flat query path %q", hotPath, flatHot)
+	}
+
+	hot, _ := os.ReadFile(hotPath)
+	if !strings.Contains(string(hot), "query under channel") {
+		t.Fatalf("hot missing content:\n%s", hot)
+	}
+}
