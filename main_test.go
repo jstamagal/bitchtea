@@ -6,6 +6,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/jstamagal/bitchtea/internal/agent"
 	"github.com/jstamagal/bitchtea/internal/config"
@@ -174,3 +175,40 @@ func TestApplyStartupConfigCLIModelOverrideClearsProfile(t *testing.T) {
 		t.Fatalf("expected no rc commands, got %v", rcCommands)
 	}
 }
+
+func TestHeadlessFollowUpLoop(t *testing.T) {
+	cfg := config.DefaultConfig()
+	cfg.WorkDir = t.TempDir()
+	cfg.SessionDir = t.TempDir()
+	// Only AutoNextSteps is enabled for this test
+	cfg.AutoNextSteps = true
+
+	streamer := &headlessScriptedStreamer{
+		responses: []string{
+			"Implemented the fix but not yet done.",
+			agentAutoNextDoneToken() + ": fix complete.",
+		},
+	}
+
+	ag := agent.NewAgentWithStreamer(&cfg, streamer)
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+
+	// Give a timeout to ensure no infinite loop
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	if err := runHeadlessLoop(ctx, ag, "do something", &stdout, &stderr); err != nil {
+		t.Fatalf("runHeadlessLoop: %v", err)
+	}
+
+	// Verify exactly 2 turns ran
+	if streamer.calls != 2 {
+		t.Fatalf("expected exactly 2 streamer calls, got %d", streamer.calls)
+	}
+
+	if !strings.Contains(stderr.String(), "[auto] auto-next-steps") {
+		t.Fatalf("expected auto-next-steps follow-up in stderr, got %q", stderr.String())
+	}
+}
+
