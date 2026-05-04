@@ -614,6 +614,96 @@ ag.RestoreMessages(session.FantasyFromEntries(sess.Entries))
 Headless resume does not create a `ui.Model`, does not write session entries,
 does not save focus, and does not save membership.
 
+## Resume Flow Overview
+
+The full startup-resume pipeline flows through 8 hops from CLI flag to
+ready-for-input agent:
+
+```text
+main.go:parseCLIArgs
+  │  --resume [path] or -r [path]            ① CLI flag parsing
+  ▼
+session.Latest(dir)                           ② resolve "latest" → first path from List
+  │  stderr: "no sessions to resume" (exit 1) if none
+  ▼
+session.Load(path)                            ③ JSONL read + parse
+  │  stderr: "failed to load session" (exit 1) on error
+  ▼
+session.FantasyFromEntries(entries)           ④ v1 Msg → clone; v0 → legacyEntryToFantasy
+  │  skips orphan v0 tool entries
+  ▼
+buildStartupModel(cfg, sess, rcCommands)      ⑤ entry point in main.go
+  │
+  ├─ ui.NewModel(cfg)
+  │    ├─ agent.NewAgent(cfg)                  fresh agent, empty history
+  │    ├─ LoadFocusManager(cfg.SessionDir)    ⑥ read .bitchtea_focus.json
+  │    ├─ session.New(cfg.SessionDir)          allocate fresh JSONL path
+  │    └─ ag.SetScope(ircContextToMemoryScope(   initial memory scope
+  │         focus.Active()))
+  │
+  ├─ m.ResumeSession(sess)
+  │    ├─ group entries by Entry.Context       ⑦ "" → DefaultContextKey("#main")
+  │    ├─ FantasyFromEntries per group
+  │    ├─ RestoreMessages(defaultGroup)         force system prompt, reset counters
+  │    ├─ RestoreContextMessages(otherGroups)   per-context history restore
+  │    ├─ SetSavedIdx per group                 session-save watermarks
+  │    └─ rebuild viewport from DisplayEntries  visible replay
+  │
+  └─ ExecuteStartupCommand(rcCommands)         ⑧ apply .bitchtearc /set commands
+```
+
+The `Entry.Context` field (stamped at turn-end persistence from
+`m.turnContext.Label()`) is the routing key that groups entries during
+resume. It carries one of:
+
+```text
+#main             — default channel (via agent.DefaultContextKey)
+#channel          — /join target
+#channel.sub      — subchannel label
+directTarget      — /query target (case-preserved)
+```
+
+At turn-end (see "Turn-End Persistence" below), the UI freezes the active
+context (`m.turnContext`) and stamps every new entry with
+`e.Context = m.turnContext.Label()`. On resume, `ResumeSession` splits
+entries by that label, restores each group into the agent's per-context
+history map (`agent.contextMsgs`), and sets per-context session-save
+watermarks (`agent.contextSavedIdx`).
+
+Focus state is restored independently from `.bitchtea_focus.json` inside
+`NewModel` (step ⑥), which runs **before** `ResumeSession`. The focus
+sidecar holds the ordered list of open contexts and which is active. RC
+commands (`~/.bitchtearc`) run last (step ⑧), after both `NewModel` and
+`ResumeSession`, so `/set` directives can override config values before
+the first turn starts.
+
+The file and function references for each hop:
+
+| Hop | File | Function |
+|-----|------|----------|
+| ① | `main.go:171` | `parseCLIArgs` — parses `--resume`/`-r` |
+| ② | `internal/session/session.go:310` | `Latest` — delegates to `List`, returns first |
+| ③ | `internal/session/session.go:114` | `Load` — `os.ReadFile` + `json.Unmarshal` per line |
+| ④ | `internal/session/session.go:396` | `FantasyFromEntries` — v1 clone, v0 synthesis |
+| ⑤ | `main.go:160` | `buildStartupModel` — wires model + resume + RC |
+| ⑥ | `internal/ui/context.go:189` | `LoadFocusManager` — reads `.bitchtea_focus.json` |
+| ⑦ | `internal/ui/model.go:234` | `ResumeSession` — group + restore + display |
+| ⑧ | `main.go:165-167` | `ExecuteStartupCommand` — applies RC lines |
+
+### Headless path
+
+In headless mode the path is shorter:
+
+```text
+main.go:runHeadless(cfg, sess, prompt)
+  └─ session.FantasyFromEntries(sess.Entries)
+     └─ ag.RestoreMessages(msgs)
+```
+
+Headless resume does not create a `ui.Model`, does not write session
+entries, does not save focus, and does not save membership. Only the
+default (`#main`) context is restored — per-context routing is TUI-only.
+
 ## `Model.ResumeSession`
 
 `ResumeSession` replaces `m.session` and restores agent histories grouped by
