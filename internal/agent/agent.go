@@ -1061,6 +1061,11 @@ func (a *Agent) SetScope(scope MemoryScope) {
 	)
 }
 
+// Scope returns the memory scope currently used by agent memory tools.
+func (a *Agent) Scope() MemoryScope {
+	return a.scope
+}
+
 func scopeLabel(scope MemoryScope) string {
 	switch scope.Kind {
 	case MemoryScopeChannel:

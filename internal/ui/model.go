@@ -134,9 +134,9 @@ type Model struct {
 
 	// Session
 	session         *session.Session
-	lastSavedMsgIdx int              // index into agent.Messages() of last saved entry
-	contextSavedIdx map[string]int   // per-context session-save watermark
-	turnContext     IRCContext        // active context when current/last turn was submitted
+	lastSavedMsgIdx int            // index into agent.Messages() of last saved entry
+	contextSavedIdx map[string]int // per-context session-save watermark
+	turnContext     IRCContext     // active context when current/last turn was submitted
 	transcript      *TranscriptLogger
 
 	// Debug mode - verbose API logging
@@ -905,6 +905,23 @@ func ircContextToMemoryScope(ctx IRCContext) agent.MemoryScope {
 	default:
 		return agent.RootMemoryScope()
 	}
+}
+
+func (m *Model) syncAgentContextIfIdle(ctx IRCContext) {
+	if m.agent == nil {
+		return
+	}
+	if m.streaming {
+		// The active turn owns the agent's current message slice and tool scope.
+		// Keep /join's focus update, then let the next startAgentTurn apply it.
+		return
+	}
+
+	ctxKey := ircContextToKey(ctx)
+	m.agent.InitContext(ctxKey)
+	m.agent.SetContext(ctxKey)
+	m.lastSavedMsgIdx = m.agent.SavedIdx(ctxKey)
+	m.agent.SetScope(ircContextToMemoryScope(ctx))
 }
 
 func (m *Model) sendToAgent(input string) tea.Cmd {

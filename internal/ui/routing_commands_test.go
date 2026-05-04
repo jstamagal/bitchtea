@@ -3,6 +3,8 @@ package ui
 import (
 	"strings"
 	"testing"
+
+	"github.com/jstamagal/bitchtea/internal/agent"
 )
 
 // --- /join ---
@@ -33,6 +35,21 @@ func TestHandleJoinCommand_stripsHash(t *testing.T) {
 	result, _ := handleJoinCommand(m, "/join general", []string{"/join", "general"})
 	if result.focus.ActiveLabel() != "#general" {
 		t.Errorf("focus = %q, want #general", result.focus.ActiveLabel())
+	}
+}
+
+func TestHandleJoinCommand_updatesAgentContextAndScopeWhenIdle(t *testing.T) {
+	m := newTestModel(t)
+
+	result, _ := handleJoinCommand(m, "/join #ch", []string{"/join", "#ch"})
+
+	if result.agent.ContextKey() != "#ch" {
+		t.Fatalf("agent context = %q, want #ch", result.agent.ContextKey())
+	}
+
+	scope := result.agent.Scope()
+	if scope.Kind != agent.MemoryScopeChannel || scope.Name != "ch" {
+		t.Fatalf("agent scope = %#v, want channel ch", scope)
 	}
 }
 

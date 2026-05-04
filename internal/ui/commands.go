@@ -697,6 +697,7 @@ func handleJoinCommand(m Model, _ string, parts []string) (Model, tea.Cmd) {
 	}
 	ctx := Channel(parts[1])
 	m.focus.SetFocus(ctx)
+	m.syncAgentContextIfIdle(ctx)
 	if err := m.focus.Save(m.config.SessionDir); err != nil {
 		m.errMsg(fmt.Sprintf("focus save: %v", err))
 		return m, nil
