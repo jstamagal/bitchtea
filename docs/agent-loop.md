@@ -2392,3 +2392,69 @@ m.agent.SetScope(ircContextToMemoryScope(m.turnContext))
 So `/compact` summarizes the active context history and records its new save
 watermark. Other contexts remain in `contextMsgs` exactly as they were until
 the user switches to them and compacts those histories separately.
+
+## `@file` Token Expansion Details
+
+The `@file` expansion mechanism is implemented in `ExpandFileRefs`
+(`internal/agent/context.go:130`). The Input expansion section above
+(see "Input expansion") covers the basic flow; this section documents the
+edge cases and design decisions.
+
+### Multiple `@`-tokens in one prompt
+
+Each whitespace-delimited word starting with `@` is independently resolved.
+The function uses `strings.Fields` to split the input, processes each token
+in order, and joins the results with spaces. There is no interaction between
+tokens — `look at @main.go and @utils.go` becomes two separate file reads,
+each expanded independently with its own success or error result. If one
+succeeds and the other fails, both the inline content and the error message
+appear in the final prompt.
+
+### Path resolution
+
+- If the `@`-prefixed path is absolute (checked via `filepath.IsAbs`),
+  it is used as-is.
+- If the path is relative, it is joined with `a.config.WorkDir` (the
+  workspace root, set via `--work-dir` or inherited from the terminal's
+  working directory).
+- There is no search-path lookup, no `$PATH`-style resolution, and no
+  upward directory walk (unlike `CLAUDE.md`/`AGENTS.md` discovery). The
+  path resolves against exactly one directory.
+
+### Whitespace normalization
+
+Because the function splits on `strings.Fields` and re-joins with
+`strings.Join(..., " ")`, all whitespace runs are collapsed to single
+spaces. Leading and trailing whitespace is stripped. A message like
+`"fix   @main.go\nplease"` becomes `"fix @main.go (file contents below):\n\n\`\`\`\n...\n\`\`\` please"`.
+This is a property of `strings.Fields`, not specific to file expansion.
+
+### Truncation
+
+Files larger than 30 KB are truncated with the suffix
+`\n... (truncated at 30KB)`. The constant is hardcoded at
+`context.go:145` (`maxSize = 30 * 1024`). There is no configuration knob
+for this limit.
+
+### Error handling
+
+When the file cannot be read (permission denied, not found, is a directory,
+etc.), the token is replaced with:
+
+```text
+@file (file not found: <os error>)
+```
+
+The error message includes the raw `os.ReadFile` error string. The
+expansion does **not** halt on error — other `@`-tokens in the same input
+are still processed, and the non-`@` words are preserved. This means a
+typo like `fix @non-existent.go and @main.go` still loads `main.go` and
+reports the error for `non-existent.go`.
+
+There is no retry, no fuzzy path resolution, and no file-watch fallback.
+The error is a one-shot diagnostic embedded inline in the prompt.
+
+### Source reference
+
+Implementation: `internal/agent/context.go:128-159`
+Tests: `internal/agent/context_test.go:220-250`
