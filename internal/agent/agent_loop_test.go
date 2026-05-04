@@ -659,3 +659,28 @@ func TestSendMessageSanitizesAutonomyDoneTokens(t *testing.T) {
 		t.Fatalf("expected sanitized assistant content, got %q", got)
 	}
 }
+
+func TestSetScopeRootDoesNotDoubleInjectBootstrapMemory(t *testing.T) {
+	workDir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(workDir, "MEMORY.md"), []byte("session notes"), 0644); err != nil {
+		t.Fatalf("write MEMORY.md: %v", err)
+	}
+
+	cfg := config.DefaultConfig()
+	cfg.WorkDir = workDir
+	cfg.SessionDir = t.TempDir()
+
+	agent := NewAgentWithStreamer(&cfg, &fakeStreamer{})
+
+	// Bootstrap should have injected MEMORY.md once. Count the messages now.
+	beforeCount := agent.MessageCount()
+
+	// SetScope(root) should NOT add more messages since the root hot path
+	// was already tracked in injectedPaths at bootstrap.
+	agent.SetScope(RootMemoryScope())
+
+	afterCount := agent.MessageCount()
+	if afterCount != beforeCount {
+		t.Fatalf("SetScope(root) added messages: before=%d after=%d — double-injection not prevented", beforeCount, afterCount)
+	}
+}

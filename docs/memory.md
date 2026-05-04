@@ -790,17 +790,9 @@ Agent.injectedPaths map[string]bool
 If HOT changes on disk later in the same process, `SetScope` will not inject
 the new content again for the same path.
 
-Root scope also has a hot path (`<WorkDir>/MEMORY.md`). Because `SetScope`
-does not skip root, root `MEMORY.md` can be injected at bootstrap and then
-again through `SetScope(root)` as:
-
-```text
-Context memory for root:
-
-<contents of MEMORY.md>
-```
-
-This is a current duplication risk.
+Root scope also has a hot path (`<WorkDir>/MEMORY.md`). Bootstrap now tracks
+the root hot path in `injectedPaths`, so a subsequent `SetScope(root)` call
+skips re-injection — the bootstrap message already covers it.
 
 Important resume gap: `NewModel` calls `SetScope` before `ResumeSession`. If
 that pre-resume scoped injection marks a path and `ResumeSession` then replaces

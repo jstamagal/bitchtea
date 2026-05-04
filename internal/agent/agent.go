@@ -164,6 +164,11 @@ func NewAgentWithStreamer(cfg *config.Config, streamer llm.ChatStreamer) *Agent 
 			newUserMessage("Here is the session memory from previous work:\n\n"+memory),
 			newAssistantMessage("Got it."),
 		)
+		// Track the root hot path so SetScope(root) does not re-inject the
+		// same content as "Context memory for root" — the bootstrap message
+		// already covers it.
+		rootHotPath := ScopedHotMemoryPath(cfg.SessionDir, cfg.WorkDir, RootMemoryScope())
+		a.injectedPaths[rootHotPath] = true
 	}
 
 	// Persona anchor: the last thing the model sees before the user's first
@@ -1171,6 +1176,14 @@ func (a *Agent) Reset() {
 	a.pushBootstrapToClient()
 
 	a.injectedPaths = make(map[string]bool)
+
+	// Track the root hot path so SetScope(root) does not re-inject the
+	// same content as "Context memory for root" — the bootstrap message
+	// already covers it.
+	if memory != "" {
+		rootHotPath := ScopedHotMemoryPath(a.config.SessionDir, a.config.WorkDir, RootMemoryScope())
+		a.injectedPaths[rootHotPath] = true
+	}
 	a.TurnCount = 0
 	a.ToolCalls = make(map[string]int)
 	a.CostTracker = llm.NewCostTracker()
