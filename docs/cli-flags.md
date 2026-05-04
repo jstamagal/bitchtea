@@ -16,8 +16,8 @@ bitchtea daemon <subcommand>
 | `--model` | `-m` | `<name>` | Specify the LLM model to use (e.g., `gpt-4o`, `claude-3-5-sonnet-20240620`). Defaults to `gpt-4o`. |
 | `--profile` | `-p` | `<name>` | Load a saved or built-in profile. Built-in profiles include: `ollama`, `openrouter`, `zai-openai`, `zai-anthropic`. |
 | `--resume` | `-r` | `[path]` | Resume a previous session. If `path` is omitted or set to `latest`, it resumes the most recent session from the session directory. |
-| `--headless` | `-H` | (None) | Run the application once without the Terminal User Interface (TUI). Requires a prompt via `--prompt` or piped stdin. |
-| `--prompt` | (None) | `<text>` | The prompt to send when running in `--headless` mode. |
+| `--headless` | `-H` | (None) | Run the application once without the Terminal User Interface (TUI). Requires a prompt via `--prompt` or piped stdin. See [user-guide.md](user-guide.md) for output stream details, follow-up loop behavior, and exit codes. |
+| `--prompt` | (None) | `<text>` | The prompt to send when running in `--headless` mode. When combined with piped stdin, both are concatenated with a newline. |
 | `--auto-next-steps` | (None) | (None) | Automatically inject "next step" prompts into the conversation after an agent turn. |
 | `--auto-next-idea` | (None) | (None) | Automatically generate and display improvement ideas after an agent turn. |
 | `--help` | `-h` | (None) | Display the help message and exit. |
