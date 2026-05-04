@@ -121,6 +121,25 @@ ladders win first.
 MP3 status strings that contain `"failed"` or start with `"No MP3s"` are
 rendered as error messages; other MP3 statuses are rendered as system messages.
 
+### Model picker overlay precedence
+
+The `/models` picker is the highest-priority key consumer while open. The
+`Update(tea.KeyMsg)` path checks `m.picker != nil` before history, textarea,
+Esc, Ctrl+C, slash command, and MP3 handling, then routes the key to
+`handlePickerKey` and returns immediately.
+
+Practical consequences:
+
+- Esc and Ctrl+C close the picker with `"Picker cancelled."`; they do not reach
+  the Esc or Ctrl+C cancellation ladders while the picker is open.
+- Up, Down, PgUp, and PgDown move the picker cursor or page window; they do
+  not recall input history or scroll the chat viewport.
+- Backspace, printable runes, and Space edit the picker filter; they do not
+  edit the textarea.
+- Enter selects the highlighted model through the picker callback; it does not
+  submit the textarea or run a slash command.
+- Unhandled keys are dropped silently until the picker closes.
+
 ## 6. Suspend/resume Lifecycle
 
 Ctrl+Z reaches the model as `tea.SuspendMsg`. The handler is deliberately

@@ -1131,6 +1131,109 @@ Picker: no selection (filter excludes everything).
 
 `pickerVisibleRows` is `12`.
 
+## Model Picker Overlay
+
+The `/models` command is the user-facing entry point for the model picker
+overlay. The call chain is:
+
+```text
+/models
+  -> handleModelsCommand
+  -> loadModelCatalog()
+  -> modelsForService(env.Providers, config.Service)
+  -> newModelPicker(title, ids)
+  -> openPicker(picker, applyModelSelection)
+```
+
+`handleModelsCommand` joins catalog data on `config.Service`, not on the
+transport provider. It trims the active service, calls the package-level
+`loadModelCatalog` seam, extracts model IDs with `modelsForService`, and opens
+the picker with this title:
+
+```text
+models for <service> (<n> total) — type to filter
+```
+
+Failure stays in the command handler and never opens the overlay. Exact error
+strings:
+
+```text
+models: no active service — set one with /set service <name> or load a profile (e.g. /profile openrouter).
+models: catalog is empty — try BITCHTEA_CATWALK_AUTOUPDATE=true with BITCHTEA_CATWALK_URL set, or wait for the embedded snapshot.
+models: no catalog data for service "<service>" — try BITCHTEA_CATWALK_AUTOUPDATE=true or check /profile.
+```
+
+When a service has no catalog match and provider IDs are available, the last
+error gets a second line:
+
+```text
+  available services: <service>, <service>
+```
+
+`pickerOnSelect` is installed before the overlay is rendered. `openPicker`
+stores both `m.picker` and `m.pickerOnSelect`, appends the initial
+`modelPicker.view(pickerVisibleRows)` output as a `MsgRaw` scrollback message,
+records `pickerMsgIdx`, and refreshes the viewport. The callback receives a
+`*Model` because Bubble Tea passes future `Update` calls a fresh value copy;
+the callback must mutate the live receiver from the keypress that selects the
+model.
+
+The `/models` callback is `applyModelSelection`. On Enter,
+`handlePickerKey` reads `m.picker.selected()`, copies `m.pickerOnSelect`,
+calls `closePicker`, and then invokes the callback when the selection is not
+empty. `applyModelSelection` mirrors `/set model` behavior:
+
+```go
+m.agent.SetModel(choice)
+clearLoadedProfile(m)
+m.sysMsg(fmt.Sprintf("*** Model switched to: %s", choice))
+```
+
+That means selection updates `config.Model` through `Agent.SetModel`, invalidates
+the client cache through the agent path, clears the loaded profile tag, and
+emits:
+
+```text
+*** Model switched to: <choice>
+```
+
+While `m.picker != nil`, key handling short-circuits before normal input:
+
+```text
+Update(tea.KeyMsg)
+  -> handlePickerKey
+  -> return m, nil
+```
+
+The picker therefore overrides textarea editing, slash command submission,
+history recall, the Esc ladder, the Ctrl+C ladder, and MP3 keys until it is
+closed. Unhandled keys are dropped silently; they do not leak into the
+textarea.
+
+Picker keys:
+
+| Key | Handler behavior |
+| --- | --- |
+| Enter | Selects the highlighted model. If the filter excludes everything, closes the picker and emits `Picker: no selection (filter excludes everything).` |
+| Esc or Ctrl+C | Closes without selection and emits `Picker cancelled.` |
+| Up / Down | Calls `moveCursor(-1)` or `moveCursor(1)` and rerenders the same raw message. |
+| PgUp / PgDown | Moves by `pickerVisibleRows` rows and rerenders. |
+| Backspace | Removes one rune from `query`, resets cursor to 0, refilters, and rerenders. |
+| Printable runes and Space | Appends literal text to `query`, resets cursor to 0, refilters, and rerenders. |
+
+Filtering is substring-based and case-insensitive in `refilter`; it trims the
+query before matching. There is no fuzzy scorer, no sorting inside the picker,
+and no wraparound cursor movement. Ordering is determined before construction:
+`modelsForService` keeps the catalog provider order, floats
+`DefaultLargeModelID` to the front when present, skips empty model IDs, and
+dedupes IDs with a `seen` map.
+
+Rendering is a windowed scrollback block, not an overlay pane. `view(maxRows)`
+floors `maxRows` at 5, renders `filter> <query>`, centers the visible window
+around the cursor when possible, marks the highlighted row with `> `, and adds
+`...` when more rows exist below the visible window. The active UI uses
+`pickerVisibleRows = 12`.
+
 ## `internal/ui/clipboard.go`
 
 The clipboard path is seam-driven so tests can replace OS-specific behavior.
