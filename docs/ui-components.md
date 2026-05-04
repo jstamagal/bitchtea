@@ -2477,7 +2477,8 @@ func (m Model) showSplash() tea.Cmd {
 }
 ```
 
-When `Update()` receives `splashMsg` (line 407), it emits four things in order:
+When `Update()` receives `splashMsg` (line 407), it emits the following in
+order:
 
 1. `SplashArt()` — random ANSI art block (`MsgRaw`)
 2. `SplashTagline` — the `« bitchtea » — putting the BITCH back...` tagline
@@ -2490,6 +2491,15 @@ When `Update()` receives `splashMsg` (line 407), it emits four things in order:
 8. System prompt, if non-empty (`MsgSystem`)
 
 Then `refreshViewport()` scrolls to the bottom.
+
+Important details:
+
+- the splash is **TUI-only** -- `runHeadless()` (`main.go:245`) starts the agent
+  loop directly without ever touching the Bubble Tea model, so no splash is
+  emitted in headless mode
+- the ANSI art blocks are fixed-width and do **not** adapt to terminal width
+- the transcript logger strips ANSI codes from `MsgRaw` messages, so the session
+  log gets plain text only
 
 ### `SplashTagline`
 
