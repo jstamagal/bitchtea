@@ -1,31 +1,114 @@
-# Memory, Scopes, Retrieval, and Storage
+# Memory Scopes, Retrieval, Append Files, and Storage
 
-This document is the implementation truth for bitchtea memory. It covers the code paths that create, read, search, inject, compact, and consolidate memory. It is intentionally about the actual behavior in the repository, not the design that the IRC metaphor might imply.
+This document is the source of truth for memory in this checkout. It covers
+the `internal/memory` store, agent wrappers, tool behavior, UI display,
+LLM-facing prompts, compaction flushes, daemon consolidation, and known gaps.
 
-Memory has two storage families:
+Important correction: older docs in this tree still say `write_memory` is not
+implemented. That is stale. `write_memory` is live in the tool registry and has
+a typed fantasy wrapper.
 
-- Root hot memory: `MEMORY.md` in the active worktree.
-- Scoped memory: `HOT.md` and dated daily markdown files under the session data root, partitioned by worktree and IRC-style context.
+## Files On Disk
 
-The agent now has per-context LLM histories in `Agent.contextMsgs`. Memory scope is a separate but synchronized routing layer: at turn start the UI switches the active transcript context, derives the memory scope from that same IRC context, and points the tool registry at that scope. Session JSONL stores context labels, not memory paths; memory storage is re-derived from the active IRC context and the worktree/session directories.
+The legacy root hot-memory file is:
 
-## Source Map
+```text
+<WorkDir>/MEMORY.md
+```
 
-The relevant code is split across these packages:
+The scoped memory base directory is derived from `SessionDir`, not from
+`WorkDir` directly:
 
-- `internal/memory/memory.go`: scope model, paths, file append helpers, lexical search, rendered search output.
-- `internal/agent/context.go`: exported agent-facing wrappers around the memory package, plus context-file discovery.
-- `internal/agent/agent.go`: boot-time root memory injection, scoped hot-memory injection, compaction-time daily memory extraction.
-- `internal/tools/tools.go`: `search_memory` and `write_memory` tool definitions and execution.
-- `internal/llm/typed_search_memory.go`: fantasy typed wrapper for `search_memory`.
-- `internal/llm/typed_write_memory.go`: fantasy typed wrapper for `write_memory`.
-- `internal/ui/model.go`: active IRC context to memory scope mapping.
-- `internal/ui/commands.go`: `/memory` command output.
-- `internal/daemon/jobs/memory_consolidate.go`: daemon job that folds daily archive entries into hot memory.
+```text
+memoryBaseDir = filepath.Join(filepath.Dir(SessionDir), "memory", scopeName(WorkDir))
+```
+
+With default config:
+
+```text
+SessionDir = ~/.bitchtea/sessions
+memoryBaseDir = ~/.bitchtea/memory/<workspace-scope-name>
+```
+
+`scopeName(workDir)` is:
+
+```text
+clean = filepath.Clean(workDir)
+base = lowercase(filepath.Base(clean))
+base = replace every [^a-z0-9]+ with "-"
+base = trim leading/trailing "-"
+if base == "" or base == ".":
+    base = "root"
+hash = FNV-1a 32-bit of clean
+scopeName = fmt.Sprintf("%s-%08x", base, hash)
+```
+
+The hash uses the cleaned path bytes, preserving their case. The display base
+is lowercased, but the hash is path-sensitive.
+
+Root scope paths:
+
+```text
+hot:   <WorkDir>/MEMORY.md
+daily: <memoryBaseDir>/<YYYY-MM-DD>.md
+```
+
+Channel scope paths:
+
+```text
+hot:   <memoryBaseDir>/contexts/channels/<channel>/HOT.md
+daily: <memoryBaseDir>/contexts/channels/<channel>/daily/<YYYY-MM-DD>.md
+```
+
+Query scope paths:
+
+```text
+hot:   <memoryBaseDir>/contexts/queries/<query>/HOT.md
+daily: <memoryBaseDir>/contexts/queries/<query>/daily/<YYYY-MM-DD>.md
+```
+
+Nested scopes include every ancestor after root:
+
+```text
+<memoryBaseDir>/contexts/channels/<channel>/queries/<query>/HOT.md
+<memoryBaseDir>/contexts/channels/<channel>/queries/<query>/daily/<YYYY-MM-DD>.md
+```
+
+Scope path segments are sanitized with:
+
+```text
+name = lowercase(strings.TrimSpace(name))
+name = replace every [^a-z0-9]+ with "-"
+name = trim leading/trailing "-"
+if name == "":
+    name = "unnamed"
+```
+
+Examples:
+
+```text
+"#Dev" -> "dev"
+"coding buddy" -> "coding-buddy"
+"!!!" -> "unnamed"
+```
+
+Startup runs `config.MigrateDataPaths()` before normal config resolution. For
+memory, it moves:
+
+```text
+~/.local/share/bitchtea/memory -> ~/.bitchtea/memory
+```
+
+only when the old path exists and the new path does not. Migration errors are
+non-fatal and print to stderr as:
+
+```text
+bitchtea: data migration warning: <error>
+```
 
 ## Scope Model
 
-`internal/memory/memory.go` defines:
+The memory package owns this type:
 
 ```go
 type ScopeKind string
@@ -43,300 +126,439 @@ type Scope struct {
 }
 ```
 
-The constructors are pure value builders:
+Constructors:
 
-- `RootScope()` returns `Scope{Kind: ScopeRoot}`.
-- `ChannelScope(name, parent)` returns `Scope{Kind: ScopeChannel, Name: name, Parent: parent}`.
-- `QueryScope(name, parent)` returns `Scope{Kind: ScopeQuery, Name: name, Parent: parent}`.
-
-An empty `Scope{}` is treated as root by path and lineage helpers. This matters because `tools.NewRegistry` does not explicitly initialize `Registry.Scope`; the zero value still searches and writes root memory.
-
-### UI Scope Mapping
-
-`ircContextToMemoryScope` in `internal/ui/model.go` maps the active UI context into memory scope:
-
-- Channel context becomes `ChannelMemoryScope(ctx.Channel, nil)`.
-- Subchannel context becomes `ChannelMemoryScope(ctx.Sub, &parentChannel)`.
-- Direct/query context becomes `QueryMemoryScope(ctx.Target, nil)`.
-- Any other context becomes `RootMemoryScope()`.
-
-The parent for a normal channel or direct query is usually nil. `Scope.lineage()` still appends root if no explicit root parent is present, so channel and query searches inherit root memory even when the UI-created scope has no parent pointer.
-
-This mapping is related to, but distinct from, `ircContextToKey`, which maps the same IRC context to the per-context transcript key used by `Agent.contextMsgs` and session `Entry.Context`. The transcript key is a label such as `#main`, `#ops.build`, or `buddy`; the memory scope is a structured `memory.Scope` that later resolves to `MEMORY.md`, scoped `HOT.md`, and scoped daily archive paths.
-
-### Scope Lineage
-
-`Scope.lineage()` returns scopes in current-to-root order. For a nested query under a channel, the order is:
-
-```text
-query -> channel -> root
+```go
+RootScope() Scope
+ChannelScope(name string, parent *Scope) Scope
+QueryScope(name string, parent *Scope) Scope
 ```
 
-This order is search order. Child scopes do not leak upward. A root search only sees root memory; it does not enumerate every channel or query.
+The constructors do not sanitize or normalize `Name`. Sanitization happens
+when a path is built. The UI usually passes normalized channel names, but
+`write_memory` overrides can pass names like `#dev`; the path layer normalizes
+that to `dev`.
 
-### Scoped Path Segments
+Root scope is also represented by a zero-value scope:
 
-`Scope.relativePath()` converts lineage into a filesystem path from root outward, skipping root:
-
-- Channel segment: `channels/<sanitized-name>`
-- Query segment: `queries/<sanitized-name>`
-
-`sanitizeSegment` lowercases, trims, replaces one or more non-`[a-z0-9]` bytes with `-`, trims surrounding `-`, and returns `unnamed` if the result is empty.
-
-Examples:
-
-```text
-ChannelScope("#Dev", nil)             -> channels/dev
-QueryScope("Coding Buddy", nil)       -> queries/coding-buddy
-QueryScope("Coding Buddy", &channel)  -> channels/dev/queries/coding-buddy
+```go
+Scope{}
 ```
 
-## Worktree Storage Root
+`HotPath` and `DailyPathForScope` treat `Kind == ""` as root.
 
-Scoped memory is grouped by worktree. `memoryBaseDir(sessionDir, workDir)` returns:
+`Scope.lineage()` returns the current scope first, then parents outward. If no
+root parent appears, it appends root at the end.
 
-```text
-filepath.Join(filepath.Dir(sessionDir), "memory", scopeName(workDir))
-```
-
-With the default session directory `~/.bitchtea/sessions`, scoped memory lives under:
+For a query under a channel:
 
 ```text
-~/.bitchtea/memory/<scopeName(workDir)>/
+Query("buddy", parent=Channel("dev", parent=Root))
 ```
 
-`scopeName(workDir)` does this:
-
-1. `filepath.Clean(workDir)`.
-2. Take the base directory name.
-3. Lowercase it.
-4. Replace non-alphanumeric runs with `-`.
-5. Trim surrounding `-`.
-6. Use `root` if the base name is empty or `.`.
-7. Append an 8-hex-digit FNV-1a 32-bit hash of the cleaned full path.
-
-The final format is:
+the lineage searched is:
 
 ```text
-<sanitized-worktree-basename>-<8-hex-fnv32a>
+query buddy
+channel dev
+root
 ```
 
-The hash prevents two repos with the same basename from sharing scoped memory.
-
-## Hot Memory Paths
-
-`HotPath(sessionDir, workDir, scope)` returns the writable hot-memory path for a scope.
-
-Root and empty scope keep the legacy repository-local path:
+For a flat daemon-built channel scope with no parent:
 
 ```text
-<workDir>/MEMORY.md
+Channel("dev", nil)
 ```
 
-Non-root scopes use:
+the lineage searched is:
 
 ```text
-<dirname(sessionDir)>/memory/<scopeName(workDir)>/contexts/<scope.relativePath()>/HOT.md
+channel dev
+root
 ```
 
-Examples:
+## UI Context To Memory Scope
+
+`internal/ui/model.go` maps IRC focus to memory scope with
+`ircContextToMemoryScope`.
 
 ```text
-root:
-  /repo/MEMORY.md
+KindChannel:
+    agent.ChannelMemoryScope(ctx.Channel, nil)
 
-channel "#dev":
-  ~/.bitchtea/memory/repo-<hash>/contexts/channels/dev/HOT.md
+KindSubchannel:
+    parent = agent.ChannelMemoryScope(ctx.Channel, nil)
+    agent.ChannelMemoryScope(ctx.Sub, &parent)
 
-query "alice":
-  ~/.bitchtea/memory/repo-<hash>/contexts/queries/alice/HOT.md
+KindDirect:
+    agent.QueryMemoryScope(ctx.Target, nil)
 
-query "alice" under channel "#dev":
-  ~/.bitchtea/memory/repo-<hash>/contexts/channels/dev/queries/alice/HOT.md
+default:
+    agent.RootMemoryScope()
 ```
 
-## Daily Memory Paths
-
-`DailyPath(sessionDir, workDir, when)` is root-only shorthand for `DailyPathForScope(..., RootScope(), when)`.
-
-Root daily memory uses:
+Important subchannel behavior: subchannels are stored as a channel scope whose
+name is the sub-name, with the parent channel as a parent scope. A UI context
+`#dev.build` therefore stores scoped memory under:
 
 ```text
-<dirname(sessionDir)>/memory/<scopeName(workDir)>/<YYYY-MM-DD>.md
+contexts/channels/dev/channels/build/
 ```
 
-Scoped daily memory uses:
+not under a `subchannels` directory.
+
+Direct contexts are query scopes. A UI `/query alice` context stores under:
 
 ```text
-<dirname(sessionDir)>/memory/<scopeName(workDir)>/contexts/<scope.relativePath()>/daily/<YYYY-MM-DD>.md
+contexts/queries/alice/
 ```
 
-The date comes from `when.Format("2006-01-02")`. The timestamp written inside entries uses RFC3339.
+The agent calls `SetScope` at the start of every turn after freezing the turn
+context:
 
-## Raw File Operations
+```go
+m.turnContext = m.focus.Active()
+ctxKey := ircContextToKey(m.turnContext)
+m.agent.InitContext(ctxKey)
+m.agent.SetContext(ctxKey)
+m.agent.SetScope(ircContextToMemoryScope(m.turnContext))
+```
 
-### `Load(workDir)`
+`Agent.SetScope` also calls:
+
+```go
+a.tools.SetScope(scope)
+```
+
+so the same scope becomes the default scope for `search_memory` and
+`write_memory`.
+
+## Storage Functions
+
+### `Load`
+
+```go
+Load(workDir string) string
+```
 
 Reads:
 
 ```text
-<workDir>/MEMORY.md
+<WorkDir>/MEMORY.md
 ```
 
-Behavior:
+If `os.ReadFile` returns any error, including permission errors, it returns
+the empty string. Errors are swallowed.
 
-- Returns the full file as a string if `os.ReadFile` succeeds.
-- Returns `""` for every read error, not just missing-file errors.
-- Does not create the file.
-- Does not distinguish permission errors, malformed content, or absence.
+### `Save`
 
-### `Save(workDir, content)`
-
-Writes:
-
-```text
-<workDir>/MEMORY.md
+```go
+Save(workDir string, content string) error
 ```
 
-Behavior:
-
-- Calls `os.WriteFile(path, []byte(content), 0644)`.
-- Replaces the whole file.
-- Does not create `workDir`.
-
-### `LoadScoped(sessionDir, workDir, scope)`
-
-Reads `HotPath(sessionDir, workDir, scope)`.
-
-Behavior:
-
-- Returns file contents on success.
-- Returns `""` on any read error.
-- Root scope reads `MEMORY.md`.
-- Non-root scope reads scoped `HOT.md`.
-
-### `SaveScoped(sessionDir, workDir, scope, content)`
-
-Writes `HotPath(sessionDir, workDir, scope)`.
-
-Behavior:
-
-- Creates the parent directory with mode `0755`.
-- Replaces the whole file with mode `0644`.
-- Root scope writes `MEMORY.md`, after creating `workDir` if needed through `MkdirAll(filepath.Dir(path))`.
-
-### `AppendHot(sessionDir, workDir, scope, when, title, content)`
-
-Appends one markdown entry to `HotPath`.
-
-Behavior:
-
-- `strings.TrimSpace(content)` is applied first.
-- Empty trimmed content is a no-op and returns nil.
-- Parent directories are created with mode `0755`.
-- File is opened with `os.O_CREATE|os.O_APPEND|os.O_WRONLY`, mode `0644`.
-- A kernel `flock(LOCK_EX)` is held around the write.
-- The lock is released with `flock(LOCK_UN)` in a deferred call.
-- There is no `fsync`.
-
-The exact entry format is:
+Writes `content` directly to:
 
 ```text
-## <heading>
+<WorkDir>/MEMORY.md
+```
+
+with mode `0644`.
+
+It does not create `WorkDir`. It returns the raw `os.WriteFile` error.
+
+No live UI or tool path calls `Save` for normal memory writes today.
+`write_memory` uses append helpers instead.
+
+### `HotPath`
+
+```go
+HotPath(sessionDir, workDir string, scope Scope) string
+```
+
+For root or zero scope:
+
+```text
+<WorkDir>/MEMORY.md
+```
+
+For non-root:
+
+```text
+<memoryBaseDir>/contexts/<relativePath>/HOT.md
+```
+
+### `LoadScoped`
+
+```go
+LoadScoped(sessionDir, workDir string, scope Scope) string
+```
+
+Reads `HotPath(sessionDir, workDir, scope)`. If any read error occurs, it
+returns the empty string. Errors are swallowed.
+
+For root scope, this is equivalent to loading `<WorkDir>/MEMORY.md`.
+
+### `SaveScoped`
+
+```go
+SaveScoped(sessionDir, workDir string, scope Scope, content string) error
+```
+
+Creates the parent directory for `HotPath` with mode `0755`, then writes
+`content` with mode `0644`.
+
+Error strings:
+
+```text
+create scoped hot memory dir: <error>
+```
+
+The final write returns the raw `os.WriteFile` error.
+
+It overwrites the file. It does not use `flock`.
+
+No live UI or tool path calls `SaveScoped` for normal memory writes today.
+Scoped writes from the LLM use `AppendHot` or `AppendDailyForScope`.
+
+### `AppendHot`
+
+```go
+AppendHot(sessionDir, workDir string, scope Scope, when time.Time, title, content string) error
+```
+
+First:
+
+```text
+content = strings.TrimSpace(content)
+```
+
+If content is empty, it returns nil and writes nothing.
+
+It creates the parent directory of `HotPath` with mode `0755`, opens the hot
+file with:
+
+```text
+O_CREATE | O_APPEND | O_WRONLY, mode 0644
+```
+
+takes an exclusive `flock`, writes one markdown block, and unlocks on close.
+
+Error strings:
+
+```text
+create hot memory dir: <error>
+open hot memory file: <error>
+flock hot memory: <error>
+append hot memory: <error>
+```
+
+If `title` trims to empty, the heading is the timestamp:
+
+```text
+## <RFC3339 timestamp>
 
 <trimmed content>
 
 ```
 
-If `title` is blank after trimming:
+If `title` is present, the heading is:
 
 ```text
-<heading> = <when.Format(time.RFC3339)>
-```
-
-If `title` is nonblank:
-
-```text
-<heading> = <trimmed title> (<when.Format(time.RFC3339)>)
-```
-
-### `AppendDailyForScope(sessionDir, workDir, scope, when, content)`
-
-Appends one durable daily checkpoint to `DailyPathForScope`.
-
-Behavior:
-
-- `strings.TrimSpace(content)` is applied first.
-- Empty trimmed content is a no-op and returns nil.
-- Parent directories are created with mode `0755`.
-- File is opened with `os.O_CREATE|os.O_APPEND|os.O_WRONLY`, mode `0644`.
-- A kernel `flock(LOCK_EX)` is held around the write.
-- There is no `fsync`.
-
-The exact entry format is:
-
-```text
-## <when.Format(time.RFC3339)> pre-compaction flush
+## <trimmed title> (<RFC3339 timestamp>)
 
 <trimmed content>
 
 ```
 
-`AppendDaily(sessionDir, workDir, when, content)` calls this with root scope.
+The timestamp uses `when.Format(time.RFC3339)`.
 
-## Search
+### `DailyPath`
 
-`Search(sessionDir, workDir, query, limit)` calls `SearchInScope` with root scope.
+```go
+DailyPath(sessionDir, workDir string, when time.Time) string
+```
 
-`SearchInScope(sessionDir, workDir, scope, query, limit)` is lexical markdown search. There is no embedding index, no semantic ranker, and no per-entry scoring.
+Equivalent to:
 
-### Query Validation
+```go
+DailyPathForScope(sessionDir, workDir, RootScope(), when)
+```
 
-`query` is trimmed first.
+Root daily path:
 
-If the trimmed query is empty, the function returns:
+```text
+<memoryBaseDir>/<YYYY-MM-DD>.md
+```
+
+### `DailyPathForScope`
+
+```go
+DailyPathForScope(sessionDir, workDir string, scope Scope, when time.Time) string
+```
+
+For root:
+
+```text
+<memoryBaseDir>/<YYYY-MM-DD>.md
+```
+
+For scoped memory:
+
+```text
+<memoryBaseDir>/contexts/<relativePath>/daily/<YYYY-MM-DD>.md
+```
+
+The date uses:
+
+```text
+when.Format("2006-01-02")
+```
+
+### `AppendDaily`
+
+```go
+AppendDaily(sessionDir, workDir string, when time.Time, content string) error
+```
+
+Equivalent to:
+
+```go
+AppendDailyForScope(sessionDir, workDir, RootScope(), when, content)
+```
+
+### `AppendDailyForScope`
+
+```go
+AppendDailyForScope(sessionDir, workDir string, scope Scope, when time.Time, content string) error
+```
+
+Trims content. If empty, returns nil and writes nothing.
+
+Creates the parent daily directory with mode `0755`, opens the daily file with:
+
+```text
+O_CREATE | O_APPEND | O_WRONLY, mode 0644
+```
+
+takes an exclusive `flock`, writes one markdown block, and unlocks on close.
+
+Error strings:
+
+```text
+create daily memory dir: <error>
+open daily memory file: <error>
+flock daily memory: <error>
+append daily memory: <error>
+```
+
+Entry format:
+
+```text
+## <RFC3339 timestamp> pre-compaction flush
+
+<trimmed content>
+
+```
+
+Despite the function name being generic, the heading text is always:
+
+```text
+pre-compaction flush
+```
+
+This is true for `write_memory` daily mode as well as compaction.
+
+## Search Mechanics
+
+### `Search`
+
+```go
+Search(sessionDir, workDir, query string, limit int) ([]SearchResult, error)
+```
+
+Equivalent to:
+
+```go
+SearchInScope(sessionDir, workDir, RootScope(), query, limit)
+```
+
+### `SearchInScope`
+
+```go
+SearchInScope(sessionDir, workDir string, scope Scope, query string, limit int) ([]SearchResult, error)
+```
+
+First:
+
+```text
+query = strings.TrimSpace(query)
+```
+
+If the query is empty, error:
 
 ```text
 query is required
 ```
 
-If `limit <= 0`, limit becomes `5`.
-
-`queryTerms(query)` lowercases the query and splits with `strings.Fields`. Since `SearchInScope` has already rejected an empty trimmed query, normal input returns one or more whitespace-separated terms.
-
-### Candidate Path Collection
-
-`candidatePaths(sessionDir, workDir, scope)` walks `scope.lineage()` in current-to-root order. For each ancestor, it appends:
-
-1. That ancestor's `HotPath`.
-2. Every `.md` file in that ancestor's daily directory, sorted by reverse path string.
-
-For date-named daily files, reverse path string means newest `YYYY-MM-DD.md` first.
-
-Missing daily directories are ignored. A non-missing directory read error aborts search with:
+If `limit <= 0`, the limit becomes:
 
 ```text
-read daily memory dir: <underlying error>
+5
 ```
 
-Missing candidate files are skipped. A non-missing file read error aborts search with:
+The search terms are:
 
 ```text
-read memory file <path>: <underlying error>
+strings.Fields(strings.ToLower(query))
 ```
 
-### Matching
+If that somehow produces no fields, it uses the lowercased trimmed query as a
+single term.
 
-Each candidate file is read as a whole string. The whole file must contain every query term, case-insensitively. If one term is absent, the entire file is skipped.
+Candidate path order is:
 
-If all terms are present, the match index is:
+```text
+for each scope in current-to-root lineage:
+    append scope HOT.md
+    append every .md file in that scope's daily dir, newest filename first
+```
 
-1. The first index of the full lowercased query string in the lowercased file, or
-2. The first index of the first query term that appears.
+Daily file listing skips directories and non-`.md` files. Daily files are
+sorted reverse lexicographically, so normal `YYYY-MM-DD.md` files are searched
+newest first.
 
-Only one `SearchResult` is produced per candidate file. If a file has ten matching sections, the search still returns one hit for that file.
+If a daily directory does not exist, it is skipped. Any other `os.ReadDir`
+error returns:
 
-The result contains:
+```text
+read daily memory dir: <error>
+```
+
+For each candidate file:
+
+1. Read the file.
+2. If the file is missing, skip it.
+3. If any other read error occurs, return:
+
+```text
+read memory file <path>: <error>
+```
+
+4. Lowercase the whole file.
+5. Require every term to appear somewhere in the file.
+6. Prefer an exact lowercased full-query match for the snippet anchor.
+7. If no full-query match exists, use the first term that appears.
+8. Return one `SearchResult` for the file, not one per match.
+9. Stop when `len(results) >= limit`.
+
+There is no ranking beyond path order. There is no stemming, fuzzy matching,
+semantic retrieval, embedding index, or per-heading scoring.
+
+Child scopes do not leak upward. A root search does not search channel/query
+memory. A query search can see its parent channel and root if the query scope
+has those parents.
+
+### `SearchResult`
 
 ```go
 type SearchResult struct {
@@ -346,40 +568,70 @@ type SearchResult struct {
 }
 ```
 
-`Source` is produced by `formatSource`:
+`Source` is:
 
-- Root `MEMORY.md` is rendered exactly as `MEMORY.md`.
-- Any other path is rendered relative to `filepath.Dir(sessionDir)` when possible.
-- If relative path calculation fails, the absolute path is used.
+```text
+MEMORY.md
+```
 
-`Heading` is produced by `nearestMarkdownHeading(content, matchIdx)`:
+for root hot memory exactly at `<WorkDir>/MEMORY.md`.
 
-- Splits content on `\n`.
-- Tracks the last line before the match whose text starts with `#`.
-- Removes leading `#` characters and trims whitespace.
-- Returns `""` if no previous heading exists.
+Otherwise, it is relative to `filepath.Dir(SessionDir)` when possible. With
+default paths, scoped sources look like:
 
-`Snippet` is produced by `extractSnippet(content, matchIdx, 260)`:
+```text
+memory/<workspace-scope-name>/contexts/channels/dev/HOT.md
+memory/<workspace-scope-name>/contexts/channels/dev/daily/2026-05-04.md
+```
 
-- Uses runes, not bytes, for snippet length.
-- If content is at most 260 runes, returns the whole trimmed content.
-- Otherwise returns a 260-rune window centered around the match where possible.
-- Prefixes `... ` if the window did not start at the file beginning.
-- Suffixes ` ...` if the window did not reach the file end.
+`Heading` is the nearest preceding markdown heading. A heading is any line
+starting with:
 
-Search stops when `len(results) >= limit`.
+```text
+#
+```
 
-### Rendered Search Output
+The heading text is:
 
-`RenderSearchResults(query, results)` is the exact string surface used by the `search_memory` tool.
+```text
+strings.TrimSpace(strings.TrimLeft(line, "#"))
+```
 
-No results:
+So:
+
+```text
+### decision
+```
+
+becomes:
+
+```text
+decision
+```
+
+`Snippet` is centered around the matched byte index, converted through rune
+counting, with a default max length of 260 runes. It is trimmed. If the snippet
+starts after the beginning of the file, it is prefixed with:
+
+```text
+... 
+```
+
+If it ends before the end of the file, it is suffixed with:
+
+```text
+ ...
+```
+
+### `RenderSearchResults`
+
+No hits:
 
 ```text
 No memory matches found for query "<query>".
 ```
 
-With results:
+Hits:
 
 ```text
 Memory matches for "<query>":
@@ -393,371 +645,616 @@ Heading: <heading>
 <snippet>
 ```
 
-The `Heading:` line is omitted for a result with an empty heading. The final returned string has trailing newlines trimmed.
+If `Heading` is empty, the `Heading:` line is omitted.
 
-## LLM Tool Surface
+The renderer trims trailing right-side whitespace from the final output.
 
-The memory tools are defined in `internal/tools/tools.go` and exposed through the provider tool schema built by `internal/llm`.
+## Agent Wrappers
 
-### `search_memory`
+`internal/agent/context.go` re-exports the memory package for callers that
+should not import `internal/memory` directly:
 
-Tool schema:
+```go
+LoadMemory(workDir)
+SaveMemory(workDir, content)
+LoadScopedMemory(sessionDir, workDir, scope)
+SaveScopedMemory(sessionDir, workDir, scope, content)
+ScopedHotMemoryPath(sessionDir, workDir, scope)
+DailyMemoryPath(sessionDir, workDir, when)
+ScopedDailyMemoryPath(sessionDir, workDir, scope, when)
+AppendDailyMemory(sessionDir, workDir, when, content)
+AppendScopedDailyMemory(sessionDir, workDir, scope, when, content)
+SearchMemory(sessionDir, workDir, query, limit)
+SearchScopedMemory(sessionDir, workDir, scope, query, limit)
+RenderMemorySearchResults(query, results)
+```
+
+These are pass-through wrappers. They do not add validation or output changes.
+
+## Startup Memory Injection
+
+`agent.NewAgentWithStreamer` builds the system prompt, injects project context
+files, then loads root memory:
+
+```go
+memory := LoadMemory(cfg.WorkDir)
+if memory != "" {
+    a.messages = append(a.messages,
+        newUserMessage("Here is the session memory from previous work:\n\n"+memory),
+        newAssistantMessage("Got it."),
+    )
+}
+```
+
+The exact user message sent to the LLM history is:
+
+```text
+Here is the session memory from previous work:
+
+<contents of MEMORY.md>
+```
+
+The exact assistant acknowledgement added to history is:
+
+```text
+Got it.
+```
+
+This is bootstrap history. It is part of the LLM context, not a visible chat
+message by itself.
+
+`Agent.Reset()` reloads root `MEMORY.md` with the same exact two-message
+bootstrap exchange. It also clears `injectedPaths`, so scoped HOT files can be
+injected again after restart.
+
+On splash, the UI separately checks root memory. If root memory exists, it
+adds this visible system message:
+
+```text
+Loaded MEMORY.md from working directory
+```
+
+The splash does not mention scoped HOT memory.
+
+## System Prompt Memory Instructions
+
+The system prompt always contains this memory block:
+
+```text
+════════════════════════════
+MEMORY WORKFLOW
+════════════════════════════
+- Before substantive work or when prior decision/history matters: call search_memory first; do not guess.
+- After finishing meaningful work (a decision, a fix, a conclusion, a preference learned): call write_memory with a clear title and concise content. Skip trivia and small talk.
+- Scope: omit (or 'current') for work tied to the active channel/query — usually correct. Use scope='root' only for global facts that apply everywhere. Use scope='channel'/'query' with name=… to write into a different context than the active one.
+- daily=true for ephemeral session events worth archiving by date; default (hot file) for durable knowledge you'll want surfaced again.
+- Consolidate: search before writing so you extend existing notes instead of duplicating them. Don't write what's already remembered.
+```
+
+The tool schemas are attached separately as provider tool definitions. The
+model sees instructions to use `search_memory`/`write_memory`, but daily files
+are not automatically injected. The model must call `search_memory` to retrieve
+daily archive content unless daemon consolidation has folded it into HOT.
+
+## Scoped HOT Injection
+
+At turn start, `Agent.SetScope(scope)` does:
+
+```go
+a.scope = scope
+a.tools.SetScope(scope)
+
+hot := LoadScopedMemory(a.config.SessionDir, a.config.WorkDir, scope)
+if hot == "" {
+    return
+}
+path := ScopedHotMemoryPath(a.config.SessionDir, a.config.WorkDir, scope)
+if a.injectedPaths[path] {
+    return
+}
+a.injectedPaths[path] = true
+a.messages = append(a.messages,
+    newUserMessage("Context memory for "+scopeLabel(scope)+":\n\n"+hot),
+    newAssistantMessage("Got it."),
+)
+```
+
+`scopeLabel` returns:
+
+```text
+channel scope -> #<scope.Name>
+query scope   -> <scope.Name>
+root/default  -> root
+```
+
+The exact scoped user message sent into LLM history is:
+
+```text
+Context memory for <scopeLabel>:
+
+<contents of HOT.md>
+```
+
+The exact assistant acknowledgement added to history is:
+
+```text
+Got it.
+```
+
+This injection happens once per hot file path per process. It is tracked in:
+
+```go
+Agent.injectedPaths map[string]bool
+```
+
+If HOT changes on disk later in the same process, `SetScope` will not inject
+the new content again for the same path.
+
+Root scope also has a hot path (`<WorkDir>/MEMORY.md`). Because `SetScope`
+does not skip root, root `MEMORY.md` can be injected at bootstrap and then
+again through `SetScope(root)` as:
+
+```text
+Context memory for root:
+
+<contents of MEMORY.md>
+```
+
+This is a current duplication risk.
+
+Important resume gap: `NewModel` calls `SetScope` before `ResumeSession`. If
+that pre-resume scoped injection marks a path and `ResumeSession` then replaces
+the active message slice, the injected memory message can be discarded while
+the path remains marked. Later turns in that process will not re-inject that
+same HOT file.
+
+## `/memory` Command
+
+Slash command:
+
+```text
+/memory
+```
+
+It never sends anything to the LLM. It only adds UI messages.
+
+First it loads root memory from:
+
+```text
+<WorkDir>/MEMORY.md
+```
+
+If non-empty, it truncates to 1000 bytes:
+
+```text
+<first 1000 bytes>
+... (truncated)
+```
+
+and displays one raw message with exact content:
+
+```text
+\033[1;36m--- MEMORY.md ---\033[0m
+<memory>
+```
+
+Then it computes the current focus memory scope. If the scope is not root, it
+loads scoped HOT memory. If scoped HOT is empty, it displays:
+
+```text
+No HOT.md for <activeLabel> yet.
+```
+
+If scoped HOT exists, it truncates to 1000 bytes using the same suffix and
+displays one raw message:
+
+```text
+\033[1;36m--- HOT.md (<activeLabel>) ---\033[0m
+<hot memory>
+```
+
+If root memory is empty and the active scope is root, output is:
+
+```text
+No MEMORY.md found in working directory.
+```
+
+If root memory is empty and the active scope is non-root, there is no root
+missing message. The command only reports the scoped HOT status.
+
+## Tool Registry Scope
+
+`tools.Registry` stores:
+
+```go
+type Registry struct {
+    WorkDir    string
+    SessionDir string
+    Scope      memory.Scope
+    terminals  *terminalManager
+}
+```
+
+`NewRegistry(workDir, sessionDir)` does not initialize `Scope`, so it starts as
+zero-value root.
+
+`SetScope(scope)` simply assigns:
+
+```go
+r.Scope = scope
+```
+
+The agent calls this through `Agent.SetScope` at turn start. Tool execution
+then uses `r.Scope` as the default memory scope.
+
+## `search_memory` Tool
+
+Registry schema:
 
 ```json
 {
-  "query": "string, required",
-  "limit": "integer, optional"
+  "name": "search_memory",
+  "description": "Search the hot MEMORY.md file and durable daily markdown memory for past decisions, notes, and context relevant to the current worktree.",
+  "parameters": {
+    "type": "object",
+    "properties": {
+      "query": {
+        "type": "string",
+        "description": "Keywords or a short natural-language query describing what to recall"
+      },
+      "limit": {
+        "type": "integer",
+        "description": "Maximum number of memory matches to return (default: 5)"
+      }
+    },
+    "required": ["query"]
+  }
 }
 ```
 
-Execution path:
-
-```text
-LLM tool call
-  -> fantasy typed search_memory wrapper, when typed tools are used
-  -> Registry.Execute(ctx, "search_memory", argsJSON)
-  -> execSearchMemory(argsJSON)
-  -> memory.SearchInScope(reg.SessionDir, reg.WorkDir, reg.Scope, args.Query, args.Limit)
-  -> memory.RenderSearchResults(args.Query, results)
-  -> tool result text back to the LLM
-```
-
-`execSearchMemory` unmarshals JSON into:
+Executor:
 
 ```go
-struct {
-    Query string `json:"query"`
-    Limit int    `json:"limit"`
-}
+execSearchMemory(argsJSON string) (string, error)
 ```
 
-JSON parse errors return:
-
-```text
-parse args: <underlying error>
-```
-
-The tool does not accept `scope` or `name`. Scope comes from `Registry.Scope`, which is updated by `Agent.SetScope` before turns in the UI. In headless or direct registry use, the zero-value scope behaves as root.
-
-The typed wrapper checks cancellation before dispatch. A cancelled context returns a fantasy text error response containing:
-
-```text
-Error: context canceled
-```
-
-The wrapper converts executor errors into fantasy tool error text and does not return them as Go errors to the caller.
-
-### `write_memory`
-
-Tool schema:
+Expected input JSON from the LLM/tool caller:
 
 ```json
 {
-  "content": "string, required",
-  "title": "string, optional",
-  "scope": "string, optional",
-  "name": "string, optional",
-  "daily": "boolean, optional"
+  "query": "<query>",
+  "limit": 5
 }
 ```
 
-Execution path:
+`limit` may be omitted or zero.
+
+Bad JSON returns:
 
 ```text
-LLM tool call
-  -> fantasy typed write_memory wrapper, when typed tools are used
-  -> Registry.Execute(ctx, "write_memory", argsJSON)
-  -> execWriteMemory(argsJSON)
-  -> memory.AppendHot(...) or memory.AppendDailyForScope(...)
-  -> tool result text back to the LLM
+parse args: <error>
 ```
 
-`execWriteMemory` unmarshals JSON into:
+Empty query returns:
 
-```go
-struct {
-    Content string `json:"content"`
-    Title   string `json:"title"`
-    Scope   string `json:"scope"`
-    Name    string `json:"name"`
-    Daily   bool   `json:"daily"`
+```text
+query is required
+```
+
+Success returns `RenderSearchResults`.
+
+No hits:
+
+```text
+No memory matches found for query "<query>".
+```
+
+Hits:
+
+```text
+Memory matches for "<query>":
+
+1. Source: <source>
+Heading: <heading>
+<snippet>
+```
+
+The tool has no scope argument. It always searches `Registry.Scope` and that
+scope's parents.
+
+## `write_memory` Tool
+
+Registry schema:
+
+```json
+{
+  "name": "write_memory",
+  "description": "Persist a memory entry (decision, preference, work-state note) into hot memory for the current scope, or override with scope='root' or a specific channel/query. Use 'daily' to append to the durable daily archive instead. Appended as a dated markdown section so search_memory can recall it later.",
+  "parameters": {
+    "type": "object",
+    "properties": {
+      "content": {
+        "type": "string",
+        "description": "Markdown content to remember. Plain prose or a bulleted list works."
+      },
+      "title": {
+        "type": "string",
+        "description": "Optional heading for the entry (e.g. 'decision: drop daemon')."
+      },
+      "scope": {
+        "type": "string",
+        "description": "Optional scope override: 'current' (default), 'root', 'channel', or 'query'."
+      },
+      "name": {
+        "type": "string",
+        "description": "Required when scope is 'channel' or 'query'. The channel (#name) or query (nick) to write to."
+      },
+      "daily": {
+        "type": "boolean",
+        "description": "If true, append to the durable daily archive instead of the hot file (default false)."
+      }
+    },
+    "required": ["content"]
+  }
 }
 ```
 
-JSON parse errors return:
+Expected input JSON from the LLM/tool caller:
 
-```text
-parse args: <underlying error>
+```json
+{
+  "content": "<markdown>",
+  "title": "<optional title>",
+  "scope": "current",
+  "name": "<channel-or-query-name>",
+  "daily": false
+}
 ```
 
-If `strings.TrimSpace(content)` is empty, it returns:
+Bad JSON returns:
+
+```text
+parse args: <error>
+```
+
+Whitespace-only content returns:
 
 ```text
 content is required
 ```
 
-Scope resolution starts with `Registry.Scope`, then applies `args.Scope`:
+Scope resolution:
 
-- `""` or `"current"`: keep `Registry.Scope`.
-- `"root"`: use `RootScope()`.
-- `"channel"`: require `name`, then use `ChannelScope(args.Name, &root)`.
-- `"query"`: require `name`, then use `QueryScope(args.Name, &root)`.
+```text
+scope omitted or "current" -> Registry.Scope
+"root"                     -> RootScope()
+"channel"                  -> ChannelScope(name, &RootScope())
+"query"                    -> QueryScope(name, &RootScope())
+```
 
-Missing channel/query name returns:
+For `scope="channel"` with empty `name`:
 
 ```text
 name is required when scope='channel'
 ```
 
-or:
+For `scope="query"` with empty `name`:
 
 ```text
 name is required when scope='query'
 ```
 
-Unknown scope returns:
+Unknown scope:
 
 ```text
 unknown scope "<scope>" (want 'current', 'root', 'channel', or 'query')
 ```
 
-For hot writes (`daily == false`), the tool calls `AppendHot` and returns:
+Hot mode (`daily` false or omitted) calls `AppendHot`.
+
+Success:
 
 ```text
-Wrote <len(args.Content)> bytes to <HotPath(sessionDir, workDir, scope)>
+Wrote <len(content)> bytes to <HotPath>
 ```
 
-The byte count is the original `args.Content` string length, not the trimmed content length and not the number of bytes written including heading/newlines.
+The byte count is `len(args.Content)`, not the trimmed content length and not
+the bytes written after title/timestamp formatting.
 
-For daily writes (`daily == true`), the tool builds the daily body like this:
-
-- If `title` is blank, body is `content`.
-- If `title` is nonblank, body is:
+Daily mode (`daily=true`) first builds:
 
 ```text
-### <trimmed title>
-
-<content>
+body = content
+if title trims non-empty:
+    body = "### " + title + "\n\n" + content
 ```
 
-Then it calls `AppendDailyForScope` and returns:
+Then it calls `AppendDailyForScope`.
+
+Success:
 
 ```text
-Appended <len(args.Content)> bytes to daily memory (<DailyPathForScope(sessionDir, workDir, scope, now)>)
+Appended <len(content)> bytes to daily memory (<DailyPathForScope>)
 ```
 
-The typed wrapper checks cancellation before dispatch. A cancelled context returns a fantasy text error response containing:
+Again, the byte count is `len(args.Content)`, not the full body length.
+
+## Typed LLM Wrappers
+
+`internal/llm/typed_search_memory.go` and
+`internal/llm/typed_write_memory.go` wrap the registry tools with
+`fantasy.NewAgentTool`.
+
+The registry stores OpenAI-compatible object schemas. The typed fantasy
+wrappers expose fantasy `ToolInfo` differently: `Parameters` is only the
+properties map, and `Required` is a separate slice. The fantasy schema does
+not include nested top-level keys named:
+
+```text
+type
+properties
+required
+```
+
+at the parameter root. Tests enforce this because some providers reject the
+extra nesting.
+
+The typed wrappers are the active path for LLM-streamed tool calls:
+
+```text
+LLM tool call JSON -> typed struct -> json.Marshal(struct) -> Registry.Execute -> memory store
+```
+
+For `search_memory`, typed input is:
+
+```go
+type searchMemoryArgs struct {
+    Query string `json:"query"`
+    Limit int    `json:"limit,omitempty"`
+}
+```
+
+For `write_memory`, typed input is:
+
+```go
+type writeMemoryArgs struct {
+    Content string `json:"content"`
+    Title   string `json:"title,omitempty"`
+    Scope   string `json:"scope,omitempty"`
+    Name    string `json:"name,omitempty"`
+    Daily   bool   `json:"daily,omitempty"`
+}
+```
+
+Both wrappers check cancellation before touching the memory store. A
+pre-cancelled call returns a tool error response with content:
 
 ```text
 Error: context canceled
 ```
 
-## Agent Boot and Turn Boundaries
-
-### Root Memory at Agent Construction
-
-`NewAgentWithStreamer` loads root memory with:
-
-```go
-memory := LoadMemory(cfg.WorkDir)
-```
-
-If it is nonempty, the agent appends two bootstrap messages to `Agent.messages`:
+Registry execution errors are also returned to the LLM as tool error text:
 
 ```text
-user: Here is the session memory from previous work:
-
-<MEMORY.md contents>
+Error: <registry error>
 ```
+
+They are not returned as Go errors, so a bad memory tool call does not abort
+the stream.
+
+Successful tool output is returned to the LLM as plain text content. For
+example:
 
 ```text
-assistant: Got it.
+Memory matches for "linear sessions":
+
+1. Source: MEMORY.md
+Heading: decision: linear sessions (2026-05-04T10:11:12-04:00)
+prefer flat history over forks
 ```
 
-This injection is root-only. Scoped `HOT.md` is not loaded at construction.
-
-### System Prompt Memory Instructions
-
-The system prompt includes the memory workflow text from `writeMemoryPrompt`. The operational requirements are:
-
-- The agent should call `search_memory` before substantive work when prior decisions or history matter.
-- The agent should call `write_memory` after meaningful work.
-- Omitted or `current` scope is intended to mean active channel/query.
-- `root` is for global facts.
-- `channel` and `query` plus `name` can write to a different context.
-- `daily=true` is for dated archive entries.
-- The agent should search before writing to avoid duplicates.
-
-This is prompt policy. Enforcement is partial: the tools enforce argument validity and scope routing, but nothing forces the model to search or write at the right moments.
-
-### Scoped Hot Memory Injection
-
-`Agent.SetScope(scope)` does three things:
-
-1. Stores `a.scope = scope`.
-2. Calls `a.tools.SetScope(scope)` so memory tools use the same scope.
-3. Loads scoped hot memory from `LoadScopedMemory(a.cfg.SessionDir, a.cfg.WorkDir, scope)`.
-
-If scoped hot memory is empty, no messages are injected.
-
-If scoped hot memory is nonempty and its path has not already been injected in this agent lifecycle, two messages are appended:
+or:
 
 ```text
-user: Context memory for <scopeLabel(scope)>:
-
-<HOT.md contents>
+Wrote 31 bytes to /path/to/MEMORY.md
 ```
+
+The agent also receives normal tool events for UI/tool-panel display through
+the fantasy stream. Those event details are documented in
+`docs/agent-loop.md`; memory does not add a separate event channel.
+
+## Compaction To Daily Memory
+
+`/compact` calls:
+
+```go
+m.agent.Compact(context.Background())
+```
+
+If a turn is streaming, visible output is:
 
 ```text
-assistant: Got it.
+Can't compact while agent is working. Be patient.
 ```
 
-`scopeLabel` renders:
+On error:
 
-- Channel: `#` followed by `scope.Name`.
-- Query: `scope.Name`.
-- Root/default: `root`.
-
-The injected-path guard is path-based. Re-entering the same scoped path does not inject it again. `Agent.Reset()` clears `injectedPaths`, so scoped hot memory can be injected again after reset. Memory written after injection is not automatically re-injected into the transcript, although `search_memory` can still retrieve it from disk.
-
-### Turn Start
-
-`Model.startAgentTurn` calls:
-
-```go
-m.agent.InitContext(ctxKey)
-m.agent.SetContext(ctxKey)
-m.agent.SetScope(ircContextToMemoryScope(m.turnContext))
+```text
+Compaction failed: <error>
 ```
 
-before starting the LLM turn. That is the strict turn boundary where the active UI context is copied into both the agent transcript context and the tool registry memory scope. Tool calls during that turn use the scope set there unless `write_memory` explicitly overrides it.
+On success:
 
-The transcript switch and memory-scope switch are separate calls. `SetContext` controls which `[]fantasy.Message` slice the LLM sees. `SetScope` controls which hot/daily memory files `search_memory`, `write_memory`, and scoped HOT injection use. If one is changed without the other in future code, context history and memory routing can diverge.
-
-## Compaction and Daily Memory
-
-`Agent.Compact(ctx)` both flushes durable memory and rewrites old transcript history.
-
-If `len(a.messages) < 6`, compaction is a no-op. Exactly six messages do compact.
-
-Before any LLM call, it checks `ctx.Err()`. If the context is already cancelled, it returns that error and does not start streaming.
-
-For compacting histories, it computes:
-
-```go
-end := len(a.messages) - 4
+```text
+Compacted: ~<before> -> ~<after> tokens
 ```
 
-It flushes:
+`Agent.Compact(ctx)` does nothing if:
 
-```go
-a.messages[1:end]
+```text
+len(a.messages) < 6
 ```
 
-to daily memory extraction before replacing the transcript summary. Message `0` is the system prompt and is excluded. The last four messages are retained verbatim and are excluded from the flush slice.
+Otherwise it compacts:
 
-### Durable Memory Extraction Prompt
+```text
+messages[1 : len(messages)-4]
+```
 
-`flushCompactedMessagesToDailyMemory` calls the streamer with one user message and no tool registry. The exact prompt shape is:
+Before summarizing, it sends this exact prompt to the LLM with no tools:
 
 ```text
 Extract durable memory from this conversation slice before it is compacted.
 Return concise markdown bullets covering only lasting facts: user preferences, decisions, completed work, relevant files, and open follow-ups.
 Skip transient chatter and tool noise. If nothing deserves durable memory, reply with exactly NONE.
 
-[<role>]: <truncateStr(messageText, 700)>
-[<role>]: <truncateStr(messageText, 700)>
+[<role>]: <message text truncated to 700 bytes>
+[<role>]: <message text truncated to 700 bytes>
+...
 ```
 
-Only stream events with `Type == "text"` are accumulated. `done` ends naturally because the event channel closes. Error events are ignored here.
+Only `text` stream events are accumulated. If the trimmed result is empty or
+case-insensitive:
 
-The accumulated text is trimmed. If it is empty or case-insensitively equal to `NONE`, nothing is appended.
+```text
+none
+```
 
-Otherwise the text is appended with:
+then nothing is written.
+
+Otherwise the result is written with:
 
 ```go
-AppendScopedDailyMemory(a.cfg.SessionDir, a.cfg.WorkDir, a.scope, time.Now(), text)
+AppendScopedDailyMemory(a.config.SessionDir, a.config.WorkDir, a.scope, time.Now(), text)
 ```
 
-The daily flush is therefore scoped to the agent's active scope at compaction time.
+So compaction memory goes to the active memory scope's daily archive, not to
+HOT.
 
-### Transcript Summary Prompt
-
-After durable memory extraction, `Compact` sends another no-tool streamer call with one user message shaped as:
+Then compaction sends the summary prompt to the LLM with no tools:
 
 ```text
 Summarize the following conversation concisely, preserving all important technical details, decisions made, files modified, and current state:
 
-[<role>]: <truncateStr(messageText, 500)>
-[<role>]: <truncateStr(messageText, 500)>
+[<role>]: <message text truncated to 500 bytes>
+[<role>]: <message text truncated to 500 bytes>
+...
 ```
 
-Only `text` stream events are accumulated. Error events are ignored here too.
-
-The agent rewrites history to:
+The in-memory conversation is rebuilt as:
 
 ```text
-system prompt
-user: [Previous conversation summary]:
-
-<summary text>
-assistant: Got it.
-<the previous last four messages, preserving tool metadata>
+system message
+user message: [Previous conversation summary]:\n<summary>
+assistant message: Got it, I have the context from the summary.
+last 4 original messages
 ```
 
-Tests verify that tool call metadata and tool result metadata survive when they are in the retained last four messages.
+Compaction does not update hot memory. Compaction does not call
+`write_memory`. Compaction does not adjust session save watermarks; that gap is
+documented in `docs/sessions.md`.
 
-## `/memory` UI Command
-
-`handleMemoryCommand` in `internal/ui/commands.go` is display-only. It does not search daily archives and does not call the LLM.
-
-Behavior:
-
-1. Load root `MEMORY.md` with `agent.LoadMemory(workDir)`.
-2. If nonempty, truncate to 1000 bytes and append:
-
-```text
-\033[1;36m--- MEMORY.md ---\033[0m
-<memory contents>
-```
-
-If truncation happens, this suffix is appended:
-
-```text
-
-... (truncated)
-```
-
-3. Convert the active UI context to memory scope.
-4. If the scope is non-root, load scoped `HOT.md`.
-5. If scoped hot memory is empty, show the system message:
-
-```text
-No HOT.md for <active.Label()> yet.
-```
-
-6. If scoped hot memory is nonempty, truncate to 1000 bytes and append:
-
-```text
-\033[1;36m--- HOT.md (<active.Label()>) ---\033[0m
-<hot contents>
-```
-
-7. If root memory is empty and active scope is root, show:
-
-```text
-No MEMORY.md found in working directory.
-```
-
-The help table line is:
-
-```text
-/memory             Show MEMORY.md contents
-```
-
-That help text is incomplete for non-root contexts because the command can also display scoped `HOT.md`.
-
-## Daemon Daily Consolidation
+## Daemon Memory Consolidation
 
 The daemon job kind is:
 
@@ -765,159 +1262,308 @@ The daemon job kind is:
 memory-consolidate
 ```
 
-It is implemented in `internal/daemon/jobs/memory_consolidate.go`.
-
-### Job Args
-
-The JSON args shape is:
+Args shape:
 
 ```json
 {
-  "session_dir": "string",
-  "work_dir": "string",
-  "scope_kind": "root|channel|query",
-  "scope_name": "string",
+  "session_dir": "<SessionDir>",
+  "work_dir": "<WorkDir>",
+  "scope_kind": "root",
+  "scope_name": "<channel-or-query-name>",
   "since": "YYYY-MM-DD"
 }
 ```
 
-`work_dir` can fall back to `job.WorkDir`. Scope kind/name can fall back to `job.Scope`. `session_dir` must be in args.
-
-Missing work dir returns:
+Envelope fallback:
 
 ```text
+work_dir missing in args   -> job.WorkDir
+scope_kind missing in args -> job.Scope.Kind
+scope_name missing in args -> job.Scope.Name
+```
+
+`session_dir` must be in args. There is no envelope fallback for it.
+
+Failures:
+
+```text
+memory-consolidate: parse args: <error>
 memory-consolidate: work_dir is required
-```
-
-Missing session dir returns:
-
-```text
 memory-consolidate: session_dir is required
+memory-consolidate: scope_name is required for channel scope
+memory-consolidate: scope_name is required for query scope
+memory-consolidate: unknown scope_kind "<kind>"
+memory-consolidate: since must be YYYY-MM-DD: <error>
+memory-consolidate: list daily: <error>
+memory-consolidate: scan hot: <error>
+memory-consolidate: parse <dailyPath>: <error>
+memory-consolidate: write hot: <error>
+memory-consolidate: <context error>
 ```
 
-For channel/query scope without name:
+Scope build:
 
 ```text
-scope_name is required for channel/query scope
+"" or "root" -> RootScope()
+"channel"    -> ChannelScope(scope_name, nil)
+"query"      -> QueryScope(scope_name, nil)
 ```
 
-For unknown scope kind:
+Daemon-built scopes are flat. They do not preserve a parent channel for query
+scopes.
+
+The job has a 60 second timeout and checks cancellation before major I/O and
+between daily files.
+
+The job resolves:
 
 ```text
-unknown scope_kind "<kind>"
+dailyDir = dirname(DailyPathForScope(sessionDir, workDir, scope, time.Now()))
+hotPath  = HotPath(sessionDir, workDir, scope)
 ```
 
-For invalid `since`:
+`listDailyFiles` reads `dailyDir`, skips missing dirs, skips directories and
+non-`.md` files, optionally filters by filename date >= `since`, and sorts
+ascending by filename.
+
+Malformed non-date filenames are skipped only when `since` is set. Without a
+`since` cutoff, any `.md` file in the daily directory is included and then
+parsed.
+
+Daily parser input shape:
 
 ```text
-since must be YYYY-MM-DD: <underlying parse error>
+## <timestamp> pre-compaction flush
+
+<body>
+
+## <timestamp> pre-compaction flush
+
+<body>
 ```
 
-### Scope Construction
-
-`buildScope` supports root, channel, and query. Channel/query scopes created by the daemon have no nested parent. That means daemon consolidation can target a flat channel or query scope, but it cannot reconstruct a UI subchannel or query-under-channel lineage from `scope_kind` and `scope_name` alone.
-
-### Daily File Selection
-
-The job computes the daily directory from:
-
-```go
-filepath.Dir(memory.DailyPathForScope(sessionDir, workDir, scope, time.Now()))
-```
-
-`listDailyFiles`:
-
-- Returns no files if the daily directory does not exist.
-- Includes only non-directory `.md` files.
-- If `since` is set, parses the filename stem as `YYYY-MM-DD` and skips files before the cutoff.
-- If `since` is set and a filename stem is not a date, skips it.
-- Sorts selected files ascending by path.
-
-### Daily Entry Parser
-
-`parseDailyEntries` reads a daily markdown file and splits entries on lines beginning with:
+`parseDailyEntries` splits on lines beginning with:
 
 ```text
 ## 
 ```
 
-For each heading, it uses the first whitespace-delimited field after `## ` as the entry timestamp. Body lines until the next heading are trimmed and stored. Entries without a timestamp are skipped.
+It takes the first whitespace-delimited field of the heading as the timestamp.
+Malformed blocks with no timestamp are skipped silently. The body is preserved
+trimmed, but heading text after the timestamp is ignored.
 
-It is designed to read entries emitted by `AppendDailyForScope`, whose heading starts with an RFC3339 timestamp.
-
-### Consolidated Hot Entry Format
-
-The daemon appends daily entries into `HOT.md` with markers. The marker prefix is:
+Dedupe marker:
 
 ```text
-<!-- bitchtea-consolidated:
+<!-- bitchtea-consolidated:<daily-filename>|<timestamp> -->
 ```
 
-The marker format is:
+The job scans the existing HOT file for those markers. Missing HOT is treated
+as empty. Truncated markers stop the marker scan to avoid an infinite loop.
+
+For each not-yet-seen daily entry, it appends this block directly to HOT:
 
 ```text
-<!-- bitchtea-consolidated:<daily filename>|<entry timestamp> -->
-```
+## consolidated <timestamp> <!-- bitchtea-consolidated:<daily-filename>|<timestamp> -->
 
-The exact appended block is:
-
-```text
-## consolidated <entry timestamp> <marker>
-
-<trimmed entry body>
+<trimmed body>
 
 ```
 
-The daemon writes directly with `os.OpenFile(... O_CREATE|O_APPEND|O_WRONLY, 0644)` and creates parents with `0755`. It does not use `memory.AppendHot` and does not take a file lock; the implementation relies on the daemon's single-process lock model.
+This direct append creates parent dirs with mode `0755`, opens HOT with:
 
-### Idempotency
+```text
+O_CREATE | O_APPEND | O_WRONLY, mode 0644
+```
 
-Before appending, `loadConsolidatedMarkers` scans existing `HOT.md` for markers. If a marker is already present, the entry is skipped.
+and writes the string. It does not use `flock`. The code comment says this is
+acceptable because the daemon is single-instance, but it does not coordinate
+with a simultaneous foreground `write_memory` process.
 
-This makes repeated consolidation idempotent for entries with unique `(daily filename, timestamp)` pairs. It also means two different entries in the same daily file with the same timestamp collide and the later one is skipped. The test suite currently treats that collision as duplicate suppression.
-
-### Job Output
-
-Successful output JSON has this shape:
+Successful result output JSON:
 
 ```json
 {
-  "hot_path": "<path>",
-  "dailies_seen": <number>,
-  "entries_added": <number>,
-  "entries_skipped": <number>
+  "hot_path": "<hot path>",
+  "dailies_seen": <daily file count>,
+  "entries_added": <new consolidated entries>,
+  "entries_skipped": <entries already marked>
 }
 ```
 
-Cancellation is checked before processing files and inside the file loop. A pre-cancelled context fails and does not create `HOT.md`.
+The Go field is named `EntriesSkip`, but the JSON key is:
 
-## Test Coverage and Gaps
+```text
+entries_skipped
+```
 
-Existing tests cover the important happy paths and some boundaries:
+## What Goes To The LLM
 
-- `internal/agent/context_test.go` covers root load/save, daily append heading shape, hot and daily search, scoped path layout, parent inheritance, child non-leakage, and rendered search output shape.
-- `internal/tools/tools_test.go` covers `search_memory` through the registry, `write_memory` root hot writes, search-after-write, channel override writes, daily writes, missing content, and missing channel name.
-- `internal/llm/typed_search_memory_test.go` covers typed wrapper schema, successful text response, registry scope routing, empty result as normal text, and cancellation as a tool error response.
-- `internal/llm/typed_write_memory_test.go` covers typed wrapper schema, default-scope writes, root override over registry scope, missing content as tool error, and cancellation short-circuiting before filesystem writes.
-- `internal/agent/compact_test.go` covers compaction boundary behavior, durable daily flush before summary rewrite, scoped daily flush path, retention of system prompt and last four messages, tool metadata preservation, scoped `HOT.md` injection once, and cancelled compaction before stream start.
-- `internal/daemon/jobs/memory_consolidate_test.go` covers unique append, since cutoff, idempotency, cancellation, envelope-scope fallback, and required `work_dir`/`session_dir`.
+There are four memory paths into LLM context.
 
-Important gaps and sharp edges:
+1. System prompt instructions:
 
-- There is no dedicated `internal/memory` package test file; most core behavior is tested through agent wrappers or tools.
-- Per-context transcript switching and memory scope switching are separate operations that happen together in `Model.startAgentTurn`. Tests should cover them together; otherwise a future change could preserve isolated histories while routing memory to the wrong scope, or vice versa.
-- Search tests mostly assert substrings and result shape. They do not exhaustively prove ranking, all-term matching, snippet centering, heading selection, read-error handling, or limit cutoff.
-- Typed tool tests explicitly test the fantasy wrapper seam, not deep storage semantics.
-- `search_memory` has no scope override argument. It only searches the registry's current scope.
-- `write_memory` can override to a flat channel/query scope, but the override API cannot express nested channel/query parentage.
-- Root hot memory lives in the repository as `MEMORY.md`; scoped hot memory lives outside the repo under the bitchtea data directory. That split is intentional compatibility behavior but easy to misread.
-- `Load` and `LoadScoped` return empty string on any read failure, so permission errors and missing files look identical to callers.
-- Search is lexical, case-insensitive, and file-level. It is not semantic retrieval and does not return multiple matches from one file.
-- Compaction memory extraction depends on the LLM returning durable bullets. There is no verifier that the extracted facts are true, complete, or non-duplicative.
-- Compaction ignores streamer error events during both memory extraction and summary generation.
-- The prompt tells the model to search and write memory, but this is not enforced beyond normal tool availability.
-- The `/memory` command does not show daily archives.
-- The `/memory` help line says only `MEMORY.md` even though scoped contexts can display `HOT.md`.
-- Daemon consolidation cannot reconstruct nested scope parents from its current `scope_kind`/`scope_name` args.
-- Daemon marker idempotency keys on daily filename plus timestamp, so same-timestamp distinct entries collide.
-- Append helpers use `flock` but no `fsync`; daemon consolidation appends without `flock`.
+```text
+MEMORY WORKFLOW
+...
+```
+
+These are always present.
+
+2. Root memory bootstrap if `<WorkDir>/MEMORY.md` exists:
+
+```text
+user: Here is the session memory from previous work:
+
+<MEMORY.md>
+
+assistant: Got it.
+```
+
+3. Scoped HOT injection at turn start if the active scope has a non-empty HOT
+file and has not been injected in the current process:
+
+```text
+user: Context memory for <scopeLabel>:
+
+<HOT.md>
+
+assistant: Got it.
+```
+
+4. Tool call/response traffic:
+
+`search_memory` call input:
+
+```json
+{
+  "query": "<query>",
+  "limit": 5
+}
+```
+
+`search_memory` output:
+
+```text
+Memory matches for "<query>":
+
+1. Source: <source>
+Heading: <heading>
+<snippet>
+```
+
+or:
+
+```text
+No memory matches found for query "<query>".
+```
+
+`write_memory` call input:
+
+```json
+{
+  "content": "<markdown>",
+  "title": "<title>",
+  "scope": "current",
+  "name": "<name>",
+  "daily": false
+}
+```
+
+`write_memory` output:
+
+```text
+Wrote <N> bytes to <path>
+```
+
+or:
+
+```text
+Appended <N> bytes to daily memory (<path>)
+```
+
+or tool error text:
+
+```text
+Error: <error>
+```
+
+Daily archive content is not automatically sent to the LLM. It is visible to
+the LLM only through `search_memory` results, daemon consolidation into HOT, or
+manual inclusion elsewhere.
+
+## Tests: What They Prove And What They Do Not
+
+Strong tests:
+
+- `TestScopedMemoryPaths` proves nested channel/query path layout and segment
+  sanitization for representative names.
+- `TestLoadSaveMemory` proves the agent wrapper can save and reload root
+  `MEMORY.md`.
+- `TestAppendDailyMemory` proves the root daily append heading includes the
+  exact `pre-compaction flush` suffix and durable content.
+- `TestSearchMemoryFindsHotAndDurableMarkdown` proves root search can find
+  both `<WorkDir>/MEMORY.md` and a root daily archive file.
+- `TestScopedMemorySearchInheritsParentsWithoutLeakingChildWrites` proves
+  child scopes inherit parent/root reads and root does not search child writes.
+- `TestRenderMemorySearchResults` proves the rendered hit shape includes query,
+  source, heading, and snippet.
+- `TestSearchMemoryTool` proves the registry-level tool can find root
+  `MEMORY.md` and returns the `Memory matches for ...` banner.
+- `TestWriteMemoryTool` proves registry-level root hot writes, channel override
+  writes, daily writes, empty content failure, and missing channel name failure.
+- Typed `search_memory` tests prove schema shape, successful hits, scope via
+  `Registry.SetScope`, no-match text response, and cancellation error response.
+- Typed `write_memory` tests prove schema shape, default-scope write, explicit
+  root override, missing content tool error, and cancellation short-circuit.
+- `TestCompactFlushesDailyMemoryBeforeSummaryRewrite` proves compaction writes
+  durable extracted memory into the root daily file before rewriting the
+  in-memory summary.
+- The scoped compaction test proves a channel-scoped compact writes to the
+  scoped daily path and not the root daily path.
+- `TestPhase3CompactionFlushesFantasyMessagesToMemory` proves the same
+  compaction path works when the agent history is fantasy-native.
+- Daemon memory consolidation tests prove unique append, since cutoff,
+  idempotency, cancellation, envelope scope fallback, and required-arg errors.
+
+Shape-heavy or partial tests:
+
+- There are no direct `internal/memory` package tests. Core store semantics are
+  covered indirectly through agent, tools, and daemon tests.
+- Typed wrapper tests explicitly exercise the wrapper seam, not the full memory
+  store. Their comments claim underlying semantics are covered by
+  `internal/memory`, but no such package tests currently exist.
+- `TestWriteMemoryTool` checks that daily mode succeeds, but does not assert
+  the exact daily file contents or heading shape.
+- Search tests do not cover read errors from unreadable files, non-existent
+  daily directories with permission failures, multi-file ordering across every
+  lineage level, or snippet ellipsis boundaries.
+- Render tests check substrings, not exact complete output.
+- Compaction tests assert durable memory text appears on disk, but they do not
+  pin the exact daily markdown block including heading/timestamp text.
+- Daemon consolidation tests cover idempotency by marker, but not concurrent
+  foreground writes to the same HOT file.
+- `/memory` command behavior is not covered here by exact-output tests for all
+  root/scoped combinations.
+
+Known gaps that junior models should not paper over:
+
+- Root `MEMORY.md` can be injected twice: once as startup memory and again as
+  `Context memory for root`.
+- Scoped HOT injection is once per path per process; edits to HOT are not
+  re-injected during the same run.
+- Pre-resume scoped injection can be discarded by `ResumeSession` while the
+  path remains marked as injected.
+- `Load`, `LoadScoped`, and UI loader paths swallow read errors and treat them
+  as missing memory.
+- `SaveScoped` overwrites without `flock`; daemon consolidation appends without
+  `flock`.
+- Search is lexical and path-ordered. It is not semantic retrieval.
+- Search returns at most one hit per file, even if multiple headings match.
+- `search_memory` has no scope override; only `write_memory` does.
+- `write_memory` daily mode writes headings that still say
+  `pre-compaction flush`, even when the write came directly from the tool.
+- Daemon query-scope consolidation is flat and cannot express query-under-
+  channel parentage.
+- Existing stale docs saying `write_memory` is missing should be fixed or
+  ignored in favor of this document and the current code.

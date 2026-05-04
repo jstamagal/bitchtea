@@ -1,33 +1,35 @@
-# 🦍 BITCHTEA: TROUBLESHOOTING
+# 🦍 THE BITCHTEA SCROLLS: STREAMING & LLM
 
-If the jungle gets quiet, something is wrong.
+Bitchtea talks to models through a unified streaming interface.
 
-## 🔑 API KEY ISSUES
+## 📡 THE STREAMER CONTRACT
 
-If you see `no API key found`:
-1. Check your environment variables (`echo $OPENAI_API_KEY`).
-2. Ensure you are using the correct provider with `/set provider <openai|anthropic>`.
-3. Use `/set apikey <key>` to set it manually for the active session.
+Defined in `internal/llm/types.go`, the `ChatStreamer` interface is the minimal surface for communication:
 
-## 🔍 DEBUGGING THE METAL
+```go
+type ChatStreamer interface {
+    StreamChat(ctx context.Context, messages []Message, reg *tools.Registry, events chan<- StreamEvent)
+}
+```
 
-If the agent is acting weird or failing silently, use the debug hook:
-- Type `/debug on`.
-- Bitchtea will now log every raw HTTP request and response header into the transcript.
-- Check for `401 Unauthorized` (key issue) or `429 Too Many Requests` (rate limits).
+### `StreamEvent` Types:
+- **`text`**: Incremental tokens of the response.
+- **`thinking`**: Internal model reasoning (if supported, e.g., O1/O3).
+- **`tool_call`**: A request to run a tool.
+- **`tool_result`**: The output of a tool execution.
+- **`usage`**: Final token counts for cost estimation.
+- **`done`**: Signal that the turn is finished, carries the final `Messages`.
 
-## 🧹 STATE RESET
+## 🔌 THE FANTASY SHIM
 
-If a session is corrupted or the TUI is hanging:
-1. **Kill the process**: `Ctrl+C` (twice) or `killall bitchtea`.
-2. **Clear checkpoints**: Delete `~/.config/bitchtea/sessions/.bitchtea_checkpoint.json`.
-3. **Start Fresh**: Run without resuming: `./bitchtea`.
+Bitchtea uses `charm.land/fantasy` as its multi-provider engine. The `llm.Client` (in `internal/llm/client.go`) wraps this to provide:
 
-## 🆘 APE STUCK
+1. **Lazy Initialization**: Providers and models are only built when needed.
+2. **Provider Switching**: Seamless transition between OpenAI, Anthropic, and local Ollama.
+3. **Debug Hooks**: Intercepts raw HTTP requests/responses for `/debug on` mode.
 
-If the agent says `🦍😱💀 APE STUCK. KING HELP.`:
-- This means 3 consecutive failures occurred.
-- Usually, the model is trying to use a tool incorrectly or a file path is wrong.
-- Give it a direct instruction: `>> stop trying to read that file, it does not exist. try ls instead.`
+## 💰 COST TRACKING
+
+The `CostTracker` (in `internal/llm/cost.go`) estimates USD spend in real-time based on input/output tokens and model-specific pricing tiers.
 
 🦍💪🤝 APES STRONK TOGETHER 🦍💪🤝

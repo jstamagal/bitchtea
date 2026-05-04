@@ -1,35 +1,35 @@
-# 🦍 BITCHTEA: USER GUIDE
+# 🦍 THE BITCHTEA SCROLLS: STREAMING & LLM
 
-The Green Dark is powerful. Here is how you navigate it.
+Bitchtea talks to models through a unified streaming interface.
 
-## 🌟 CORE FEATURES
+## 📡 THE STREAMER CONTRACT
 
-- **Autonomous Follow-ups**: Enable `/auto-next` or `/auto-idea` to let the agent work while you watch.
-- **Persistent Terminals**: The agent can open REPLs, editors, and background processes using `terminal_start`.
-- **IRC Contexts**: Use `/join #channel` to organize different tasks within the same session.
+Defined in `internal/llm/types.go`, the `ChatStreamer` interface is the minimal surface for communication:
 
-## 📎 @FILE REFERENCES
+```go
+type ChatStreamer interface {
+    StreamChat(ctx context.Context, messages []Message, reg *tools.Registry, events chan<- StreamEvent)
+}
+```
 
-You can include any file in your prompt by prefixing it with `@`.
-- `>> check this @main.go for bugs`
-- `>> read @docs/architecture.md and summarize`
+### `StreamEvent` Types:
+- **`text`**: Incremental tokens of the response.
+- **`thinking`**: Internal model reasoning (if supported, e.g., O1/O3).
+- **`tool_call`**: A request to run a tool.
+- **`tool_result`**: The output of a tool execution.
+- **`usage`**: Final token counts for cost estimation.
+- **`done`**: Signal that the turn is finished, carries the final `Messages`.
 
-Bitchtea will automatically expand these references into the full content of the file before sending the prompt.
+## 🔌 THE FANTASY SHIM
 
-## 🛠️ MONITORING TOOLS
+Bitchtea uses `charm.land/fantasy` as its multi-provider engine. The `llm.Client` (in `internal/llm/client.go`) wraps this to provide:
 
-When the agent runs a tool, you will see a status update in the bottom bar and a message in the transcript:
-- **Thinking**: The model is drafting its plan.
-- **Calling [tool]**: The agent is reaching out to the system.
-- **[tool] result**: The output of the command.
+1. **Lazy Initialization**: Providers and models are only built when needed.
+2. **Provider Switching**: Seamless transition between OpenAI, Anthropic, and local Ollama.
+3. **Debug Hooks**: Intercepts raw HTTP requests/responses for `/debug on` mode.
 
-Use **Ctrl+T** to toggle the Tool Panel for a detailed view of in-flight operations.
+## 💰 COST TRACKING
 
-## 🧭 SLASH COMMANDS
-
-Type `/help` inside the TUI to see the full list of commands.
-- `/model <name>`: Switch the brain.
-- `/compact`: Shrink the history but keep the knowledge.
-- `/fork`: Create a new timeline.
+The `CostTracker` (in `internal/llm/cost.go`) estimates USD spend in real-time based on input/output tokens and model-specific pricing tiers.
 
 🦍💪🤝 APES STRONK TOGETHER 🦍💪🤝
