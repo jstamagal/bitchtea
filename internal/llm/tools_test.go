@@ -385,6 +385,88 @@ func TestTranslateToolsProducesValidSchemasForRealRegistryDefinitions(t *testing
 	}
 }
 
+func TestAssembleAgentTools_localWinsOverMCP(t *testing.T) {
+	reg := tools.NewRegistry(t.TempDir(), t.TempDir())
+	mcpTools := []fantasy.AgentTool{
+		&staticAgentTool{info: fantasy.ToolInfo{Name: "read", Description: "from mcp"}},
+	}
+
+	assembled := AssembleAgentTools(reg, mcpTools)
+
+	var readTool fantasy.AgentTool
+	readCount := 0
+	for _, tool := range assembled {
+		if tool.Info().Name == "read" {
+			readTool = tool
+			readCount++
+		}
+	}
+	if readCount != 1 {
+		t.Fatalf("assembled read tool count = %d, want 1", readCount)
+	}
+	if readTool == nil {
+		t.Fatal("assembled tools missing local read tool")
+	}
+	if readTool.Info().Description == "from mcp" {
+		t.Fatalf("MCP tool replaced local read tool: %+v", readTool.Info())
+	}
+}
+
+func TestAssembleAgentTools_dropsUnprefixedMCP(t *testing.T) {
+	reg := tools.NewRegistry(t.TempDir(), t.TempDir())
+	mcpTools := []fantasy.AgentTool{
+		&staticAgentTool{info: fantasy.ToolInfo{Name: "unsafe_unprefixed", Description: "from mcp"}},
+	}
+
+	assembled := AssembleAgentTools(reg, mcpTools)
+	names := toolNameSet(assembled)
+	if names["unsafe_unprefixed"] {
+		t.Fatalf("assembled tools kept unprefixed MCP tool: %v", names)
+	}
+}
+
+func TestAssembleAgentTools_dedupsDuplicateMCP(t *testing.T) {
+	reg := tools.NewRegistry(t.TempDir(), t.TempDir())
+	mcpTools := []fantasy.AgentTool{
+		&staticAgentTool{info: fantasy.ToolInfo{Name: "mcp__fs__read", Description: "first"}},
+		&staticAgentTool{info: fantasy.ToolInfo{Name: "mcp__fs__read", Description: "second"}},
+	}
+
+	assembled := AssembleAgentTools(reg, mcpTools)
+
+	count := 0
+	var kept fantasy.AgentTool
+	for _, tool := range assembled {
+		if tool.Info().Name == "mcp__fs__read" {
+			count++
+			kept = tool
+		}
+	}
+	if count != 1 {
+		t.Fatalf("assembled duplicate MCP tool count = %d, want 1", count)
+	}
+	if kept.Info().Description != "first" {
+		t.Fatalf("kept duplicate MCP description = %q, want first", kept.Info().Description)
+	}
+}
+
+func TestAssembleAgentTools_nilManager(t *testing.T) {
+	mcpTools, err := MCPTools(context.Background(), nil)
+	if err != nil {
+		t.Fatalf("MCPTools(nil) err: %v", err)
+	}
+	if mcpTools != nil {
+		t.Fatalf("MCPTools(nil) tools = %v, want nil", mcpTools)
+	}
+
+	reg := tools.NewRegistry(t.TempDir(), t.TempDir())
+	wantNames := toolNameSet(translateTools(reg))
+	gotNames := toolNameSet(AssembleAgentTools(reg, mcpTools))
+	if !sameSet(gotNames, wantNames) {
+		t.Fatalf("AssembleAgentTools(reg, nil manager tools) names = %v, want %v", gotNames, wantNames)
+	}
+}
+
 func assertStringSlicesEqual(t *testing.T, got, want []string) {
 	t.Helper()
 	if len(got) != len(want) {

@@ -153,6 +153,10 @@ func AssembleAgentTools(reg *tools.Registry, mcpTools []fantasy.AgentTool) []fan
 	}
 	for _, t := range mcpTools {
 		name := t.Info().Name
+		if !strings.HasPrefix(name, mcpNamespacePrefix) {
+			log.Printf("mcp: dropping tool %q: missing %q prefix", name, mcpNamespacePrefix)
+			continue
+		}
 		if seen[name] {
 			// Local-wins. With the contract's "mcp__" prefix this is only
 			// reachable if a local tool somehow grew an "mcp__" name, or
