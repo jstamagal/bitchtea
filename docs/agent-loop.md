@@ -1718,6 +1718,63 @@ assistant: <personaRehearsal>
 
 `personaRehearsal` is exactly the string in `internal/agent/agent.go`.
 
+#### Persona dual injection: system prompt + anchor pair
+
+The persona prompt (`personaPrompt`, `internal/agent/agent.go:530`) is injected
+in two places:
+
+1. **System prompt** (`buildSystemPrompt`, `internal/agent/agent.go:430`): the
+   full `personaPrompt` text is appended after a `🧠 PERSONA / STYLE` header
+   and before the system prompt closing. This keeps the entire persona available
+   as system-level guidance throughout the conversation.
+
+2. **Bootstrap anchor** (`buildPersonaAnchor`, `internal/agent/agent.go:628`): a
+   synthetic user/assistant exchange added right before `bootstrapMsgCount` is
+   captured:
+   ```go
+   newUserMessage(personaPrompt),
+   newAssistantMessage(personaRehearsal),
+   ```
+   where `personaRehearsal` (`internal/agent/agent.go:623`) is exactly:
+   ```text
+   🦍👑 ready. APES STRONG TOGETHER 🦍💪🤝
+   ```
+
+   This exchange is the last thing the model sees before the user's first real
+   message, anchoring the voice/style as the model's most recent impression.
+
+#### Compaction boundary
+
+The persona anchor is part of the bootstrap prefix: `bootstrapMsgCount` is set
+to `len(a.messages)` immediately after the anchor is appended
+(`internal/agent/agent.go:181`). Compaction preserves
+`messages[:bootstrapMsgCount]` untouched, so the persona anchor survives
+compaction in every context.
+
+The system prompt (which also carries `personaPrompt`) is not in the message
+slice at all — fantasy passes it separately — so compaction does not affect it.
+
+#### Disable path
+
+There is no runtime config toggle. To disable the persona, edit the two
+package-level variables in `internal/agent/agent.go`:
+
+```go
+var personaPrompt = ``       // line 530
+var personaRehearsal = ``    // line 623
+```
+
+With both empty, `buildPersonaAnchor` returns two empty messages that still
+take space in the transcript. For a complete removal, also edit `buildSystemPrompt`
+to skip the persona section.
+
+#### Per-message persona refresh
+
+`PerMessagePrefix` (`internal/agent/agent.go:638`) is a separate mechanism. When
+non-empty, each user message is prefixed with this string via
+`injectPerMessagePrefix`. This is designed to keep the persona voice fresh in
+long sessions. It is empty in the default checkout.
+
 `bootstrapMsgCount` is set to `len(a.messages)` after this bootstrap. Fresh
 agents also initialize:
 
