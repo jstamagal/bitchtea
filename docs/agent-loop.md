@@ -53,6 +53,21 @@ that `done` event schedules an `agentDoneMsg`, and `agentDoneMsg` performs the
 post-turn cleanup, session append, queue drain, and optional autonomous
 follow-up.
 
+Do not confuse the two `done` layers:
+
+- `llm.StreamEvent{Type:"done"}` is internal to the streamer boundary. It
+  carries rebuilt `[]llm.Message` transcript data from fantasy back to the
+  agent. The agent consumes it, splices those messages into `Agent.messages`,
+  and keeps reading until the stream channel closes.
+- `agent.Event{Type:"done"}` is emitted by `sendMessage` only after the stream
+  channel has ended normally or after an error/cancellation path has already
+  emitted idle and error state. This is the event the UI treats as the hard
+  end of the turn.
+- Channel close is a defensive second boundary. `waitForAgentEvent` also
+  returns `agentDoneMsg` if it sees the channel close. If the UI already
+  processed the explicit `done`, that later channel-close `agentDoneMsg` is
+  stale and ignored because it carries the old channel pointer.
+
 ## Event Types
 
 Agent events are defined in `internal/agent/event/event.go`.
@@ -1345,6 +1360,11 @@ can surprise tests that assert the exact accumulated stream text when
 The TUI debug hook captures and mutates a model copy. It is not a reliable
 Bubble Tea message path.
 
+`llm.StreamEvent{Type:"done"}` does not mean the TUI turn is finished. Tests
+that stop as soon as they see the LLM `done` event are testing the stream
+shape, not the UI/session boundary. The real boundary is the later
+`agent.Event{Type:"done"}` plus `agentDoneMsg` cleanup.
+
 ## Test Coverage Reality
 
 Strong tests:
@@ -1398,4 +1418,3 @@ Missing high-value tests:
 - Compaction should fail loudly when the streamer emits an `error` event.
 - Debug hook UI should be routed through Bubble Tea messages or documented as
   best-effort logging only, then tested accordingly.
-
