@@ -1,3 +1,5 @@
+> **Status:** SHIPPED
+
 # Phase 9: Service Identity Field
 
 Status: design only. Implementation tracked under epic `bt-p9`.

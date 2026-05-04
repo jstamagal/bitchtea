@@ -1,3 +1,5 @@
+> **Status:** SHIPPED
+
 # Phase 7: Daemon Integration Audit
 
 Status: design only. Implementation tracked under epic `bt-p7` (`bt-p7-attic-audit` is this doc; `bt-p7-process-model` and `bt-p7-verify` build on it).

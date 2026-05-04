@@ -1,3 +1,5 @@
+> **Status:** SHIPPED for client; resources/prompts/sampling future
+
 # Phase 6: MCP Transport, Config & Security Contract
 
 Status: design only. Implementation tracked under epic `bt-p6` (`bt-p6-client`,

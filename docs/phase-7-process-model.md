@@ -1,3 +1,5 @@
+> **Status:** SHIPPED
+
 # Phase 7: Daemon Process & IPC Model
 
 Status: design only. Builds directly on `docs/phase-7-daemon-audit.md` (the keep/delete/rewrite map). Implementation is split across `bt-p7-cli` (binary + flag plumbing) and `bt-p7-session-jobs` (compaction/consolidation jobs). This doc nails down lifecycle, IPC, locking, and crash recovery — the contract those tasks must satisfy.

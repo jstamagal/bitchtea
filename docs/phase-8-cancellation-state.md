@@ -1,3 +1,5 @@
+> **Status:** SHIPPED
+
 # Phase 8: Per-Tool Cancellation State Machine
 
 Design for `bt-p8-state`. Sibling tasks `bt-p8-tool-context`, `bt-p8-ui-keys`, `bt-p8-continue`, and `bt-p8-race` implement the pieces described here. This doc is the contract those tasks must satisfy.

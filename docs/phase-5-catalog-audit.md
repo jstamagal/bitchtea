@@ -1,3 +1,5 @@
+> **Status:** SHIPPED
+
 # Phase 5: Catwalk Catalog Audit
 
 Status: design only. Implementation tracked under epic `bt-p5`

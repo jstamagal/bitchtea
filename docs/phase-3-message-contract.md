@@ -1,3 +1,5 @@
+> **Status:** SHIPPED
+
 # Phase 3: Fantasy-Native Message and Storage Contract
 
 Status: design only. Implementation tracked under epic `bt-p3`. Sibling tasks

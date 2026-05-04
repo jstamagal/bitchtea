@@ -1,3 +1,5 @@
+> **Status:** SHIPPED
+
 # Phase 4: PrepareStep Responsibilities and Ordering
 
 Status: design only. Implementation tracked under epic `bt-p4`. Sibling tasks
