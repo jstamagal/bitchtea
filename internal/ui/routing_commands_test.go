@@ -90,6 +90,21 @@ func TestHandlePartCommand_lastContextRefused(t *testing.T) {
 	}
 }
 
+func TestHandlePartCommand_updatesAgentContextAndScopeWhenIdle(t *testing.T) {
+	m := newTestModel(t)
+	m.focus.SetFocus(Channel("code"))
+	result, _ := handlePartCommand(m, "/part", []string{"/part"})
+
+	if result.agent.ContextKey() != agent.DefaultContextKey {
+		t.Fatalf("agent context = %q, want %q", result.agent.ContextKey(), agent.DefaultContextKey)
+	}
+
+	scope := result.agent.Scope()
+	if scope.Kind != agent.MemoryScopeChannel || scope.Name != "main" {
+		t.Fatalf("agent scope = %#v, want channel main", scope)
+	}
+}
+
 // --- /query ---
 
 func TestHandleQueryCommand_setDirectFocus(t *testing.T) {

@@ -730,6 +730,7 @@ func handlePartCommand(m Model, _ string, parts []string) (Model, tea.Cmd) {
 		}
 		return m, nil
 	}
+	m.syncAgentContextIfIdle(m.focus.Active())
 	if err := m.focus.Save(m.config.SessionDir); err != nil {
 		m.errMsg(fmt.Sprintf("focus save: %v", err))
 		return m, nil
