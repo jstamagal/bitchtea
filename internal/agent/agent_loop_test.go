@@ -684,3 +684,73 @@ func TestSetScopeRootDoesNotDoubleInjectBootstrapMemory(t *testing.T) {
 		t.Fatalf("SetScope(root) added messages: before=%d after=%d — double-injection not prevented", beforeCount, afterCount)
 	}
 }
+
+// TestResumeOverwritesPreInjectedMemory reproduces the bt-wire.10 bug:
+// SetScope marks a HOT path as injected, then RestoreMessages replaces the
+// message slice — the injected messages are lost but the marker stays,
+// preventing future re-injection.
+//
+// This test is skipped until bt-wire.10 is fixed (RestoreMessages must reset
+// injectedPaths or SetScope must check whether the injected messages are still
+// present rather than relying on the boolean markers).
+func TestResumeOverwritesPreInjectedMemory(t *testing.T) {
+	t.Skip("bt-wire.10: pre-resume scoped injection markers are not cleared on RestoreMessages, " +
+		"so HOT.md content is lost after resume and never re-injected")
+
+	workDir := t.TempDir()
+	sessionDir := t.TempDir()
+
+	// Pre-populate a scoped HOT.md with known content.
+	hotContent := "# Channel X\n- Important context for tests\n"
+	scope := ChannelMemoryScope("x-channel", nil)
+	if err := SaveScopedMemory(sessionDir, workDir, scope, hotContent); err != nil {
+		t.Fatalf("save scoped memory: %v", err)
+	}
+
+	cfg := config.DefaultConfig()
+	cfg.WorkDir = workDir
+	cfg.SessionDir = sessionDir
+
+	agent := NewAgentWithStreamer(&cfg, &fakeStreamer{})
+
+	// Step 1: SetScope injects the HOT.md content.
+	agent.SetScope(scope)
+
+	// Verify the HOT.md content is present in messages.
+	found := false
+	for i := len(agent.messages) - 1; i >= 0; i-- {
+		if strings.Contains(msgText(agent.messages[i]), "Important context for tests") {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatal("step 1 failed: HOT.md content was not injected by SetScope")
+	}
+
+	// Step 2: Simulate a resume — RestoreMessages replaces the entire slice.
+	minimal := []fantasy.Message{
+		fantasyTextMessage("user", "hello after resume"),
+	}
+	agent.RestoreMessages(minimal)
+
+	// Verify the HOT.md content is GONE from messages.
+	for _, m := range agent.messages {
+		if strings.Contains(msgText(m), "Important context for tests") {
+			t.Fatal("step 2 failed: HOT.md content still in messages after RestoreMessages (should have been replaced)")
+		}
+	}
+
+	// Step 3: After resume, SetScope should re-inject the scoped HOT.md.
+	// This is what bt-wire.10 fixes — currently injectedPaths still has the
+	// marker, so this call is a no-op. After the fix, this should inject.
+	agent.SetScope(scope)
+
+	// After the fix, this should pass: HOT.md content should be re-injected.
+	for _, m := range agent.messages {
+		if strings.Contains(msgText(m), "Important context for tests") {
+			return // PASS: content was re-injected after resume
+		}
+	}
+	t.Error("bt-wire.10 bug: HOT.md content was NOT re-injected after RestoreMessages because injectedPaths was not reset")
+}
