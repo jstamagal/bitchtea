@@ -100,4 +100,4 @@ Data is stored under `~/.bitchtea/`:
 
 Per-workspace memory is stored in a gitignored `MEMORY.md` file at the workspace root.
 
-The startup config lives at `~/.bitchtearc` — see [commands.md](commands.md) for the RC file format.
+The startup config lives at `~/.bitchtea/bitchtearc` — see [user-guide.md](user-guide.md) for the RC file format and startup flow details.
