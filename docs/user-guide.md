@@ -1,187 +1,357 @@
-# 🦍 THE BITCHTEA SCROLLS: STREAMING & LLM
+# 🦍 BITCHTEA USER GUIDE
 
-Bitchtea talks to models through a unified streaming interface.
+Welcome to bitchtea — a BitchX-styled TUI coding assistant. This guide covers the
+full feature set from a user's perspective. For command reference see
+[commands.md](commands.md), and for deep-dives follow the cross-links.
 
-## RC Startup Flow (`~/.bitchtea/bitchtearc`)
+## Quick Start
 
-Bitchtea reads startup commands from an RC file at `~/.bitchtea/bitchtearc` (resolved by `config.RCPath()`, which joins `~/.bitchtea/` with `bitchtearc`). This file is optional; if it does not exist, startup proceeds normally.
+```bash
+# Set your API key
+export ANTHROPIC_API_KEY="sk-ant-..."
+# Or: export OPENAI_API_KEY="sk-..."
 
-### Grammar
+# Run
+go build -o bitchtea . && ./bitchtea
+```
 
-Each non-blank, non-comment line is treated as a command. Lines starting with `#` and blank lines are ignored. Commands are written without the leading `/` that the TUI uses:
+Type a message and press **Enter** to start a conversation. Use `@file` to inline
+file contents into your prompt:
 
 ```
-# bitchtearc -- startup commands
-set provider anthropic
-set model claude-opus-4-6
+what files are here? @README.md
+```
 
-# blank lines and comments are ignored
+For full setup see [getting-started.md](getting-started.md).
+
+## Slash Commands
+
+All slash commands are documented in [commands.md](commands.md). Here are the
+main categories:
+
+### Context & Navigation
+
+| Command | Action |
+|---------|--------|
+| `/join #channel` | Switch to or create a channel context |
+| `/query <nick>` | Open a direct-message conversation with a persona |
+| `/part [#channel]` | Leave the current or named context |
+| `/channels` (or `/ch`) | List all open contexts |
+| `/msg <nick> <text>` | Send a one-shot message without changing focus |
+
+### Configuration
+
+| Command | Action |
+|---------|--------|
+| `/set <key> [value]` | Show or change settings |
+| `/profile [load\|save\|show\|delete] <name>` | Manage connection profiles |
+| `/models` | Open a fuzzy-find model picker |
+
+### Session & Memory
+
+| Command | Action |
+|---------|--------|
+| `/sessions` (or `/ls`) | List saved sessions |
+| `/fork` | Branch a new session from current state |
+| `/compact` | Summarize history to save tokens |
+| `/memory` | View MEMORY.md and scoped HOT.md contents |
+| `/tokens` | Show estimated token usage and cost |
+| `/tree` | Show session branch structure |
+
+### Utilities
+
+| Command | Action |
+|---------|--------|
+| `/mp3 [cmd]` | Control the built-in MP3 player |
+| `/debug [on\|off]` | Toggle verbose HTTP logging |
+| `/copy [n]` | Copy the nth assistant response to clipboard |
+| `/activity [clear]` | View daemon background activity |
+| `/clear` | Clear scrollback |
+| `/help` (or `/h`) | Show quick help |
+| `/quit` (or `/q`) | Exit |
+
+For the complete `/set` key reference see [commands.md#set-key-reference](commands.md).
+
+## @file Token Expansion
+
+Typing `@filename` in your message inlines the file's contents into your prompt.
+The file path is resolved relative to the working directory. This is useful for
+providing context from source files, logs, or configuration:
+
+```
+Explain this error: @logs/server.log
+Refactor this function: @internal/worker/processor.go
+```
+
+Tab completion works for `@file` references — press **Tab** to autocomplete paths.
+
+## Context System (Channels & Queries)
+
+bitchtea organizes conversations into **contexts**, similar to IRC channels and
+direct messages:
+
+- **Channel** (`#name`) — a named topic context. Switch with `/join #dev`.
+- **Query** (`@persona`) — a direct conversation with a persona. Open with
+  `/query alice`.
+- **Root** — the default context, used when no channel or query is active.
+
+Each context has its own message history and memory scope. Switching contexts
+preserves the history of the previous context — you can `/join #docs` to work
+on documentation, then `/join #backend` to continue backend work without losing
+either thread.
+
+See [commands.md](commands.md) for detailed command traces, and
+[memory.md](memory.md) for how memory scopes work per context.
+
+## Memory Workflow
+
+bitchtea has a two-tier memory system:
+
+### Memory Files
+
+| Scope | Hot file (always injected) | Daily archive (searchable) |
+|-------|---------------------------|---------------------------|
+| Root | `<workdir>/MEMORY.md` | `~/.bitchtea/memory/<ws>/<date>.md` |
+| Channel | `.../HOT.md` | `.../daily/<date>.md` |
+| Query | `.../HOT.md` | `.../daily/<date>.md` |
+
+Hot memory is loaded into the LLM context at the start of each turn in that
+scope. Daily archives accumulate compaction flushes and tool writes and are
+retrievable via search.
+
+### Memory Tools
+
+The LLM has two tools for working with memory:
+
+- **`search_memory`** — keyword search across hot and daily files for the active
+  scope and its parents. The model is prompted to call this before substantive
+  work or when prior context matters.
+- **`write_memory`** — persist a note into hot memory (durable knowledge) or
+  the daily archive (ephemeral session notes). Supports scope overrides to write
+  into a different channel or query.
+
+### `/memory` Command
+
+Shows the current MEMORY.md and scoped HOT.md contents in the viewport. This is
+read-only — the output is not sent to the LLM.
+
+See [memory.md](memory.md) for the full reference including compaction, daemon
+consolidation, and scope semantics.
+
+## Profiles
+
+Profiles bundle provider, model, base URL, and API key into a named, repeatable
+configuration. bitchtea ships 15 built-in profiles and supports saved custom
+profiles.
+
+### Built-in Profiles
+
+Use `--profile <name>` on the command line or `/profile load <name>` at runtime:
+
+| Profile | Wire Format | Service |
+|---------|-------------|---------|
+| `ollama` | OpenAI | ollama (local, no API key required) |
+| `openrouter` | OpenAI | openrouter |
+| `zai-openai` | OpenAI | zai-openai |
+| `zai-anthropic` | Anthropic | zai-anthropic |
+| `aihubmix` | OpenAI | aihubmix |
+| ... and 10 more | | |
+
+### Custom Profiles
+
+Save your current connection settings as a named profile:
+
+```
+/profile save my-config
+```
+
+Profiles are stored as JSON files under `~/.bitchtea/profiles/`.
+
+### Manual Overrides
+
+Setting a connection parameter directly (e.g. `/set model gpt-4o`) clears the
+active profile tag. The settings persist but are no longer associated with a
+profile.
+
+See [providers.md](providers.md) for full provider routing, detection, and
+profile reference.
+
+## Startup Configuration
+
+bitchtea reads `~/.bitchtea/bitchtearc` on startup to set defaults and run
+initial commands. Lines starting with `#` are comments; blank lines are ignored.
+
+```
+# bitchtearc — startup commands
+set provider anthropic
+set model claude-sonnet-4-20250514
+join #dev
+query alice
+```
+
+### `set` Lines
+
+| Key | Value | Effect |
+|-----|-------|--------|
+| `provider` | `openai` or `anthropic` | Set LLM provider |
+| `model` | model name | Set model |
+| `apikey` | API key | Set API key |
+| `baseurl` | URL | Set API base URL |
+| `nick` | name | Set user nick |
+| `profile` | profile name | Load a profile |
+| `sound` | `on`/`off` | Toggle notification sounds |
+| `auto-next` | `on`/`off` | Toggle auto next-step prompts |
+| `auto-idea` | `on`/`off` | Toggle auto improvement ideas |
+
+### Non-set Lines
+
+Any other line is treated as a slash command without the leading `/`. These are
+executed silently after startup:
+
+```
 join #code
 query buddy
 ```
 
-Two kinds of lines are supported:
-
-**`set` lines** -- modify configuration before the TUI boots. Recognized keys:
-
-| Key          | Value                   | Effect                              |
-|-------------|-------------------------|--------------------------------------|
-| `provider`  | `openai` or `anthropic` | Set LLM provider                     |
-| `model`     | model name              | Set model (e.g., `claude-opus-4-6`)  |
-| `apikey`    | API key                 | Set API key                          |
-| `baseurl`   | URL                     | Set API base URL                     |
-| `nick`      | name                    | Set user nick                         |
-| `profile`   | profile name            | Load a saved or built-in profile     |
-| `sound`     | `on`/`off`              | Enable/disable notification sounds   |
-| `auto-next` | `on`/`off`              | Enable/disable auto next-step prompts|
-| `auto-idea` | `on`/`off`              | Enable/disable auto improvement ideas|
-
-**Non-set lines** -- any other text is treated as a slash command without the leading `/`. These are executed by the TUI after startup, with message output suppressed (no visible startup chatter). Examples: `join #channel`, `query nick`, `set` (show settings).
-
 ### Startup Ordering
 
-The RC file is processed in `main.go` via `applyStartupConfig()`:
-
-1. `config.ParseRC()` reads the file and returns non-blank, non-comment lines.
-2. `config.ApplyRCSetCommands(cfg, lines)` iterates the lines: `set` lines are applied to the config immediately; non-set lines are collected and returned separately.
-3. If a `--profile` flag is given, the profile is loaded and applied on top of the RC-file config.
-4. CLI flags (`--model`, `-m`, etc.) are then re-parsed on top, so explicit flags always win.
-5. After session restore (if any), the remaining non-set RC lines are passed to `buildStartupModel()` → `m.ExecuteStartupCommand(line)` for each.
-
-Within `ExecuteStartupCommand` (`internal/ui/model.go:327-341`), each command runs with `suppressMessages = true` so the startup commands do not produce visible chat messages. The model state (e.g., active context after `join #code`) is applied silently.
-
-### Session Restore Interaction
-
-Session restore happens before RC commands are executed. If `--resume` is provided, the session's entries are loaded into the model first, then RC commands run on top. This means RC commands like `join #code` will switch the active context after the session messages are loaded, leaving the session's message history visible but focusing a different context.
-
-### Profile vs Manual Overrides
-
-Loading a profile via `set profile <name>` applies all profile values (provider, model, base URL, API key). Any subsequent manual `set` command (e.g., `set model override-model`) clears the profile field (`cfg.Profile = ""`) so the profile is no longer considered active -- even though the remaining settings from the profile persist until explicitly changed. This prevents a stale profile label from masking manual overrides.
-
-Invalid provider values are silently ignored (the config remains unchanged).
-
-## 📡 THE STREAMER CONTRACT
-
-Defined in `internal/llm/types.go`, the `ChatStreamer` interface is the minimal surface for communication:
-
-```go
-type ChatStreamer interface {
-    StreamChat(ctx context.Context, messages []Message, reg *tools.Registry, events chan<- StreamEvent)
-}
-```
-
-### `StreamEvent` Types:
-- **`text`**: Incremental tokens of the response.
-- **`thinking`**: Internal model reasoning (if supported, e.g., O1/O3).
-- **`tool_call`**: A request to run a tool.
-- **`tool_result`**: The output of a tool execution.
-- **`usage`**: Final token counts for cost estimation.
-- **`done`**: Signal that the turn is finished, carries the final `Messages`.
-
-## 🔌 THE FANTASY SHIM
-
-Bitchtea uses `charm.land/fantasy` as its multi-provider engine. The `llm.Client` (in `internal/llm/client.go`) wraps this to provide:
-
-1. **Lazy Initialization**: Providers and models are only built when needed.
-2. **Provider Switching**: Seamless transition between OpenAI, Anthropic, and local Ollama.
-3. **Debug Hooks**: Intercepts raw HTTP requests/responses for `/debug on` mode.
-
-## 💰 COST TRACKING
-
-The `CostTracker` (in `internal/llm/cost.go`) estimates USD spend in real-time based on input/output tokens and model-specific pricing tiers.
-
-🦍💪🤝 APES STRONK TOGETHER 🦍💪🤝
-
-## Sound System
-
-Bitchtea can play terminal bell sounds to signal the end of an agent turn.
-
-### Toggle
-
-Notifications are disabled by default. Enable or disable via `/set`:
-
-```
-/set sound on
-/set sound off
-```
-
-### When Sounds Play
-
-A sound plays once when an agent turn completes -- after all streaming text and tool calls finish and the final `done` event is received. This is the only trigger in the current UI (`internal/ui/model.go:651-652`).
-
-### Sound Type
-
-The sound type is configured through the `SoundType` config field (default: `"bell"`). It is not directly settable via `/set` -- only the notification on/off toggle is exposed at runtime. The sound type can be set through a profile or by modifying the config directly.
-
-The `internal/sound` package defines these sound types:
-
-| Sound    | Bell pattern | When used |
-|----------|-------------|-----------|
-| `bell`   | 1 BEL       | Default   |
-| `done`   | 1 BEL       | Completion |
-| `success`| 1 BEL       | Success   |
-| `error`  | 3 BEL       | Error     |
-
-All types produce one BEL character except `error`, which produces three.
-
-### Implementation
-
-Sound is implemented in `internal/sound/sound.go`. It writes the ASCII BEL character (`\a`, 0x07) to `os.Stdout` via the package-level `Output` writer (overridable in tests). There are no external audio dependencies -- the sound is purely a terminal bell character, and whether the user hears an audible beep, sees a visual flash, or nothing at all depends on the terminal emulator's bell configuration.
-
-The package also exports `Beep()`, `Success()`, `Error()`, and `Done()` convenience functions, but only `Play()` is currently called from the UI layer.
+1. RC file is read from `~/.bitchtea/bitchtearc`
+2. `--profile` flag is applied (overrides RC)
+3. CLI flags (`--model`, `-m`, etc.) are applied (override everything)
+4. Session restore (if `--resume`)
+5. RC non-set commands are executed silently
 
 ## Headless Mode
 
-Bitchtea can run a single prompt without the TUI via the `--headless` (or `-H`) flag. This is useful for scripting, pipes, and integration with other tools.
-
-### Usage
+Run bitchtea without the TUI for scripting and pipes:
 
 ```bash
-# Prompt from a flag
-bitchtea --headless --prompt "list all Go files in the project"
-
-# Pipe a prompt from stdin
+bitchtea --headless --prompt "list all Go files"
 echo "check the build" | bitchtea --headless
-
-# Combine flag and stdin (concatenated with a newline)
-echo "then summarize" | bitchtea --headless --prompt "list all Go files"
-
-# Resume a session in headless mode
 bitchtea --headless --resume latest --prompt "continue where we left off"
 ```
 
-When `--headless` is set without `--prompt` or piped stdin, bitchtea exits with an error (`main.go:240-242`).
+**stdout** — model text output only.
+**stderr** — structured tool and status events (`[tool]`, `[status]`, `[auto]`).
 
-### Output Streams
+Headless mode supports follow-up loops: after a turn completes, any queued
+auto-next or auto-idea prompts are processed automatically.
 
-Headless mode splits output across two streams (`runHeadlessLoop`, `main.go:257-322`):
+See [cli-flags.md](cli-flags.md) for all available flags.
 
-**stdout** -- model text output only. Each `text` event from the agent stream is written to stdout verbatim. This is the content the model generates.
+## Mid-Turn Steering (Queue)
 
-**stderr** -- tool and status events in a structured machine-readable format:
-- `[tool] <name> args=<truncated-json>` -- when a tool call starts
-- `[tool] <name> result=<truncated-text>` -- when a tool succeeds
-- `[tool] <name> error=<message> result=<truncated-text>` -- when a tool fails
-- `[status] thinking` -- model is reasoning
-- `[status] tool_call` -- model is issuing tool calls
-- `[status] idle` -- no active state
-- `[auto] <label>` -- when a follow-up prompt is auto-injected
+While the LLM is generating a response, you can type additional messages. They
+are **queued** and processed when the current turn finishes:
 
-Tool args and results are truncated at 200 characters (newlines replaced with `\n`) to keep stderr readable. Status lines use `[status]` prefix for easy filtering.
+- Type a message while the agent is busy → it's queued with a
+  "Queued message (agent is busy): ..." confirmation in the viewport.
+- When the turn finishes, queued messages are sent to the LLM in order.
+- Messages older than 2 minutes are considered stale and are not automatically
+  drained (you can re-send them).
 
-### Follow-Up Loop
+This allows you to steer the conversation without waiting for the current turn
+to complete — type corrections, follow-ups, or clarifications ahead of time.
 
-After a turn completes, the agent may queue a follow-up prompt (`ag.MaybeQueueFollowUp()`). If one exists, headless mode automatically continues the conversation by sending the follow-up and streaming the next response. This repeats until no more follow-ups are queued. Each follow-up is announced on stderr with `[auto] <label>`.
+## Autonomous Modes
 
-A trailing newline is inserted between follow-up turns when the previous text output did not end with one, so each turn starts on a fresh line.
+bitchtea can automatically generate follow-up prompts after each turn:
 
-### Resume in Headless Mode
+- **`/set auto-next on`** — after each turn, the LLM is prompted to suggest
+  "next steps" and briefly explain why. This keeps the conversation moving
+  forward without manual input.
+- **`/set auto-idea on`** — after each turn, the LLM generates an improvement
+  idea, useful for code review or document editing sessions.
 
-The `--resume` flag works with `--headless`. The session is loaded first, then the prompt is sent. This allows continuing a previous conversation non-interactively.
+Both can be enabled independently. When the agent finishes a turn and one of
+these is active, a follow-up prompt is queued automatically. In headless mode
+these follow-ups are processed until no more remain.
 
-### Exit Codes
+## MP3 Player
 
-| Exit code | Meaning                                  |
-|-----------|------------------------------------------|
-| 0         | Success -- prompt processed completely   |
-| 1         | Error -- bad args, missing API key, etc. |
+bitchtea includes a built-in MP3 player for background music:
+
+```
+/mp3           Toggle the MP3 panel
+/mp3 rescan    Scan ~/.bitchtea/mp3/ for music files
+/mp3 play      Play the current track
+/mp3 pause     Toggle pause
+/mp3 next      Skip to next track
+/mp3 prev      Go to previous track
+```
+
+MP3 files go in `~/.bitchtea/mp3/`. See [ui-components.md](ui-components.md) for
+the player UI details.
+
+## Esc / Ctrl+C Ladder
+
+bitchtea uses a progressive Esc ladder for safe cancellation:
+
+| Stage | When | Action |
+|-------|------|--------|
+| 1 | Streaming, no active tool | "Press Esc again to cancel the turn." |
+| 2 | Streaming | Cancels the turn (queued messages preserved) |
+| — | Not streaming | No effect (resets the ladder) |
+
+- **Ctrl+C** during streaming cancels the entire turn immediately (equivalent to
+  Esc stage 2 in one press).
+- **Ctrl+C** while idle quits the application.
+- While a tool is actively running, Esc cancels just that tool first; the next
+  Esc cancels the turn.
+
+See [signals-and-keys.md](signals-and-keys.md) for the full ladder specification.
+
+## MCP Integration
+
+bitchtea supports the Model Context Protocol (MCP) for connecting external
+tool servers. Configure MCP servers via `<workdir>/.bitchtea/mcp.json`:
+
+```json
+{
+  "enabled": true,
+  "servers": {
+    "my-server": {
+      "command": "npx",
+      "args": ["-y", "@my/mcp-server"],
+      "env": {
+        "MY_API_KEY": "sk-..."
+      }
+    }
+  }
+}
+```
+
+MCP tools are namespaced as `mcp__<server>__<tool>` in the tool registry.
+Local built-in tools take precedence over MCP tools with the same name.
+
+See [mcp.md](mcp.md) for the full configuration reference.
+
+## Sound System
+
+Bitchtea can play terminal bell sounds at the end of an agent turn:
+
+```
+/set sound on    Enable notification sounds
+/set sound off   Disable
+```
+
+When enabled, one BEL character is sent to the terminal after each completed
+agent turn (three BELs on errors). Whether this produces an audible beep or
+visual flash depends on your terminal emulator's bell configuration.
+
+## Data Locations
+
+All data is stored under `~/.bitchtea/`:
+
+| Path | Contents |
+|------|----------|
+| `~/.bitchtea/sessions/` | JSONL session files (one per conversation) |
+| `~/.bitchtea/memory/` | Daily memory archives (scoped per workspace) |
+| `~/.bitchtea/catalog/` | Cached model catalog |
+| `~/.bitchtea/mp3/` | MP3 music files |
+| `~/.bitchtea/profiles/` | Saved connection profiles |
+| `~/.bitchtea/bitchtearc` | Startup command file |
+| `<workdir>/MEMORY.md` | Per-workspace root hot memory (gitignored) |
+| `<workdir>/.bitchtea/mcp.json` | MCP server configuration |
+
+🦍💪🤝 APES STRONK TOGETHER 🦍💪🤝
