@@ -656,3 +656,113 @@ recovery, dispatcher hook) run as part of the default test suite:
 ```bash
 go test ./internal/daemon/
 ```
+
+## Daemon Job Round-Trip
+
+Every daemon job follows the same path from TUI submission to result storage.
+The IPC contract is a file-based mailbox (three directories under
+`~/.bitchtea/daemon/`):
+
+```text
+mail/     ← TUI writes new jobs here as mail/<ulid>.json
+done/     ← daemon writes completed results here as done/<ulid>.json
+failed/   ← daemon writes failed jobs here as failed/<ulid>.json
+```
+
+### Submission → Execution → Result
+
+```text
+TUI / CLI caller
+  │
+  │  daemon.New(config.BaseDir())        ① create mailbox handle
+  │  mailbox.Submit(job{Kind, Args, ...})
+  │    → EnsureMailDir()                  create mail/ if absent
+  │    → MarshalJob(job)                  JSON with indent
+  │    → atomicWrite(mail/<ulid>.json)    tmp+rename for crash safety
+  │    → return id
+  ▼
+Daemon Run(ctx, opts)
+  │  ② Acquire(lock)                     exclusive process lock
+  │     Init()                            create mail/ + done/ + failed/
+  │     WritePid(pid)
+  │     recoverCrashedJobs()             pre-start mail/ entries → failed/
+  ▼
+Poll loop (every opts.PollEvery = 5s)
+  │
+  ▼
+processOnce(ctx, mailbox, logger, dispatch)   ③ dequeue + dispatch
+  │
+  ├─ mailbox.List()
+  │     → ReadDir(mail/)                        scan for *.json
+  │     → UnmarshalJob for each entry           strict JSON decoder
+  │     → return []Job sorted by ULID
+  │
+  ├─ for each job:
+  │     dispatch(ctx, job)                      ④ e.g. jobs.Handle
+  │       │
+  │       ├─ switch job.Kind                    ⑤ kind dispatch
+  │       │    "session-checkpoint" → handleSessionCheckpoint
+  │       │    "memory-consolidate" → handleMemoryConsolidate
+  │       │    (future kinds)       → Result{Success: false, Error: "no handler"}
+  │       │
+  │       └─ return Result{Success, Output, StartedAt, FinishedAt}
+  │
+  ├─ result.Success == true
+  │     mailbox.Complete(id, result)            ⑥ write done/<id>.json
+  │       → MarshalResult(result)
+  │       → atomicWrite(done/<id>.json)
+  │       → os.Remove(mail/<id>.json)           remove from queue
+  │
+  └─ result.Success == false
+        mailbox.Fail(id, reason)                ⑦ write failed/<id>.json
+          → MarshalResult(result)
+          → atomicWrite(failed/<id>.json)
+          → os.Remove(mail/<id>.json)
+```
+
+### Result polling (TUI side)
+
+After submission, the TUI can poll for results:
+
+```text
+model.go:submitDaemonCheckpoint
+  │
+  ├─ mailbox.Submit(job) → id
+  ├─ NotifyBackgroundActivity("submitted: <id>")
+  │
+  └─ (later) poll done/<id>.json or failed/<id>.json
+       ├─ exists + Success → result processed
+       ├─ exists + !Success→ log failure
+       └─ neither → still pending in mail/
+```
+
+### Crash recovery path
+
+```text
+Daemon start (Run)
+  │
+  ▼
+recoverCrashedJobs(mailbox, startTime, logger)
+  │  ⑧ scan mail/ by mtime
+  │
+  ├─ mtime < startTime
+  │     → mailbox.Fail(id, "previous daemon crashed mid-job")
+  │     → moved to failed/
+  │
+  └─ mtime >= startTime
+       → left in mail/ for normal processing
+```
+
+### File references
+
+| Hop | File | Function |
+|-----|------|----------|
+| ① | `internal/daemon/mailbox.go:52` | `Mailbox.Submit` |
+| ② | `internal/daemon/run.go:43` | `Run` — lock, init, poll loop |
+| ③ | `internal/daemon/run.go:141` | `processOnce` — list + dispatch |
+| ④ | `internal/daemon/jobs/handler.go` | `Handle` — kind dispatch |
+| ⑤ | `internal/daemon/jobs/session_checkpoint.go` | `handleSessionCheckpoint` |
+| ⑥ | `internal/daemon/mailbox.go:121` | `Mailbox.Complete` |
+| ⑦ | `internal/daemon/mailbox.go:138` | `Mailbox.Fail` |
+| ⑧ | `internal/daemon/run.go:197` | `recoverCrashedJobs` |
+| TUI | `internal/ui/model.go:1318` | daemon checkpoint submission |

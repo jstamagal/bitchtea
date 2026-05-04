@@ -2,6 +2,7 @@ package tools
 
 import (
 	"context"
+	"fmt"
 	"image"
 	"image/color"
 	"image/png"
@@ -447,21 +448,27 @@ func TestBashNonexistentCommandDoesNotPanic(t *testing.T) {
 	reg := NewRegistry(dir, t.TempDir())
 
 	// bash itself runs fine, so a nonexistent inner command produces a
-	// non-zero exit (handled via ProcessState). To exercise the
-	// "ProcessState == nil" branch we'd need bash itself to be missing; we
-	// can't reasonably remove bash from PATH inside the test process. Just
-	// confirm we don't panic on the common "command not found" path.
-	defer func() {
-		if r := recover(); r != nil {
-			t.Fatalf("execBash panicked: %v", r)
-		}
-	}()
-	result, err := reg.Execute(context.Background(), "bash", `{"command":"this_binary_definitely_does_not_exist_xyz"}`)
+	// non-zero exit (handled via ProcessState). Verify we get both the
+	// exit code marker and stderr content (bash's "command not found" or
+	// "No such file") without panicking.
+	cmd := "this_binary_definitely_does_not_exist_xyz"
+	result, err := reg.Execute(context.Background(), "bash", fmt.Sprintf(`{"command":%q}`, cmd))
 	if err != nil {
-		t.Fatalf("bash should not error on inner command-not-found: %v", err)
+		t.Fatalf("bash should not return error on inner command-not-found: %v", err)
 	}
+
+	// Must show a non-zero exit code marker.
 	if !strings.Contains(result, "Exit code:") {
-		t.Fatalf("expected exit code in output, got %q", result)
+		t.Fatalf("expected exit code marker in output, got %q", result)
+	}
+	// The exit code must not be 0.
+	if strings.Contains(result, "Exit code: 0") {
+		t.Fatalf("expected non-zero exit code for nonexistent command, got %q", result)
+	}
+	// The command name itself (or part of the bash error) should appear
+	// in the output (combined stdout+stderr).
+	if !strings.Contains(result, "not found") && !strings.Contains(result, "No such file") {
+		t.Fatalf("expected bash error message in output, got %q", result)
 	}
 }
 

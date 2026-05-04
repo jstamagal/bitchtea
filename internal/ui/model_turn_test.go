@@ -790,6 +790,28 @@ func TestRapidEscInputDoesNotPanic(t *testing.T) {
 	for i := 0; i < 10; i++ {
 		got, _ = got.(Model).Update(tea.KeyMsg{Type: tea.KeyEsc})
 	}
+
+	// Assert terminal state after all Esc presses:
+	//   Esc 1: warns "Press Esc again" (no active tool)
+	//   Esc 2: cancels turn, arms queue-clear
+	//   Esc 3: clears queued messages
+	//   Esc 4-10: bail (not streaming, queue already cleared)
+	final := got.(Model)
+	if final.streaming {
+		t.Fatal("expected streaming to be false after turn cancellation")
+	}
+	if final.escStage != 0 {
+		t.Fatalf("expected escStage=0 after ladder exhausted, got %d", final.escStage)
+	}
+	if final.queueClearArmed {
+		t.Fatal("expected queueClearArmed to be false after queue cleared")
+	}
+	if len(final.queued) != 0 {
+		t.Fatalf("expected queued messages to be cleared, got %d", len(final.queued))
+	}
+	if final.cancel != nil {
+		t.Fatal("expected cancel to be nil after turn cancellation")
+	}
 }
 
 // TestCtrlCAndEscInterleave checks that interleaving Ctrl+C and Esc doesn't

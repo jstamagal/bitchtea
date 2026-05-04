@@ -161,25 +161,73 @@ func TestReplayExhaustedFixtureDoesNotPanic(t *testing.T) {
 	streamer := newFixtureStreamer(t, "simple_reply.json")
 	agent := NewAgentWithStreamer(&cfg, streamer)
 
-	for i := 0; i < 2; i++ {
-		eventCh := make(chan Event, 16)
-		go agent.SendMessage(context.Background(), "hello", eventCh)
+	// First call: the fixture has one turn, so we should get the reply text.
+	eventCh1 := make(chan Event, 16)
+	go agent.SendMessage(context.Background(), "hello", eventCh1)
 
-		var gotDone bool
-		for ev := range eventCh {
-			switch ev.Type {
-			case "done":
-				gotDone = true
-			case "error":
-				t.Fatalf("unexpected error event on call %d: %v", i+1, ev.Error)
-			}
-		}
-		if !gotDone {
-			t.Fatalf("expected done event on call %d", i+1)
+	var text1 string
+	var gotDone1 bool
+	for ev := range eventCh1 {
+		switch ev.Type {
+		case "text":
+			text1 += ev.Text
+		case "done":
+			gotDone1 = true
+		case "error":
+			t.Fatalf("unexpected error event on call 1: %v", ev.Error)
 		}
 	}
+	if !gotDone1 {
+		t.Fatal("call 1: expected done event")
+	}
+	if text1 != "offline reply" {
+		t.Fatalf("call 1: expected 'offline reply', got %q", text1)
+	}
 
-	if streamer.calls != 2 {
-		t.Fatalf("expected 2 streamer calls, got %d", streamer.calls)
+	// Second call: fixture exhausted, so we should get only a done event
+	// with no text (empty turn gracefully handled by StreamChat).
+	eventCh2 := make(chan Event, 16)
+	go agent.SendMessage(context.Background(), "hello again", eventCh2)
+
+	var text2 string
+	var gotDone2 bool
+	for ev := range eventCh2 {
+		switch ev.Type {
+		case "text":
+			text2 += ev.Text
+		case "done":
+			gotDone2 = true
+		case "error":
+			t.Fatalf("unexpected error event on call 2: %v", ev.Error)
+		}
+	}
+	if !gotDone2 {
+		t.Fatal("call 2: expected done event")
+	}
+	if text2 != "" {
+		t.Fatalf("call 2: expected empty output when fixture exhausted, got %q", text2)
+	}
+
+	// Third call: same exhausted path, confirming repeated exhaustion doesn't panic.
+	eventCh3 := make(chan Event, 16)
+	go agent.SendMessage(context.Background(), "once more", eventCh3)
+
+	var gotDone3 bool
+	for ev := range eventCh3 {
+		switch ev.Type {
+		case "done":
+			gotDone3 = true
+		case "text":
+			// Should not get text on exhausted fixture.
+		case "error":
+			t.Fatalf("unexpected error event on call 3: %v", ev.Error)
+		}
+	}
+	if !gotDone3 {
+		t.Fatal("call 3: expected done event")
+	}
+
+	if streamer.calls != 3 {
+		t.Fatalf("expected 3 streamer calls, got %d", streamer.calls)
 	}
 }

@@ -94,7 +94,23 @@ func TestChatMessageFormatLongContentNoPanic(t *testing.T) {
 	}
 
 	for _, msg := range tests {
-		assertNoPanicFormat(t, msg)
+		formatted := assertNoPanicFormat(t, msg)
+
+		// All formatted messages must be non-empty and must contain at
+		// least one recognizable fragment from the long content.
+		if formatted == "" {
+			t.Fatalf("Format returned empty string for type %v", msg.Type)
+		}
+		if !strings.Contains(formatted, "long content") {
+			t.Fatalf("Format output for type %v missing content fragment: %q", msg.Type, formatted)
+		}
+		if !strings.Contains(formatted, "14:30") && msg.Type != MsgRaw {
+			t.Fatalf("Format output for type %v missing timestamp: %q", msg.Type, formatted)
+		}
+		// Raw messages are passthrough and exclude timestamp.
+		if msg.Type == MsgRaw && formatted != longContent {
+			t.Fatalf("raw message Format must be content passthrough, got %q", formatted)
+		}
 	}
 }
 
@@ -112,7 +128,19 @@ func TestChatMessageFormatEmptyContentNoPanic(t *testing.T) {
 	}
 
 	for _, msg := range tests {
-		assertNoPanicFormat(t, msg)
+		formatted := assertNoPanicFormat(t, msg)
+		// Raw messages are a pure content passthrough: empty content = empty output.
+		if msg.Type == MsgRaw {
+			if formatted != "" {
+				t.Fatalf("raw message with empty content must be empty, got %q", formatted)
+			}
+			continue
+		}
+		// All other types must produce non-empty output even with empty content
+		// (they include timestamp, nick/prefix, and formatting separators).
+		if formatted == "" {
+			t.Fatalf("Format returned empty string for type %v with empty content", msg.Type)
+		}
 	}
 }
 
@@ -134,14 +162,16 @@ func TestAgentMessageFormatsMarkdown(t *testing.T) {
 	}
 }
 
-func assertNoPanicFormat(t *testing.T, msg ChatMessage) {
+func assertNoPanicFormat(t *testing.T, msg ChatMessage) string {
 	t.Helper()
 
+	var formatted string
 	defer func() {
 		if r := recover(); r != nil {
 			t.Fatalf("Format panicked for type %v: %v", msg.Type, r)
 		}
 	}()
 
-	_ = msg.Format()
+	formatted = msg.Format()
+	return formatted
 }

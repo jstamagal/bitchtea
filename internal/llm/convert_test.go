@@ -178,6 +178,7 @@ func TestFantasyToLLMAssistantToolCallRoundTrip(t *testing.T) {
 // add tests rather than mutating these to pass.
 
 func TestFantasyToLLMEmptyPartsNoPanic(t *testing.T) {
+	// nil Content (most common empty case).
 	got := fantasyToLLM(fantasy.Message{
 		Role:    fantasy.MessageRoleAssistant,
 		Content: nil,
@@ -193,6 +194,37 @@ func TestFantasyToLLMEmptyPartsNoPanic(t *testing.T) {
 	}
 	if got.ToolCallID != "" {
 		t.Fatalf("tool_call_id should be empty, got %q", got.ToolCallID)
+	}
+
+	// Empty Content slice (zero-length) — must behave identically to nil.
+	got2 := fantasyToLLM(fantasy.Message{
+		Role:    fantasy.MessageRoleAssistant,
+		Content: []fantasy.MessagePart{},
+	})
+	if got2.Content != "" {
+		t.Fatalf("empty slice: content = %q, want empty", got2.Content)
+	}
+	if len(got2.ToolCalls) != 0 {
+		t.Fatalf("empty slice: should produce no tool calls, got %+v", got2.ToolCalls)
+	}
+
+	// Other roles with nil content — each should preserve the correct role
+	// and produce empty content with no tool calls or tool_call_id.
+	for _, role := range []fantasy.MessageRole{
+		fantasy.MessageRoleUser,
+		fantasy.MessageRoleSystem,
+		fantasy.MessageRoleTool,
+	} {
+		gotR := fantasyToLLM(fantasy.Message{Role: role, Content: nil})
+		if gotR.Role == "" || gotR.Role == "assistant" {
+			t.Fatalf("role %v: got role %q, expected non-empty non-assistant", role, gotR.Role)
+		}
+		if gotR.Content != "" {
+			t.Fatalf("role %v: content = %q, want empty", role, gotR.Content)
+		}
+		if len(gotR.ToolCalls) != 0 {
+			t.Fatalf("role %v: tool calls should be empty, got %+v", role, gotR.ToolCalls)
+		}
 	}
 }
 
@@ -857,6 +889,7 @@ func TestLLMToFantasyEmptyAssistantNoContentNoToolCalls(t *testing.T) {
 }
 
 func TestLLMToFantasyEmptyUserNoPanic(t *testing.T) {
+	// Empty user message: Content is empty string, not nil.
 	in := Message{Role: "user"}
 	fm := LLMToFantasy(in)
 	if fm.Role != fantasy.MessageRoleUser {
@@ -867,6 +900,26 @@ func TestLLMToFantasyEmptyUserNoPanic(t *testing.T) {
 		t.Fatalf("expected empty content, got %+v", fm.Content)
 	}
 	roundTripLLM(t, "empty user", in)
+
+	// Empty system message: similar semantics, must not add phantom content.
+	inSys := Message{Role: "system"}
+	fmSys := LLMToFantasy(inSys)
+	if fmSys.Role != fantasy.MessageRoleSystem {
+		t.Fatalf("role = %v, want system", fmSys.Role)
+	}
+	if len(fmSys.Content) != 0 {
+		t.Fatalf("expected empty content for system, got %+v", fmSys.Content)
+	}
+	roundTripLLM(t, "empty system", inSys)
+
+	// Tool result with only a ToolCallID (no body) — still round-trips.
+	inTool := Message{Role: "tool", ToolCallID: "call_42"}
+	fmTool := LLMToFantasy(inTool)
+	if fmTool.Role != fantasy.MessageRoleTool {
+		t.Fatalf("role = %v, want tool_result", fmTool.Role)
+	}
+	// Should have at least one part (the tool_call_id gets propagated).
+	roundTripLLM(t, "tool result no body", inTool)
 }
 
 func TestLLMToFantasyNilToolCallsClean(t *testing.T) {

@@ -336,7 +336,8 @@ func TestDebugRoundTripper_NilResponseNoError(t *testing.T) {
 }
 
 // TestDebugRoundTripper_NilHookDoesNotPanic ensures a nil hook is tolerated
-// across all branches (success, transport error, nil response).
+// across all branches (success, transport error, nil response) and that errors
+// and responses are faithfully propagated through the debug wrapper.
 func TestDebugRoundTripper_NilHookDoesNotPanic(t *testing.T) {
 	t.Run("success", func(t *testing.T) {
 		base := &recordingRoundTripper{resp: makeResp(200, "application/json", "{}")}
@@ -346,19 +347,40 @@ func TestDebugRoundTripper_NilHookDoesNotPanic(t *testing.T) {
 		if err != nil {
 			t.Fatalf("RoundTrip: %v", err)
 		}
+		if resp == nil {
+			t.Fatal("expected non-nil response on success")
+		}
+		if resp.StatusCode != 200 {
+			t.Fatalf("expected 200 status, got %d", resp.StatusCode)
+		}
 		_ = resp.Body.Close()
 	})
 	t.Run("transport error", func(t *testing.T) {
 		base := &recordingRoundTripper{err: errors.New("nope")}
 		rt := newDebugRoundTripper(base, nil)
 		req, _ := http.NewRequest("GET", "https://example.test/", nil)
-		_, _ = rt.RoundTrip(req)
+		resp, err := rt.RoundTrip(req)
+		if err == nil {
+			t.Fatal("expected error to be propagated")
+		}
+		if err.Error() != "nope" {
+			t.Fatalf("expected 'nope' error, got %v", err)
+		}
+		if resp != nil {
+			t.Fatal("expected nil response on transport error")
+		}
 	})
 	t.Run("nil response", func(t *testing.T) {
 		base := &recordingRoundTripper{resp: nil, err: nil}
 		rt := newDebugRoundTripper(base, nil)
 		req, _ := http.NewRequest("GET", "https://example.test/", nil)
-		_, _ = rt.RoundTrip(req)
+		resp, err := rt.RoundTrip(req)
+		if err != nil {
+			t.Fatalf("expected nil error on nil response, got %v", err)
+		}
+		if resp != nil {
+			t.Fatal("expected nil response to be preserved as nil")
+		}
 	})
 }
 
