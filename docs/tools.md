@@ -154,3 +154,30 @@ also add a typed wrapper and wire it into `typedToolFor`.
 tools from `internal/mcp`. Local tools always win on name collision. MCP tool
 names use the `mcp__<server>__<tool>` namespace prefix, guaranteeing no
 collision with local tool names (none start with `mcp__`).
+
+### Schema Flattening
+
+`translateTools` and `AssembleAgentTools` both need to convert OpenAI-style tool
+schemas (with `type`, `properties`, `required` nested under a root object) into
+the flat parameters + required pair that `fantasy.ToolInfo` expects. Without
+this conversion, fantasy would include `"type"`, `"properties"`, and
+`"required"` as bogus parameter names in the schema sent to the provider —
+which Anthropic rejects as invalid.
+
+Four helpers in `internal/llm/tools.go` handle the translation:
+
+| Function | Line | Purpose |
+| :--- | :--- | :--- |
+| `splitSchema` | `tools.go:124` | Entry point. Takes the full OpenAI-style `parameters` map and returns `(properties, required)`. Detects whether the input is already a flat map or a structured schema with `"type":"object"`. |
+| `sanitizeProperties` | `tools.go:157` | Unwraps the `"properties"` value from the schema object. Drops malformed entries so a single corrupt property doesn't break the tool surface. |
+| `parseRequired` | `tools.go:179` | Extracts `"required"` from the schema. Handles both `[]string` (Go-native) and `[]any` (JSON-decoded). |
+| `filterRequired` | `tools.go:198` | Filters required names to only those present in properties. Returns `nil` (not `[]string{}`) when nothing survives — some providers reject `"required": []`. |
+
+The same `splitSchema` is reused by `splitMCPSchema` (`mcp_tools.go:182`) for
+MCP input schemas.
+
+Tests in `internal/llm/tools_test.go` cover edge cases:
+- `TestSplitSchemaEdgeCases` (line 122): 13 sub-cases (missing properties, malformed required, mixed-type lists, nil-after-filter, non-object schemas, already-flat inputs).
+- `TestFilterRequiredEmptyAfterFilterMarshalsWithoutRequiredKey` (line 303): regression guard (bt-qna) proving that nil required omits the `"required"` JSON key.
+- `TestTranslateToolsExtractsFantasyParameterShape` (line 17): end-to-end assertion that `translateTools` output never carries bogus top-level schema keys.
+- `TestTranslateToolsProducesValidSchemasForRealRegistryDefinitions` (line 376): every registered tool's schema round-trips through flattening safely.
