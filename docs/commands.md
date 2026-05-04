@@ -54,6 +54,7 @@ Concrete example: the `openrouter` built-in is `provider=openai service=openrout
 
 ## 🛠️ UTILITIES
 
+- **`/activity [clear]`**: Display background activity queued by daemon jobs (e.g., session-checkpoint submissions). Each entry shows a timestamp, originating context, and summary. The unread counter (`bg:N`) in the status bar is reset after viewing. `/activity clear` empties the queue and reports how many entries were removed.
 - **`/copy [n]`**: Copy the last (or nth) assistant response to the clipboard.
   **Clipback mechanism** (tried in order):
   1. **OSC 52** (primary): If stdout is a terminal, the text is base64-encoded and written as an OSC 52 escape sequence (`\x1b]52;c;<base64>\a`). Terminals and multiplexers that support the protocol (iTerm2, tmux, kitty, Windows Terminal, etc.) capture this and write to the system clipboard. No external binary required.
