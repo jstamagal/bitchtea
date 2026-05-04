@@ -41,7 +41,7 @@ Here is exactly what is happening under the hood:
 2.  **The Streamer Boundary (`internal/llm`):** The underlying LLM client expects the legacy `[]llm.Message`.
 3.  **The Bridge (`llm.FantasySliceToLLM`):** When a turn begins, the entire `fantasy.Message` history is projected downwards into `llm.Message` structs.
 4.  **The Return Journey (`llm.LLMToFantasy`):** When the streamer finishes, the resulting legacy messages are lifted back up into `fantasy.Message` structs.
-5.  **Untyped Tools:** Tools are *still* untyped. They rely on `Registry.Execute(name, argsJSON)`. The typed `fantasy.NewAgentTool` wrappers are the aspirational target, but they are not wired in.
+5.  **Hybrid Tool Surface:** Tools are split between typed and legacy adapters. Six are wired up as typed `fantasy.NewAgentTool` wrappers under `internal/llm/typed_*.go`: `read` (`typed_read.go`), `write` (`typed_write.go`), `edit` (`typed_edit.go`), `bash` (`typed_bash.go`), `search_memory` (`typed_search_memory.go`), and `write_memory` (`typed_write_memory.go`). The remaining eight still flow through the generic `bitchteaTool` adapter and `Registry.Execute(name, argsJSON)`: `terminal_start`, `terminal_send`, `terminal_keys`, `terminal_snapshot`, `terminal_wait`, `terminal_resize`, `terminal_close`, and `preview_image`. `translateTools` picks the typed wrapper when one exists and falls back to the generic adapter otherwise; both bottom out in `Registry.Execute`.
 
 **Do not write code assuming the `fantasy` migration is finished.** You must respect the bridging layers.
 
@@ -74,10 +74,8 @@ When running `bitchtea --headless --prompt '...'`, the TUI is bypassed. The exac
 
 As an architect, you must be aware of the ghosts in the machine.
 
-*   **The Phantom Daemon:** `CLAUDE.md` explicitly states: *'there is currently no daemon binary, no `cmd/daemon`, no `internal/daemon` package.'* **This is a lie.** `cmd/daemon/main.go` and the `internal/daemon` package exist and are wired into `main.go`. If `os.Args[1] == 'daemon'`, it traps the execution and bypasses the TUI.
-*   **The `write_memory` hallucination:** The System Prompt explicitly tells the LLM:
-    *- 'call write_memory with a clear title and concise content.'*
-    However, the `write_memory` tool **does not exist** in the `tools.Registry`. The LLM is being instructed to use a phantom tool. Only `search_memory` is wired in.
+*   **The Daemon (real, minimal):** The daemon binary entry point lives at `cmd/daemon/main.go` and the implementation under `internal/daemon/` (`run.go` main loop, `mailbox.go` file-based IPC, `envelope.go` framing, `lock.go`, `pidfile.go`, `jobs/` dispatch). It is wired into `main.go`: when `os.Args[1] == "daemon"`, execution traps into the daemon binary and bypasses the TUI. Currently it handles session checkpoint and memory consolidation jobs — see `docs/phase-7-daemon-audit.md` and `docs/phase-7-process-model.md`.
+*   **`write_memory` (live):** The tool exists. It is implemented as a typed `fantasy.NewAgentTool` wrapper at `internal/llm/typed_write_memory.go` and dispatched through `internal/tools/tools.go` (`case "write_memory"`). The System Prompt's instruction to *'call write_memory with a clear title and concise content'* is honored.
 *   **Isolated Contexts:** We masquerade as an IRC client (`/join #channel`). The UI labels change, but the agent's underlying history slices and session compaction routines often bleed context because the isolation layer isn't fully airtight yet.
 
 **Your directive:** Do not blindly trust the `README.md` or `CLAUDE.md`. Trust the code. When you build, respect the raw mechanisms documented above.
