@@ -34,17 +34,24 @@ The `daemon` command provides orthogonal functionality for background tasks.
 
 ## Environment Variables
 
-| Variable | Description |
-| :--- | :--- |
-| `OPENAI_API_KEY` | API key for OpenAI services. |
-| `OPENAI_BASE_URL` | Custom base URL for OpenAI-compatible APIs. |
-| `ANTHROPIC_API_KEY` | API key for Anthropic services. |
-| `OPENROUTER_API_KEY` | API key for OpenRouter (used by the `openrouter` profile). |
-| `ZAI_API_KEY` | API key for Z.ai services (used by the `zai-*` profiles). |
-| `BITCHTEA_MODEL` | Set the default model. |
-| `BITCHTEA_PROVIDER` | Set the default provider (e.g., `openai`, `anthropic`). |
-| `BITCHTEA_CATWALK_URL` | Base URL for the Catwalk model catalog. If unset, background updates are disabled. |
-| `BITCHTEA_CATWALK_AUTOUPDATE` | Enable background catalog refreshes (accepts `1`, `true`, `yes`, `on`). Defaults to `false`. |
+| Variable | Default | Precedence | Description |
+| :--- | :--- | :--- | :--- |
+| `OPENAI_API_KEY` | — | — | API key for OpenAI services. |
+| `OPENAI_BASE_URL` | — | — | Custom base URL for OpenAI-compatible APIs. |
+| `ANTHROPIC_API_KEY` | — | — | API key for Anthropic services. |
+| `OPENROUTER_API_KEY` | — | — | API key for OpenRouter (used by the `openrouter` profile). |
+| `ZAI_API_KEY` | — | — | API key for Z.ai services (used by the `zai-*` profiles). |
+| `BITCHTEA_MODEL` | `gpt-4o` | 4th (env var) | Default model name. Overridden by `~/.bitchtearc` `set model ...`, by `--model` / `-m`, and by profile loading. Read once at startup. |
+| `BITCHTEA_PROVIDER` | `openai` | 4th (env var) | Default provider name (`openai` or `anthropic`). Overridden by `~/.bitchtearc` `set provider ...`, by profile loading, and indirectly by `--model` (provider may be inferred). Read once at startup. |
+| `BITCHTEA_CATWALK_URL` | (empty — off) | 4th (env var) | Base URL for the Catwalk model catalog. Background catalog refresh is disabled when unset. Ignored unless `BITCHTEA_CATWALK_AUTOUPDATE=true`. Read once at startup. |
+| `BITCHTEA_CATWALK_AUTOUPDATE` | `false` | 4th (env var) | Enable background catalog refreshes. Accepts `1`, `true`, `yes`, `on` (case-insensitive). When enabled and `BITCHTEA_CATWALK_URL` is set, starts a bounded (5s timeout) background refresh of the model catalog at startup. Errors are silently swallowed — next `/models` read uses the previous cache. Read once at startup. |
+
+**Precedence order (highest to lowest):**
+1. CLI flags (`--model`, `--profile`)
+2. Loaded profile (via `--profile`)
+3. `~/.bitchtearc` `set` commands
+4. Environment variables (`BITCHTEA_*`)
+5. Hardcoded defaults
 
 ## Data Directories
 
