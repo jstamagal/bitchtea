@@ -1,5 +1,8 @@
 # Testing
 
+> [!IMPORTANT]
+> MANDATORY before closing any code-changing issue: `go build ./...`, `go test ./...`, `go test -race ./...`, `go vet ./...`.
+
 This file is the test map for the current checkout. It says what each suite actually proves, what it fakes, which behaviors are pinned to exact strings, and where the coverage stops at a seam instead of a real external failure.
 
 Cross-reference the behavior docs in `docs/agent-loop.md`, `docs/memory.md`, `docs/sessions.md`, and `docs/ui-components.md` when you need the runtime story behind these tests.
@@ -184,11 +187,13 @@ This is a pure output test. It does not try to validate terminal or audio semant
 
 ### `internal/daemon`
 
+The daemon package is the only area with a real daemon subprocess smoke test, but most daemon coverage still runs in process or at the handler boundary.
+
 - `run_test.go` covers the daemon core loop in process: jobs without handlers are rejected into `failed/`, lock contention returns `ErrLocked`, and the pid file appears during the run and is removed on shutdown.
 - `integration_test.go` covers stale-lock recovery, two-daemon contention, crash-recovery quarantine of pre-existing mail, and the dispatch hook path. These tests use real files and lock semantics, but they stay in-process.
-- `e2e_test.go` is the only subprocess smoke. It builds `cmd/daemon`, runs it with an isolated `HOME`, submits a `session-checkpoint` job, waits for the `done/` result, and SIGTERMs the process to prove graceful shutdown and pidfile cleanup. It is Linux-only and skipped under `-short`.
+- `e2e_test.go` is the only subprocess daemon test. It builds `cmd/daemon`, runs it with an isolated `HOME`, submits a `session-checkpoint` job, waits for the `done/` result, and SIGTERMs the process to prove graceful shutdown and pidfile cleanup. It is Linux-only, skipped under `-short`, and exercises the real daemon lock, pidfile, mailbox, signal handling, and subprocess shutdown path.
 - `mailbox_test.go`, `pidfile_test.go`, `lock_test.go`, `envelope_test.go`, and `ulid_test.go` cover filesystem mailbox behavior, pidfile read/write/remove, lock acquire/release, envelope serialization, and ULID ordering.
-- `jobs/checkpoint_test.go`, `jobs/memory_consolidate_test.go`, `jobs/dispatch_test.go`, and `jobs/jobs_test.go` cover the job handlers. The checkpoint tests prove sibling-file writes, envelope-path acceptance, missing-path rejection, idempotence, and cancellation. The memory-consolidation tests prove unique appends, cutoff respect, idempotence, envelope-scope fallback, required dirs, and cancellation. Dispatch tests cover unknown kinds and timestamp filling.
+- `jobs/checkpoint_test.go`, `jobs/memory_consolidate_test.go`, `jobs/dispatch_test.go`, and `jobs/jobs_test.go` cover the job handlers in isolation from the daemon subprocess. The checkpoint tests prove sibling-file writes, envelope-path acceptance, missing-path rejection, idempotence, and cancellation. The memory-consolidation tests prove unique appends, cutoff respect, idempotence, envelope-scope fallback, required dirs, and cancellation. Dispatch tests cover unknown kinds and timestamp filling.
 
 The daemon suite has the best process-level coverage in the tree, but only one test actually crosses the process boundary.
 
