@@ -143,8 +143,99 @@ machinery. They are only batched after the current turn reaches `agentDoneMsg`.
 
 ### Autonomous follow-up
 
-After `agentDoneMsg`, the UI calls `m.agent.MaybeQueueFollowUp()`. If it
-returns a request, the UI shows exactly:
+The autonomous follow-up pipeline lets the agent continue working without
+user input. It is controlled by two config flags, toggled at runtime:
+
+- `/set auto-next on` — enables auto-next-steps re-prompting
+- `/set auto-idea on` — enables auto-next-idea re-prompting
+- `--auto-next-steps` / `--auto-next-idea` (headless CLI flags,
+  `main.go:202-205`)
+
+Both default to off.
+
+#### State machine (`MaybeQueueFollowUp`, `internal/agent/agent.go:860`)
+
+Failed or canceled turns never queue follow-up (`lastTurnState !=
+turnStateCompleted`). When both config flags are off, the function always
+returns nil.
+
+The state machine cycles through follow-up kinds. The agent tracks
+`lastCompletedFollowUp` — the kind of the last completed turn — to decide
+what to queue next:
+
+| Current `lastCompletedFollowUp` | Next action                                               |
+|---------------------------------|-----------------------------------------------------------|
+| None (initial user turn)        | Queue `auto-next-steps` if `AutoNextSteps` is on          |
+|                                 | else queue `auto-next-idea` if `AutoNextIdea` is on       |
+| `auto-next-steps`               | Check for `AUTONEXT_DONE` token. If found and             |
+|                                 | `AutoNextIdea` is on → queue `auto-next-idea`.            |
+|                                 | If not found → queue another `auto-next-steps`.           |
+|                                 | If found and no `AutoNextIdea` → stop (nil).              |
+| `auto-next-idea`                | Check for `AUTOIDEA_DONE` token. If found → stop (nil).   |
+|                                 | If not found → back to `auto-next-steps`.                 |
+
+The state machine is infinite: if the model never emits the done token, the
+turn loops forever through auto-next-steps. There is no built-in max
+iteration cap.
+
+#### Magic tokens
+
+Two sentinel strings signal the model considers a phase complete:
+
+```go
+autoNextDoneToken = "AUTONEXT_DONE"   // internal/agent/agent.go:94
+autoIdeaDoneToken = "AUTOIDEA_DONE"   // internal/agent/agent.go:95
+```
+
+Detection (`assistantMarkedDone`, `internal/agent/agent.go:924`): trims the
+assistant's raw output text, then checks
+`strings.HasPrefix(strings.ToUpper(trimmed), token)`. This is
+case-insensitive but the model is instructed to use the uppercase form.
+
+#### The prompts
+
+When auto-next-steps is queued, the agent sends (`AutoNextPrompt`,
+`internal/agent/agent.go:844`):
+
+```text
+What are the next steps? If there is remaining work, do it now instead of
+just describing it, including tests or verification when they matter. If
+everything is done, start your response with AUTONEXT_DONE and briefly say
+why.
+```
+
+When auto-next-idea is queued, the agent sends (`AutoIdeaPrompt`,
+`internal/agent/agent.go:851`):
+
+```text
+Based on what you've done so far, pick the next highest-impact improvement
+and implement it now. If there is nothing worthwhile left to improve, start
+your response with AUTOIDEA_DONE and briefly say why.
+```
+
+#### Token stripping in streaming text
+
+When a follow-up turn streams text chunks, the agent wraps the text handler
+in a `followUpStreamSanitizer` (`internal/agent/agent.go:948`) that strips
+the done token from the visible output.
+
+The sanitizer has three states: `Undecided` (buffers until it sees whether
+the chunk starts with a token), `Strip` (skips trailing whitespace/punctuation
+after a token), and `Pass` (forwards chunks verbatim). It strips `AUTONEXT_DONE`
+and `AUTOIDEA_DONE` when they appear as a leading token, along with any
+trailing whitespace, `:`, or `-`.
+
+After the stream ends, `sanitizeAssistantText` (`internal/agent/agent.go:932`)
+runs a post-hoc cleanup on the final assistant content. This handles tokens
+that arrived in a single chunk and were not split across streaming boundaries.
+If stripping the token leaves an empty string, the content is replaced
+with `"Done."`.
+
+#### TUI path
+
+After `agentDoneMsg`, the UI calls `m.agent.MaybeQueueFollowUp()` (called
+inside `handleAgentDone` at `internal/ui/model.go:731`). If a request is
+returned, the UI shows exactly:
 
 ```text
 *** <label>: continuing...
@@ -157,17 +248,23 @@ auto-next-steps
 auto-next-idea
 ```
 
-Then it calls `m.sendFollowUpToAgent(req)`.
+Then it calls `m.sendFollowUpToAgent(req)` which starts a new sendMessage
+goroutine with `sendMessage(ctx, req.Prompt, req.Kind, events)`.
 
-### Headless mode
+#### Headless path
 
-`runHeadlessLoop` starts one turn by calling `ag.SendMessage(ctx, prompt,
-events)`. If an autonomous follow-up is queued after that turn, it writes this
-to stderr before starting the follow-up turn:
+`runHeadlessLoop` (`main.go:257`) loops explicitly. After each turn it calls
+`ag.MaybeQueueFollowUp()` (`main.go:303`). If the request is non-nil, it
+writes to stderr:
 
 ```text
 [auto] <label>
 ```
+
+then calls `ag.SendFollowUp(ctx, followUp, events)` to start the next turn.
+If stdout text did not end with `\n`, the headless loop prints a newline
+before starting the follow-up turn (`main.go:307-312`). When all follow-ups
+are done, the loop breaks and a final trailing newline is written if needed.
 
 ## `startAgentTurn`: The TUI Turn Boundary
 
