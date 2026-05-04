@@ -2458,3 +2458,87 @@ The error is a one-shot diagnostic embedded inline in the prompt.
 
 Implementation: `internal/agent/context.go:128-159`
 Tests: `internal/agent/context_test.go:220-250`
+
+## REPL Turn Data-Flow
+
+The full round-trip from keystroke to response update flows through 9 hops:
+
+```text
+internal/ui/model.go:Update
+  │  tea.KeyMsg{enter} → trim input → "/" → handleCommand
+  │                                     else → sendToAgent(input)
+  ▼
+internal/ui/model.go:sendToAgent
+  │  ① "Enter" captured, routes to startAgentTurn
+  ▼
+internal/ui/model.go:startAgentTurn
+  │  ② cancel previous turn, create fresh ctx+cancel
+  │     ch := make(chan agent.Event, 100), m.eventCh = ch
+  │     m.agent.InitContext(ctxKey)
+  │     m.agent.SetContext(ctxKey)
+  │     m.agent.SetScope(memoryScope)
+  │     streaming = true
+  │     start(ctx, ch)  ← fires the goroutine below
+  ▼
+go m.agent.SendMessage(ctx, input, ch)       ③ goroutine
+  │  ExpandFileRefs → append to a.messages
+  │  StreamChat goroutine starts
+  ▼
+go a.streamer.StreamChat(ctx, llm.FantasySliceToLLM( ④ goroutine
+  │     a.messages), a.tools, streamEvents)
+  │  Retry loop (1s/2s/4s/8s/16s/32s/64s)
+  ▼
+llm/stream.go:streamOnce
+  │  ⑤ fantasy.Agent.Stream(ctx, call{Prompt, Prior, PrepareStep,
+  │     OnTextDelta, OnReasoningDelta, OnToolCall, OnToolResult,
+  │     OnStreamFinish, OnError})
+  │     → llm.StreamEvent{text|thinking|tool_call|tool_result|usage|error|done}
+  ▼
+agent/agent.go:sendMessage select loop
+  │  ⑥ select on streamEvents / ctx.Done()
+  │     text        → streamSanitizer.Consume → Event{text}
+  │     thinking    → Event{thinking}
+  │     tool_call   → a.ToolCalls[t]++; Event{state, tool_start}
+  │     tool_result → Event{tool_result}
+  │     error       → Event{state, error, done}; return
+  │     done        → splice ev.Messages into a.messages
+  │                   Event{state:StateIdle, done}
+  ▼
+internal/ui/model.go:handleAgentEvent(agentEventMsg)
+  │  ⑦ per-event viewport update:
+  │     text        → append chunk to streamBuffer
+  │     tool_start  → show "calling <toolName>..."
+  │     tool_result → show truncated result
+  │     state       → update status bar (thinking/running tools)
+  ├─ chain: waitForAgentEvent(m.eventCh)  ← next event
+  ▼
+internal/ui/model.go:agentDoneMsg
+  │  ⑧ streaming=false, agentState=StateIdle
+  │     session persist (per-context watermark)
+  │     focus.Save(), SaveCheckpoint()
+  │     queued message drain → next turn or idle
+  ▼
+internal/ui/model.go:Update
+  │  ⑨ idle — wait for next tea.KeyMsg
+```
+
+The channel identity guard is load-bearing: `agentEventMsg` and `agentDoneMsg`
+both check `msg.ch != nil && msg.ch != m.eventCh` and silently drop stale events
+from previous turns that arrive after a new turn has started. This prevents a
+slow goroutine from a cancelled turn from corrupting the active turn's state.
+
+### Turn lifecycle timing
+
+```text
+Update(enter) ──→ startAgentTurn ──→ go SendMessage ──→ StreamChat ──→ ...
+     │  (synchronous)     (synchronous)     (goroutine)     (goroutine)
+     ▼
+waitForAgentEvent ──→ handleAgentEvent ──→ waitForAgentEvent ──→ ... ──→ agentDoneMsg
+     (tea.Cmd)           (Update passes)      (next tea.Cmd)               (final)
+```
+
+All actual LLM I/O and tool execution runs in goroutines. The Bubble Tea event
+loop never blocks — it schedules `waitForAgentEvent` as a `tea.Cmd`, processes
+the returned `agentEventMsg` in `Update`, and immediately schedules the next
+`waitForAgentEvent` for the same channel. Only the `agentDoneMsg` handler
+terminates the chain.
