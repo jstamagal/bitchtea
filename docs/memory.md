@@ -1380,6 +1380,94 @@ and writes the string. It does not use `flock`. The code comment says this is
 acceptable because the daemon is single-instance, but it does not coordinate
 with a simultaneous foreground `write_memory` process.
 
+### Flock Asymmetry
+
+The live foreground `write_memory` tool path (via `AppendHot` / `AppendDailyForScope`)
+takes an exclusive `flock` on the hot and daily files before writing. The daemon
+memory-consolidate job does **not** use `flock`. It opens the HOT file with
+`O_CREATE | O_APPEND | O_WRONLY` and calls `f.WriteString(block)` directly
+(`appendConsolidatedBlock` in `internal/daemon/jobs/memory_consolidate.go:279`).
+
+The stated rationale is that the daemon is single-instance, so there is no
+daemon-vs-daemon contention. However, foreground-vs-daemon contention is real:
+
+```text
+foreground write_memory       -> AppendHot   -> flock(HOT)
+daemon memory-consolidate     -> appendConsolidatedBlock -> no flock
+```
+
+A live agent writing `write_memory` will block if another process holds the
+file (but the daemon never takes the lock), so foreground writes will never be
+blocked by the daemon. The reverse is not true: the daemon can write into HOT
+while a foreground `flock` is held, producing interleaved or torn writes.
+
+### Torn-Write Window
+
+Because daemon consolidation appends a multi-line block (`## consolidated ...\n\n<body>\n\n`)
+as a single `f.WriteString` call, each block is atomic at the `write(2)` level for
+reasonably sized bodies (the block fits in a single kernel buffer). But there is
+no coordination with foreground writers:
+
+1. Foreground takes `flock`, starts appending a `## <title> ...` block.
+2. Daemon writes `## consolidated ...` block to the same file descriptor (no lock).
+3. Foreground finishes its block and releases `flock`.
+
+The result is that a heading from one writer can appear in the middle of another
+writer's body text, producing a semantically broken but structurally valid
+markdown file. Search will still find headings, but snippet boundaries may cross
+between unrelated entries.
+
+This is currently accepted as an acceptable risk because:
+- The daemon runs infrequently (minutes-scale heartbeat) while foreground writes
+  are sub-second.
+- The window for a foreground write to overlap with a daemon append is small.
+- Search returns one result per file; torn entries at boundaries will still
+  produce a result with the matched term.
+
+### Consolidation Markers (Dedupe)
+
+`handleMemoryConsolidate` uses HTML comments embedded in HOT heading lines to
+prevent duplicate entries on re-run:
+
+```text
+<!-- bitchtea-consolidated:<daily-filename>|<entry-timestamp> -->
+```
+
+Before writing, `loadConsolidatedMarkers` scans the entire HOT file for existing
+markers. For each daily entry not yet marked, `appendConsolidatedBlock` appends:
+
+```text
+## consolidated <ts> <!-- bitchtea-consolidated:<daily-basename>|<ts> -->
+
+<trimmed body>
+
+```
+
+The marker includes both the source daily file basename and the entry's RFC3339
+timestamp, so the same logical entry from the same daily file is never appended
+twice. Rerunning consolidation against unchanged daily files produces
+`entries_added: 0` and `entries_skipped: <previous-count>` -- the operation is
+idempotent.
+
+Marker scan truncation: if a `<!-- bitchtea-consolidated:` prefix is found but
+no closing `-->` follows, the scan aborts to avoid an infinite loop. Truncated
+markers from a mid-write crash will not prevent future dedup; the next run's
+scan restarts from the beginning of the (now potentially fixed) file.
+
+### No Live Notification
+
+Consolidation writes new blocks into HOT, but the running bitchtea process does
+not know that HOT changed. `Agent.SetScope` injects scoped HOT once per path per
+process (`injectedPaths` dedup). If HOT was already injected, daemon-added
+consolidated entries will not reach the LLM until:
+
+- The process restarts and HOT is re-injected at bootstrap.
+- The agent switches to a scope whose HOT has not been injected yet.
+- A `search_memory` call finds the new entries in HOT during a live turn.
+
+There is no inotify, signal, or channel to trigger a HOT reload in the running
+process after daemon consolidation completes.
+
 Successful result output JSON:
 
 ```json
