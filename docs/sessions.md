@@ -1096,6 +1096,89 @@ Resumed session <N>: <basename>
 After success, `m.session` points to the loaded JSONL. Future turn-end appends
 write into that resumed file.
 
+## ParentID Chain and Fork Mechanics
+
+Every session entry carries an `ID` (nanosecond timestamp as string) and a
+`ParentID` pointing to the previous entry's `ID`. The chain is built
+automatically in `Session.Append`:
+
+```go
+if entry.ParentID == "" && len(s.Entries) > 0 {
+    entry.ParentID = s.Entries[len(s.Entries)-1].ID
+}
+```
+
+This produces a linear parent chain through the entire session:
+
+```text
+Entry 0:  ID=1746394800000000001, ParentID=""
+Entry 1:  ID=1746394800000000002, ParentID="1746394800000000001"
+Entry 2:  ID=1746394800000000003, ParentID="1746394800000000002"
+...
+```
+
+The chain is always linear within a single JSONL file. There is no branching
+structure on disk -- `ParentID` always points to the immediate predecessor in
+append order, not to an ancestor multiple steps back.
+
+### `/fork` Branching
+
+`Session.Fork(fromID)` copies entries from the start through (and including) the
+first entry whose `ID == fromID`, then writes them to a new file:
+
+```text
+session_150000.jsonl             # original
+session_150000_fork_150525.jsonl # fork
+```
+
+The fork file name is `<old-base>_fork_<HHMMSS>.jsonl` in the same directory.
+The copy loop reads from `s.Entries` (the in-memory slice) and writes to the
+new file with `O_CREATE | O_WRONLY | O_TRUNC`, ignoring marshal and write
+errors for individual entries. Only open and close errors propagate.
+
+After `/fork`, `m.session` is replaced with the new fork session. Subsequent
+appends write into the fork file with fresh IDs and ParentIDs forming a new
+chain that starts after the fork point. This is where branching happens:
+entries in the original file continue their chain if it is still active in
+another process, while the fork builds its own independent chain from the
+same ancestor.
+
+If `fromID` is not found in the session's entries, the fork copies all entries
+and the new session starts at the end of the old chain.
+
+Important behaviors:
+- `Session.Fork` does **not** use `flock` when writing the fork file.
+- Marshal and individual write errors inside the copy loop are silently ignored
+  (the loop calls `continue` on marshal failure and ignores `f.Write` errors).
+- `Entry.BranchTag` exists in the schema (`branch` JSON key) but is not written
+  by any live code path today.
+
+### `/tree` Reconstruction
+
+`Session.Tree()` reads the in-memory `s.Entries` slice and renders it as a
+linear tree with ASCII glyphs:
+
+```text
+Session: 2026-05-04_150100.jsonl
+Entries: 5
+
+├── [15:01:00] user: hello
+├── [15:01:05] assistant: Hi there! How can I help?
+├── [15:01:08] tool: read: contents of /path/to/file...
+└── [15:01:10] assistant: Based on what I read...
+```
+
+Every entry except the last gets `├──`; the last gets `└──`. Content is
+truncated to 60 bytes, newlines replaced with spaces. If `Entry.ToolName`
+is set, the role displays as `tool:<ToolName>`.
+
+Current limitation: `Tree()` does **not** render an actual branching tree
+from `ParentID` chains. It renders entries in slice order (append order),
+regardless of `ParentID` values. The tree glyphs are cosmetic -- they do not
+represent structural parent-child relationships. This is a known gap: see
+`tools.md` "Tests" section and the inline code comment at
+`internal/session/session.go:215`.
+
 ### `/tree`
 
 If there is no active session:
@@ -1611,37 +1694,78 @@ as not fully wired until the save watermark is reconciled after compaction.
 
 ## Daemon Session Checkpoint Job
 
-The daemon has an opt-in job handler:
+The daemon has an opt-in job handler dispatched through `internal/daemon/jobs/`
+(`jobs.go` line 39):
 
 ```text
-session-checkpoint
+KindSessionCheckpoint = "session-checkpoint"
 ```
 
-The job args shape is:
+### Job Args and Envelope
+
+The job args shape (`checkpointArgs` in `internal/daemon/jobs/checkpoint.go`):
 
 ```json
 {
-  "session_path": "<path>",
-  "model": "<model>"
+  "session_path": "<path to JSONL>",
+  "model": "<model name>"
 }
 ```
 
-If `args.session_path` is empty, the handler falls back to the envelope's
-top-level `SessionPath`.
+`session_path` is the only required field. If `args.session_path` is empty,
+the handler falls back to `job.SessionPath` from the daemon envelope. If both
+are empty, the job fails with `session_path is required`.
 
-Failures:
+The daemon envelope carries these fields that `Handle` routes to the handler:
 
-```text
-session-checkpoint: parse args: <error>
-session-checkpoint: session_path is required
-session-checkpoint: load <path>: <error>
-session-checkpoint: save: <error>
-session-checkpoint: <context error>
+```go
+type Job struct {
+    Kind        string
+    SessionPath string
+    WorkDir     string
+    Scope       ScopeSpec
+    Args        json.RawMessage
+    ...
+}
 ```
 
-The handler loads the JSONL read-only with `session.Load`. It never writes the
-active JSONL. It writes only the sibling checkpoint sidecar in
-`filepath.Dir(session_path)`.
+The handler never writes the active JSONL. It loads read-only with
+`session.Load` and writes only the sibling checkpoint sidecar at
+`filepath.Dir(session_path)/.bitchtea_checkpoint.json`.
+
+### Conflict With Live Process Writes
+
+The daemon checkpoint handler and the foreground `SaveCheckpoint` (called at
+every turn end in `agentDoneMsg`) target the same file:
+
+```text
+<SessionDir>/.bitchtea_checkpoint.json
+```
+
+This is a **last-write-wins** file -- no `flock` is used by either writer.
+`SaveCheckpoint` truncates and rewrites the file on every call. The daemon
+handler does the same.
+
+Conflict scenarios:
+
+1. Foreground turn ends, writes checkpoint with Turn=5, ToolCalls={read:2}.
+2. Daemon heartbeat fires, loads the same session, sees the same 5 turns,
+   writes checkpoint with Turn=5, ToolCalls={read:2} -- **identical state**.
+   No conflict beyond the timestamp field.
+3. Foreground turn ends (Turn=6), writes checkpoint. Daemon fires before the
+   next foreground turn, writes Turn=6 again -- **identical state**.
+4. Foreground turn ends, writes Turn=7. Daemon fires simultaneously, loads
+   session (may see Turn=6 if the foreground hasn't written its last entry yet
+   or may see Turn=7), and writes. Whichever `os.WriteFile` completes last
+   wins. Lost data is transient: the next write from either path recomputes
+   from the full JSONL and restores the correct count.
+
+Because the checkpoint is always recomputed from the full session JSONL
+(re-read on every daemon run, rebuilt from agent counters on every foreground
+run), conflicts do not compound. A stale checkpoint is corrected by the next
+write from either path.
+
+### Turn and Tool Counting
 
 Turn count is recomputed as:
 
@@ -1649,23 +1773,32 @@ Turn count is recomputed as:
 count of entries where Bootstrap == false and Role == "user"
 ```
 
-Tool call counts are recomputed from every entry's legacy `ToolCalls`, grouped
-by `ToolCalls[].Function.Name`. This means v1 entries whose legacy projection
-does not include tool calls would not count here, even if `Msg` contained some
-future richer call representation.
+Tool call counts are recomputed from every entry's `ToolCalls[].Function.Name`.
+This reads the legacy projection fields, not `Msg.ToolCallPart`. v1 entries
+where legacy projection dropped tool calls (should not happen with current
+`projectFantasyToLegacy`) would not be counted.
 
-Successful daemon result output JSON is:
+### Test Coverage
 
-```json
-{
-  "checkpoint_path": "<dir>/.bitchtea_checkpoint.json",
-  "turn_count": <turns>,
-  "tool_call_count": <total tool calls>
-}
-```
+Tests in `internal/daemon/jobs/checkpoint_test.go`:
 
-The daemon handler is bounded by a 30 second context and checks cancellation
-before/after major I/O.
+- `TestCheckpointWritesSiblingFile` -- verifies the handler writes
+  `.bitchtea_checkpoint.json` in the session's directory with correct
+  TurnCount, ToolCalls, and Model.
+- `TestCheckpointAcceptsEnvelopeSessionPath` -- verifies `job.SessionPath`
+  fallback when args is empty.
+- `TestCheckpointMissingSessionPath` -- verifies error when both args and
+  envelope lack a session path.
+- `TestCheckpointIdempotent` -- proves two runs produce identical meaningful
+  fields (TurnCount, ToolCalls map) even though the Timestamp differs.
+- `TestCheckpointHonorsCancellation` -- proves a pre-cancelled context
+  aborts before writing and leaves no checkpoint file on disk.
+
+### Bounds
+
+The daemon handler is bounded by a 30 second context (`context.WithTimeout`)
+and checks `ctx.Err()` before load, before save, and between loading and
+summarizing.
 
 ## What Goes To The LLM On Resume
 
