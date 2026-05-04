@@ -5,6 +5,12 @@ This document is generated from the TUI implementation, primarily
 below. Do not treat key behavior as terminal folklore; the Bubble Tea update
 loop is the source of truth.
 
+Source files used for this pass: `internal/ui/model.go`,
+`internal/ui/signal_test.go`, `internal/ui/model_picker_keys.go`,
+`internal/ui/mp3.go`, `internal/llm/tool_context.go`,
+`internal/llm/stream.go`, `internal/llm/tools.go`, and typed tool wrappers
+under `internal/llm/typed_*.go`.
+
 ## 1. Signal Table
 
 | Signal/message | Source | Behavior |
