@@ -308,10 +308,48 @@ After the hook returns, the original response is returned unmodified.
 
 ## Usage Event Reporting and CostTracker
 
-Each fantasy step's `OnStreamFinish` callback emits a `"usage"` event
-containing a `TokenUsage` struct with input tokens, output tokens, cache
-creation tokens, and cache read tokens (as reported by the provider; cache
-fields are zero for providers that don't report them).
+### Data Flow
+
+The cost tracking pipeline flows from each fantasy step's completion through
+to the agent's counters:
+
+```text
+OnStreamFinish (stream.go, fantasy callback)
+  │  emits "usage" event on events channel
+  ▼
+Agent.handleEvent (agent.go:345)
+  │  case ev.Type == "usage":
+  ▼
+CostTracker.AddTokenUsage(ev.Usage)     # agent.go:347 — accumulates per step
+  │   CostTracker.InputTokens      += u.InputTokens
+  │   CostTracker.OutputTokens     += u.OutputTokens
+  │   CostTracker.CacheCreationTokens += u.CacheCreationTokens
+  │   CostTracker.CacheReadTokens    += u.CacheReadTokens
+  ▼
+CostTracker.EstimateCostFor(model, service)    # agent.Cost() at agent.go:1278
+  │  PriceSource.Lookup(modelID, service)
+  │    ↓
+  │  CatalogPriceSource  → lookupEnvelope → lookupEmbedded (fallback)
+  ▼
+FormatCost(float64) → "$0.0042" / "$1.23" / "<$0.001"   # cost.go:117
+```
+
+Each fantasy step in a multi-step tool loop emits its own `"usage"` event
+with per-step token counts. The agent wires `CostTracker.AddTokenUsage`
+into its event handler, so every `"usage"` event from every step increments
+the session counters (`agent.go:347`):
+
+```go
+a.CostTracker.AddTokenUsage(*ev.Usage)
+```
+
+After the turn, `Agent.Cost()` (`agent.go:1278`) returns the session total:
+
+```go
+func (a *Agent) Cost() float64 {
+    return a.CostTracker.EstimateCostFor(a.config.Model, a.config.Service)
+}
+```
 
 ### CostTracker
 
