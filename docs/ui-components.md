@@ -884,24 +884,35 @@ Width `<= 0` returns the input unchanged.
 
 ### Theme
 
-The built-in theme name is:
+The `Theme` package variable is a struct in `themes.go`:
+
+| Field           | ANSI Color | Role                     |
+|-----------------|------------|--------------------------|
+| `Name`          | `"BitchX"` | Theme label (string, not a color) |
+| `Cyan`          | `14`       | Primary accent, tool calls, input prompt |
+| `Green`         | `10`       | User nicks, success       |
+| `Magenta`       | `13`       | Agent nicks, thinking     |
+| `Yellow`        | `11`       | System messages           |
+| `Red`           | `9`        | Error messages            |
+| `Blue`          | `12`       | Info, bar background      |
+| `White`         | `15`       | Primary text, bar foreground |
+| `Gray`          | `8`        | Timestamps, dim text, separators |
+| `DarkBg`        | `0`        | Black background          |
+| `BarBg`         | `4`        | Top/bottom bar background  |
+| `ThinkingBarFg` | `15`       | Thinking bar foreground    |
+| `ThinkingBarBg` | `4`        | Thinking bar background    |
+
+The only built-in theme is **BitchX**. There is no mechanism for user-defined themes at runtime.
+
+#### `/theme` slash command
+
+Registered at `internal/ui/commands.go:45`. The handler (`handleThemeCommand`, line 404) is informational only — it reports the current (and only) theme name and does not accept arguments:
 
 ```text
-BitchX
+Theme switching is disabled. Built-in theme: BitchX.
 ```
 
-Palette values:
-
-- cyan `14`
-- green `10`
-- magenta `13`
-- yellow `11`
-- red `9`
-- blue `12`
-- white `15`
-- gray `8`
-- black `0`
-- bar background `4`
+There is no runtime theme switch.
 
 ### Styles
 
@@ -1542,6 +1553,42 @@ Important gap:
 
 - the helper exists, but the normal UI path does not call it.
 - the actual turn-end save path uses the agent save watermark directly.
+
+## Persona Model
+
+Personas are named entities that can participate in channels or receive direct
+messages. There are two layers:
+
+### Agent persona
+
+The agent has a built-in persona defined in `internal/agent/agent.go`:
+
+- `personaPrompt` (line 530) — "I AM CODE APE. KING APE calls me SHE APE."
+  A long-form persona harness written in cave-speak that establishes the agent's
+  voice, values, and behavioral constraints.
+- `personaRehearsal` (line 623) — `🦍👑 ready. APES STRONG TOGETHER 🦍💪🤝`.
+- `buildPersonaAnchor()` (line 628) — constructs a synthetic user/assistant
+  exchange that anchors the persona as the last bootstrap pair. This is injected
+  after context files and MEMORY.md so the model's final impression before the
+  user's first real message is the persona voice.
+
+The persona anchor is rebuilt on every `Reset()` (line 1174) and on context
+switch (`SetContext`, line 1108) so the model always sees it immediately before
+user input.
+
+### Invited personas (channel membership)
+
+Personas tracked by `MembershipManager` are named strings — any string is a
+valid persona name. They are:
+
+- **Case-sensitive** (`internal/ui/context.go:66`: "persona names matter")
+- Added to channels via `/invite`, removed via `/kick`
+- Visible via the channel's member list
+- DM-able via `/query <name>` or `/msg <name> <text>`, which creates a
+  `KindDirect` context (`internal/ui/context.go:15`)
+
+The session `Entry.Target` field (`internal/session/session.go:88`) records the
+persona or nick for direct-message routing.
 
 ## `internal/ui/membership.go` and `internal/ui/invite.go`
 
@@ -2391,15 +2438,53 @@ Covered in `membership.go` and `invite.go`.
 
 This file holds the startup splash art and the fixed welcome text.
 
+### `splashArts` (6 variants)
+
+Six hard-coded ANSI art blocks stored as string constants:
+
+| Variable      | ANSI Color |
+|---------------|------------|
+| `splashArt1` | Cyan (`\033[1;36m`) — bitchtea ASCII logo |
+| `splashArt2` | Red (`\033[1;31m`) — BITCHTEA ASCII logo |
+| `splashArt3` | Magenta (`\033[1;35m`) — "bitchtea" ASCII + subtitle |
+| `splashArt4` | Yellow (`\033[1;33m`) — framed box with v0.1.0 |
+| `splashArt5` | Green (`\033[1;32m`) — framed box with tagline |
+| `splashArt6` | Red (`\033[1;31m`) — ASCII art blocks |
+
 ### `SplashArt()`
 
-Returns one of six hard-coded ANSI art blocks chosen at random.
+Returns one of the six art blocks chosen at random (`rand.Intn(6)`).
 
 Important detail:
 
 - the art selection is not deterministic
 - the raw art is stored as `MsgRaw`
 - the transcript logger strips ANSI codes, so the log gets plain text only
+
+### Splash wire-up (`model.go`)
+
+The splash is not rendered at startup in `Init()`. Instead, `Init()` returns a
+`splashMsg` command via `showSplash()` (line 354):
+
+```go
+func (m Model) showSplash() tea.Cmd {
+    return func() tea.Msg { return splashMsg{} }
+}
+```
+
+When `Update()` receives `splashMsg` (line 407), it emits four things in order:
+
+1. `SplashArt()` — random ANSI art block (`MsgRaw`)
+2. `SplashTagline` — the `« bitchtea » — putting the BITCH back...` tagline
+   (`MsgRaw`)
+3. `ConnectMsg` — provider/profile, model, and working directory (`MsgRaw`)
+4. Context file count (`MsgSystem`)
+5. Memory status or absence (`MsgSystem`)
+6. Session path (`MsgSystem`)
+7. `MOTD` — the help banner (`MsgRaw`)
+8. System prompt, if non-empty (`MsgSystem`)
+
+Then `refreshViewport()` scrolls to the bottom.
 
 ### `SplashTagline`
 
