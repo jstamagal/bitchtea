@@ -7,7 +7,7 @@ Memory has two storage families:
 - Root hot memory: `MEMORY.md` in the active worktree.
 - Scoped memory: `HOT.md` and dated daily markdown files under the session data root, partitioned by worktree and IRC-style context.
 
-The agent message history is still one shared conversation history. Scope changes route memory reads and writes, but they do not isolate the LLM transcript per channel or query.
+The agent now has per-context LLM histories in `Agent.contextMsgs`. Memory scope is a separate but synchronized routing layer: at turn start the UI switches the active transcript context, derives the memory scope from that same IRC context, and points the tool registry at that scope. Session JSONL stores context labels, not memory paths; memory storage is re-derived from the active IRC context and the worktree/session directories.
 
 ## Source Map
 
@@ -61,6 +61,8 @@ An empty `Scope{}` is treated as root by path and lineage helpers. This matters 
 - Any other context becomes `RootMemoryScope()`.
 
 The parent for a normal channel or direct query is usually nil. `Scope.lineage()` still appends root if no explicit root parent is present, so channel and query searches inherit root memory even when the UI-created scope has no parent pointer.
+
+This mapping is related to, but distinct from, `ircContextToKey`, which maps the same IRC context to the per-context transcript key used by `Agent.contextMsgs` and session `Entry.Context`. The transcript key is a label such as `#main`, `#ops.build`, or `buddy`; the memory scope is a structured `memory.Scope` that later resolves to `MEMORY.md`, scoped `HOT.md`, and scoped daily archive paths.
 
 ### Scope Lineage
 
@@ -623,10 +625,14 @@ The injected-path guard is path-based. Re-entering the same scoped path does not
 `Model.startAgentTurn` calls:
 
 ```go
+m.agent.InitContext(ctxKey)
+m.agent.SetContext(ctxKey)
 m.agent.SetScope(ircContextToMemoryScope(m.turnContext))
 ```
 
-before starting the LLM turn. That is the strict turn boundary where the active UI context is copied into the agent and the tool registry. Tool calls during that turn use the scope set there unless `write_memory` explicitly overrides it.
+before starting the LLM turn. That is the strict turn boundary where the active UI context is copied into both the agent transcript context and the tool registry memory scope. Tool calls during that turn use the scope set there unless `write_memory` explicitly overrides it.
+
+The transcript switch and memory-scope switch are separate calls. `SetContext` controls which `[]fantasy.Message` slice the LLM sees. `SetScope` controls which hot/daily memory files `search_memory`, `write_memory`, and scoped HOT injection use. If one is changed without the other in future code, context history and memory routing can diverge.
 
 ## Compaction and Daily Memory
 
@@ -899,6 +905,7 @@ Existing tests cover the important happy paths and some boundaries:
 Important gaps and sharp edges:
 
 - There is no dedicated `internal/memory` package test file; most core behavior is tested through agent wrappers or tools.
+- Per-context transcript switching and memory scope switching are separate operations that happen together in `Model.startAgentTurn`. Tests should cover them together; otherwise a future change could preserve isolated histories while routing memory to the wrong scope, or vice versa.
 - Search tests mostly assert substrings and result shape. They do not exhaustively prove ranking, all-term matching, snippet centering, heading selection, read-error handling, or limit cutoff.
 - Typed tool tests explicitly test the fantasy wrapper seam, not deep storage semantics.
 - `search_memory` has no scope override argument. It only searches the registry's current scope.
