@@ -403,21 +403,41 @@ Environment:
                          Enable background catalog refresh (default: false)
 
 Commands (inside the TUI):
-  /set <key> [value]     Show/change settings (provider, model, baseurl, apikey,
-                         service, nick, profile, sound, auto-next, auto-idea)
-                         e.g. /set apikey sk-..., /set provider anthropic
-  /profile [cmd] <name>  save/load/show/delete profiles; bare /profile <name> loads
-  /models                Open a fuzzy picker of models for the active service
-  /compact               Compact context
-  /clear                 Clear chat display
-  /restart               Reset agent and start a fresh conversation
-  /tokens                Token usage estimate
-  /sessions              List saved sessions
-  /tree                  Show session tree
-  /fork                  Fork session
-  /mp3 [cmd]             Toggle MP3 panel and player
-  /help                  Show help
-  /quit                  Exit
+  Core:
+    /set <key> [value]     Show/change settings
+    /profile [cmd] <name>  save/load/show/delete profiles
+    /models                Open a fuzzy model picker
+    /compact               Compact conversation context
+    /clear                 Clear chat display
+    /restart               Reset agent, start fresh
+    /copy [n]              Copy last or nth assistant response
+    /tokens                Token usage and cost estimate
+    /sessions              List saved sessions
+    /resume <number>       Resume a session by number
+    /tree                  Show session tree
+    /fork                  Fork session
+    /theme                 Show current theme
+    /help                  Show help
+    /quit                  Exit
+
+  IRC:
+    /join <#channel>       Switch focus to a channel
+    /part [#channel]       Leave a context
+    /query <nick>          Route Enter persistently to nick
+    /msg <nick> <text>     One-shot message to nick
+    /channels              List open contexts and members
+    /invite <nick>         Invite a persona
+    /kick <nick>           Kick a persona
+
+  Diagnostic:
+    /debug on|off          Toggle verbose API logging
+    /activity [clear]      Show or clear background activity
+
+  Memory:
+    /memory                Show MEMORY.md contents
+
+  Media:
+    /mp3 [cmd]             Toggle MP3 panel and player
 
 Don't be a wimp. Just run it.`)
 }
