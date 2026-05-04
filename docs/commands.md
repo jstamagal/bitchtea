@@ -55,6 +55,12 @@ Concrete example: the `openrouter` built-in is `provider=openai service=openrout
 ## 🛠️ UTILITIES
 
 - **`/copy [n]`**: Copy the last (or nth) assistant response to the clipboard.
+  **Clipback mechanism** (tried in order):
+  1. **OSC 52** (primary): If stdout is a terminal, the text is base64-encoded and written as an OSC 52 escape sequence (`\x1b]52;c;<base64>\a`). Terminals and multiplexers that support the protocol (iTerm2, tmux, kitty, Windows Terminal, etc.) capture this and write to the system clipboard. No external binary required.
+  2. **pbcopy** (first fallback): If OSC 52 is unavailable or fails and `pbcopy` exists (macOS), the text is piped to `pbcopy`.
+  3. **xclip** (second fallback): If `pbcopy` is not found and `xclip` exists (Linux/X11), the text is piped to `xclip -selection clipboard`.
+  4. **Error**: If all methods fail: "Clipboard copy failed. Need a terminal that accepts OSC 52 or a working pbcopy/xclip."
+  **Numbered selection**: `/copy` (no arg) copies the most recent assistant response. `/copy N` copies the Nth assistant response (1-indexed, counting only `MsgAgent` messages). Errors are surfaced if no assistant messages exist, the index is non-numeric, or the index exceeds the available count.
 - **`/tokens`**: Show estimated token usage and session cost.
 - **`/debug [on|off]`**: Toggle verbose HTTP logging for API calls.
 - **`/mp3 [cmd]`**: Control the built-in MP3 player (rescan, play, next, prev). See [MP3 Player](ui-components.md#mp3-player).
