@@ -11,8 +11,6 @@ func ircContextToKey(ctx IRCContext) string {
 	switch ctx.Kind {
 	case KindChannel:
 		return "#" + ctx.Channel
-	case KindSubchannel:
-		return "#" + ctx.Channel + "." + ctx.Sub
 	case KindDirect:
 		return ctx.Target
 	default:

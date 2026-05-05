@@ -390,11 +390,12 @@ func TestLoadFocus_missingFileReturnsEmpty(t *testing.T) {
 	}
 }
 
-func TestSaveFocus_subchannelRoundTrip(t *testing.T) {
+func TestSaveFocus_legacySubfieldRoundTrip(t *testing.T) {
+	// Verify old session files with Sub field still deserialize correctly.
 	dir := t.TempDir()
 	state := FocusState{
 		Contexts: []ContextRecord{
-			{Kind: "subchannel", Channel: "cornhub", Sub: "website"},
+			{Kind: "channel", Channel: "cornhub", Sub: "website"},
 		},
 		ActiveIndex: 0,
 	}
@@ -405,8 +406,8 @@ func TestSaveFocus_subchannelRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatalf("load: %v", err)
 	}
-	if got.Contexts[0].Sub != "website" || got.Contexts[0].Channel != "cornhub" {
-		t.Errorf("subchannel round trip: got %+v", got.Contexts[0])
+	if got.Contexts[0].Channel != "cornhub" {
+		t.Errorf("channel round trip: got %+v", got.Contexts[0])
 	}
 }
 

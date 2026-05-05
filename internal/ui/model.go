@@ -942,9 +942,6 @@ func ircContextToMemoryScope(ctx IRCContext) agent.MemoryScope {
 	switch ctx.Kind {
 	case KindChannel:
 		return agent.ChannelMemoryScope(ctx.Channel, nil)
-	case KindSubchannel:
-		parent := agent.ChannelMemoryScope(ctx.Channel, nil)
-		return agent.ChannelMemoryScope(ctx.Sub, &parent)
 	case KindDirect:
 		return agent.QueryMemoryScope(ctx.Target, nil)
 	default:
