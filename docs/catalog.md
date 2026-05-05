@@ -1,8 +1,8 @@
 # Model Catalog System
 
-> For a user-facing walkthrough of `/models` and refresh behavior, see
-> [model-catalog.md](model-catalog.md). This document covers the code
-> architecture, data flow, and implementation contracts.
+> For the user-facing `/models` and refresh walkthrough, see
+> [user-guide.md](user-guide.md) and [providers.md](providers.md). This document
+> covers the code architecture, data flow, and implementation contracts.
 
 ## Overview
 
