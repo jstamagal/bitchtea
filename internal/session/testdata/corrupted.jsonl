@@ -1,0 +1,4 @@
+{"ts":"2026-04-01T12:00:00Z","id":"1","role":"user","content":"good line"}
+THIS IS NOT VALID JSON
+{"ts":"2026-04-01T12:00:01Z","id":"2","parent_id":"1","role":"assistant","content":"also good"}
+{"broken":"json"

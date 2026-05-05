@@ -9,7 +9,7 @@ import (
 )
 
 func TestInviteCommandJoinsPersonaToCurrentChannel(t *testing.T) {
-	m := newTestModel(t)
+	m := testModel(t)
 	result, _ := handleInviteCommand(m, "/invite reviewer", []string{"/invite", "reviewer"})
 	if !result.membership.IsJoined("main", "reviewer") {
 		t.Error("expected reviewer to be joined in #main")
@@ -17,7 +17,7 @@ func TestInviteCommandJoinsPersonaToCurrentChannel(t *testing.T) {
 }
 
 func TestInviteCommandJoinsPersonaToNamedChannel(t *testing.T) {
-	m := newTestModel(t)
+	m := testModel(t)
 	m.focus.SetFocus(Channel("ops"))
 	result, _ := handleInviteCommand(m, "/invite oncall #main", []string{"/invite", "oncall", "#main"})
 	if !result.membership.IsJoined("main", "oncall") {
@@ -29,7 +29,7 @@ func TestInviteCommandJoinsPersonaToNamedChannel(t *testing.T) {
 }
 
 func TestInviteCommandMissingArgErrors(t *testing.T) {
-	m := newTestModel(t)
+	m := testModel(t)
 	result, _ := handleInviteCommand(m, "/invite", []string{"/invite"})
 	msg := result.messages[len(result.messages)-1]
 	if msg.Type != MsgError {
@@ -38,7 +38,7 @@ func TestInviteCommandMissingArgErrors(t *testing.T) {
 }
 
 func TestInviteCommandRefusesDMContext(t *testing.T) {
-	m := newTestModel(t)
+	m := testModel(t)
 	m.focus.SetFocus(Direct("buddy"))
 	result, _ := handleInviteCommand(m, "/invite reviewer", []string{"/invite", "reviewer"})
 	msg := result.messages[len(result.messages)-1]
@@ -48,7 +48,7 @@ func TestInviteCommandRefusesDMContext(t *testing.T) {
 }
 
 func TestInviteCommandIdempotentShowsAlreadyIn(t *testing.T) {
-	m := newTestModel(t)
+	m := testModel(t)
 	m2, _ := handleInviteCommand(m, "/invite reviewer", []string{"/invite", "reviewer"})
 	result, _ := handleInviteCommand(m2, "/invite reviewer", []string{"/invite", "reviewer"})
 	msg := result.messages[len(result.messages)-1]
@@ -61,7 +61,7 @@ func TestInviteCommandIdempotentShowsAlreadyIn(t *testing.T) {
 }
 
 func TestInviteCommandShowsJoinNoticeAndCatchup(t *testing.T) {
-	m := newTestModel(t)
+	m := testModel(t)
 	result, _ := handleInviteCommand(m, "/invite reviewer", []string{"/invite", "reviewer"})
 	if len(result.messages) < 2 {
 		t.Fatalf("expected at least 2 messages after invite, got %d", len(result.messages))
@@ -77,7 +77,7 @@ func TestInviteCommandShowsJoinNoticeAndCatchup(t *testing.T) {
 }
 
 func TestInviteCommandPersistsMembership(t *testing.T) {
-	m := newTestModel(t)
+	m := testModel(t)
 	result, _ := handleInviteCommand(m, "/invite reviewer", []string{"/invite", "reviewer"})
 	restored := LoadMembershipManager(result.config.SessionDir)
 	if !restored.IsJoined("main", "reviewer") {
@@ -86,7 +86,7 @@ func TestInviteCommandPersistsMembership(t *testing.T) {
 }
 
 func TestKickCommandRemovesPersona(t *testing.T) {
-	m := newTestModel(t)
+	m := testModel(t)
 	m.membership.Invite("main", "reviewer")
 	result, _ := handleKickCommand(m, "/kick reviewer", []string{"/kick", "reviewer"})
 	if result.membership.IsJoined("main", "reviewer") {
@@ -95,7 +95,7 @@ func TestKickCommandRemovesPersona(t *testing.T) {
 }
 
 func TestKickCommandMissingArgErrors(t *testing.T) {
-	m := newTestModel(t)
+	m := testModel(t)
 	result, _ := handleKickCommand(m, "/kick", []string{"/kick"})
 	msg := result.messages[len(result.messages)-1]
 	if msg.Type != MsgError {
@@ -104,7 +104,7 @@ func TestKickCommandMissingArgErrors(t *testing.T) {
 }
 
 func TestKickCommandNotPresentErrors(t *testing.T) {
-	m := newTestModel(t)
+	m := testModel(t)
 	result, _ := handleKickCommand(m, "/kick ghost", []string{"/kick", "ghost"})
 	msg := result.messages[len(result.messages)-1]
 	if msg.Type != MsgError {
@@ -116,7 +116,7 @@ func TestKickCommandNotPresentErrors(t *testing.T) {
 }
 
 func TestKickCommandPersistsMembership(t *testing.T) {
-	m := newTestModel(t)
+	m := testModel(t)
 	m.membership.Invite("main", "reviewer")
 	result, _ := handleKickCommand(m, "/kick reviewer", []string{"/kick", "reviewer"})
 	restored := LoadMembershipManager(result.config.SessionDir)
@@ -126,7 +126,7 @@ func TestKickCommandPersistsMembership(t *testing.T) {
 }
 
 func TestChannelsCommandShowsMembers(t *testing.T) {
-	m := newTestModel(t)
+	m := testModel(t)
 	m.membership.Invite("main", "debugger")
 	m.membership.Invite("main", "reviewer")
 	result, _ := handleChannelsCommand(m, "/channels", []string{"/channels"})

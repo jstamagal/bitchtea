@@ -18,7 +18,7 @@ func TestCopyCommandCopiesLastAssistantResponse(t *testing.T) {
 		return nil
 	}
 
-	m := newTestModel(t)
+	m := testModel(t)
 	m.messages = []ChatMessage{
 		{Time: time.Now(), Type: MsgUser, Content: "hi"},
 		{Time: time.Now(), Type: MsgAgent, Content: "first"},
@@ -62,7 +62,7 @@ func TestCopyCommandCopiesSelectedAssistantResponse(t *testing.T) {
 		return nil
 	}
 
-	m := newTestModel(t)
+	m := testModel(t)
 	m.messages = []ChatMessage{
 		{Time: time.Now(), Type: MsgAgent, Content: "one"},
 		{Time: time.Now(), Type: MsgSystem, Content: "ignore"},
@@ -84,7 +84,7 @@ func TestCopyCommandRequiresAssistantMessage(t *testing.T) {
 	restore := stubClipboard(t)
 	defer restore()
 
-	m := newTestModel(t)
+	m := testModel(t)
 	m.messages = []ChatMessage{
 		{Time: time.Now(), Type: MsgUser, Content: "hi"},
 	}
@@ -103,7 +103,7 @@ func TestCopyCommandRejectsInvalidSelection(t *testing.T) {
 	restore := stubClipboard(t)
 	defer restore()
 
-	m := newTestModel(t)
+	m := testModel(t)
 	m.messages = []ChatMessage{
 		{Time: time.Now(), Type: MsgAgent, Content: "one"},
 	}
@@ -122,7 +122,7 @@ func TestCopyCommandRejectsOutOfRangeSelection(t *testing.T) {
 	restore := stubClipboard(t)
 	defer restore()
 
-	m := newTestModel(t)
+	m := testModel(t)
 	m.messages = []ChatMessage{
 		{Time: time.Now(), Type: MsgAgent, Content: "one"},
 	}

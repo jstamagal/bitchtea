@@ -7,7 +7,7 @@ import (
 )
 
 func TestRestartCommandClearsHistoryAndDisplay(t *testing.T) {
-	m := newTestModel(t)
+	m := testModel(t)
 
 	// Seed some chat display + agent state.
 	m.addMessage(ChatMessage{Time: time.Now(), Type: MsgUser, Nick: "tj", Content: "hello"})
@@ -58,7 +58,7 @@ func TestRestartCommandClearsHistoryAndDisplay(t *testing.T) {
 }
 
 func TestRestartCommandRegisteredInHelp(t *testing.T) {
-	m := newTestModel(t)
+	m := testModel(t)
 	result, _ := m.handleCommand("/help")
 	msg := lastMsg(result)
 	if !strings.Contains(msg.Content, "/restart") {

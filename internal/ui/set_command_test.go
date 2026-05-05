@@ -8,7 +8,7 @@ import (
 )
 
 func TestSetCommandShowsAllSettings(t *testing.T) {
-	m := newTestModel(t)
+	m := testModel(t)
 	result, _ := m.handleCommand("/set")
 	msg := lastMsg(result)
 	if msg.Type != MsgSystem {
@@ -22,7 +22,7 @@ func TestSetCommandShowsAllSettings(t *testing.T) {
 }
 
 func TestSetCommandShowsSingleSetting(t *testing.T) {
-	m := newTestModel(t)
+	m := testModel(t)
 	result, _ := m.handleCommand("/set provider")
 	msg := lastMsg(result)
 	if !strings.Contains(msg.Content, "provider = openai") {
@@ -31,7 +31,7 @@ func TestSetCommandShowsSingleSetting(t *testing.T) {
 }
 
 func TestSetCommandSetsProvider(t *testing.T) {
-	m := newTestModel(t)
+	m := testModel(t)
 	result, _ := m.handleCommand("/set provider anthropic")
 	model := result.(Model)
 	if model.config.Provider != "anthropic" {
@@ -44,7 +44,7 @@ func TestSetCommandSetsProvider(t *testing.T) {
 }
 
 func TestSetCommandSetsModel(t *testing.T) {
-	m := newTestModel(t)
+	m := testModel(t)
 	result, _ := m.handleCommand("/set model claude-opus-4-6")
 	model := result.(Model)
 	if model.config.Model != "claude-opus-4-6" {
@@ -53,7 +53,7 @@ func TestSetCommandSetsModel(t *testing.T) {
 }
 
 func TestSetCommandSetsAPIKey(t *testing.T) {
-	m := newTestModel(t)
+	m := testModel(t)
 	result, _ := m.handleCommand("/set apikey sk-1234567890abcdef")
 	model := result.(Model)
 	if model.config.APIKey != "sk-1234567890abcdef" {
@@ -64,7 +64,7 @@ func TestSetCommandSetsAPIKey(t *testing.T) {
 // TestSetCommandSetsAPIKeyVerbatim confirms /set apikey passes any value through
 // without validation — including short proxy tokens like "x".
 func TestSetCommandSetsAPIKeyVerbatim(t *testing.T) {
-	m := newTestModel(t)
+	m := testModel(t)
 	result, _ := m.handleCommand("/set apikey x")
 	model := result.(Model)
 	if model.config.APIKey != "x" {
@@ -80,7 +80,7 @@ func TestSetCommandSetsAPIKeyVerbatim(t *testing.T) {
 // TestSetCommandSetsModelVerbatim confirms /set model passes any value through
 // without warnings or rejection.
 func TestSetCommandSetsModelVerbatim(t *testing.T) {
-	m := newTestModel(t)
+	m := testModel(t)
 	result, _ := m.handleCommand("/set model x")
 	model := result.(Model)
 	if model.config.Model != "x" {
@@ -94,7 +94,7 @@ func TestSetCommandSetsModelVerbatim(t *testing.T) {
 }
 
 func TestSetCommandSetsBaseURL(t *testing.T) {
-	m := newTestModel(t)
+	m := testModel(t)
 	result, _ := m.handleCommand("/set baseurl https://api.example.com/v1")
 	model := result.(Model)
 	if model.config.BaseURL != "https://api.example.com/v1" {
@@ -103,7 +103,7 @@ func TestSetCommandSetsBaseURL(t *testing.T) {
 }
 
 func TestSetCommandSetsNick(t *testing.T) {
-	m := newTestModel(t)
+	m := testModel(t)
 	result, _ := m.handleCommand("/set nick coolguy")
 	model := result.(Model)
 	if model.config.UserNick != "coolguy" {
@@ -112,7 +112,7 @@ func TestSetCommandSetsNick(t *testing.T) {
 }
 
 func TestSetCommandUnknownKey(t *testing.T) {
-	m := newTestModel(t)
+	m := testModel(t)
 	result, _ := m.handleCommand("/set bogus value")
 	msg := lastMsg(result)
 	if msg.Type != MsgError {
@@ -124,7 +124,7 @@ func TestSetCommandUnknownKey(t *testing.T) {
 }
 
 func TestSetCommandShowUnknownKey(t *testing.T) {
-	m := newTestModel(t)
+	m := testModel(t)
 	result, _ := m.handleCommand("/set bogus")
 	msg := lastMsg(result)
 	if msg.Type != MsgError {
@@ -133,7 +133,7 @@ func TestSetCommandShowUnknownKey(t *testing.T) {
 }
 
 func TestSetCommandMasksAPIKey(t *testing.T) {
-	m := newTestModel(t)
+	m := testModel(t)
 	result, _ := m.handleCommand("/set apikey")
 	msg := lastMsg(result)
 	if strings.Contains(msg.Content, "sk-test-key-12345") {
@@ -154,7 +154,7 @@ func TestSetCommandSetsServiceVerbatim(t *testing.T) {
 	}
 	for _, value := range cases {
 		t.Run(value, func(t *testing.T) {
-			m := newTestModel(t)
+			m := testModel(t)
 			result, _ := m.handleCommand("/set service " + value)
 			model := result.(Model)
 			if model.config.Service != value {
@@ -175,7 +175,7 @@ func TestSetCommandSetsServiceVerbatim(t *testing.T) {
 // TestSetCommandShowsServiceLine confirms the bare /set listing surfaces the
 // service identity alongside the other recognised keys.
 func TestSetCommandShowsServiceLine(t *testing.T) {
-	m := newTestModel(t)
+	m := testModel(t)
 	m.config.Service = "openai"
 	result, _ := m.handleCommand("/set")
 	msg := lastMsg(result)
@@ -187,7 +187,7 @@ func TestSetCommandShowsServiceLine(t *testing.T) {
 // TestSetCommandShowsSingleService confirms /set service (no value) prints the
 // current service identity rather than rejecting the key.
 func TestSetCommandShowsSingleService(t *testing.T) {
-	m := newTestModel(t)
+	m := testModel(t)
 	m.config.Service = "ollama"
 	result, _ := m.handleCommand("/set service")
 	msg := lastMsg(result)
@@ -203,7 +203,7 @@ func TestSetCommandShowsSingleService(t *testing.T) {
 // treated as a metadata relabel, not a transport switch — unlike /set baseurl
 // or /set provider, the active profile name should survive.
 func TestSetCommandServiceDoesNotClearProfile(t *testing.T) {
-	m := newTestModel(t)
+	m := testModel(t)
 	m.config.Profile = "openrouter"
 	result, _ := m.handleCommand("/set service some-other-thing")
 	model := result.(Model)
@@ -218,7 +218,7 @@ func TestSetCommandServiceDoesNotClearProfile(t *testing.T) {
 func TestProfileShowDisplaysServiceWithoutLoading(t *testing.T) {
 	t.Setenv("OPENROUTER_API_KEY", "sk-or-v1-1234567890abcdef")
 
-	m := newTestModel(t)
+	m := testModel(t)
 	priorProfile := m.config.Profile
 	priorBaseURL := m.config.BaseURL
 
@@ -247,7 +247,7 @@ func TestProfileShowDisplaysServiceWithoutLoading(t *testing.T) {
 func TestProfileLoadVerboseShowsServiceLine(t *testing.T) {
 	t.Setenv("OPENROUTER_API_KEY", "sk-or-v1-1234567890abcdef")
 
-	m := newTestModel(t)
+	m := testModel(t)
 	result, _ := m.handleCommand("/profile load openrouter")
 	msg := lastMsg(result)
 	if !strings.Contains(msg.Content, "service=openrouter") {
@@ -264,7 +264,7 @@ func TestProfileSaveLoadRoundtripPreservesService(t *testing.T) {
 	config.ProfilesDir = func() string { return dir }
 	t.Cleanup(func() { config.ProfilesDir = orig })
 
-	m := newTestModel(t)
+	m := testModel(t)
 	m.config.APIKey = "sk-roundtrip-12345"
 
 	// Stamp a non-derivable service so we can prove it round-trips verbatim

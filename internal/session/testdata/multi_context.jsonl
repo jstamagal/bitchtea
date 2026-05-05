@@ -1,0 +1,4 @@
+{"ts":"0001-01-01T00:00:00Z","role":"user","content":"hello main","context":"#main","id":"","v":1,"msg":{"role":"user","content":[{"type":"text","data":{"text":"hello main"}}],"provider_options":null}}
+{"ts":"0001-01-01T00:00:00Z","role":"assistant","content":"hi from main","context":"#main","id":"","v":1,"msg":{"role":"assistant","content":[{"type":"text","data":{"text":"hi from main"}}],"provider_options":null}}
+{"ts":"0001-01-01T00:00:00Z","role":"user","content":"hello ops","context":"#ops","id":"","v":1,"msg":{"role":"user","content":[{"type":"text","data":{"text":"hello ops"}}],"provider_options":null}}
+{"ts":"0001-01-01T00:00:00Z","role":"assistant","content":"hi from ops","context":"#ops","id":"","v":1,"msg":{"role":"assistant","content":[{"type":"text","data":{"text":"hi from ops"}}],"provider_options":null}}
