@@ -4,9 +4,11 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
+	"github.com/charmbracelet/bubbles/cursor"
 	"github.com/charmbracelet/bubbles/spinner"
 	"github.com/charmbracelet/bubbles/textarea"
 	"github.com/charmbracelet/bubbles/viewport"
@@ -189,6 +191,7 @@ func NewModel(cfg *config.Config) Model {
 	ta.SetWidth(80)
 	ta.SetHeight(3)
 	ta.ShowLineNumbers = false
+	ta.Cursor.SetMode(cursor.CursorStatic)
 	ta.Prompt = ">> "
 	ta.FocusedStyle.Prompt = InputPromptStyle
 	ta.FocusedStyle.Text = InputTextStyle
@@ -358,7 +361,6 @@ func (m *Model) ExecuteStartupCommand(line string) {
 
 func (m Model) Init() tea.Cmd {
 	return tea.Batch(
-		textarea.Blink,
 		m.spinner.Tick,
 		mp3TickCmd(),
 		tea.EnterAltScreen,
@@ -430,23 +432,42 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// Show loaded context files
 		ctxFiles := agent.DiscoverContextFiles(m.config.WorkDir)
 		if ctxFiles != "" {
-			// Count how many files were found
-			count := strings.Count(ctxFiles, "# Context from")
-			m.addMessage(ChatMessage{
-				Time:    time.Now(),
-				Type:    MsgSystem,
-				Content: fmt.Sprintf("Loaded %d context file(s) from project tree", count),
-			})
+			if m.debugMode {
+				m.addMessage(ChatMessage{
+					Time:    time.Now(),
+					Type:    MsgSystem,
+					Content: ctxFiles,
+				})
+			}
+			// Extract individual file names from "# Context from <path>" headers
+			for _, line := range strings.Split(ctxFiles, "\n") {
+				if after, ok := strings.CutPrefix(line, "# Context from "); ok {
+					name := filepath.Base(after)
+					m.addMessage(ChatMessage{
+						Time:    time.Now(),
+						Type:    MsgSystem,
+						Content: fmt.Sprintf("*** Injected %s", name),
+					})
+				}
+			}
 		}
 
 		// Show memory status
 		mem := agent.LoadMemory(m.config.WorkDir)
 		if mem != "" {
-			m.addMessage(ChatMessage{
-				Time:    time.Now(),
-				Type:    MsgSystem,
-				Content: "Loaded MEMORY.md from working directory",
-			})
+			if m.debugMode {
+				m.addMessage(ChatMessage{
+					Time:    time.Now(),
+					Type:    MsgSystem,
+					Content: fmt.Sprintf("*** Injected MEMORY.md\n%s", mem),
+				})
+			} else {
+				m.addMessage(ChatMessage{
+					Time:    time.Now(),
+					Type:    MsgSystem,
+					Content: "*** Injected MEMORY.md",
+				})
+			}
 		}
 
 		if m.session != nil {
@@ -459,13 +480,21 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 		m.addMessage(ChatMessage{Time: time.Now(), Type: MsgRaw, Content: MOTD})
 
-		// Print system prompt in yellow
+		// Print system prompt
 		if sp := m.agent.SystemPrompt(); sp != "" {
-			m.addMessage(ChatMessage{
-				Time:    time.Now(),
-				Type:    MsgSystem,
-				Content: sp,
-			})
+			if m.debugMode {
+				m.addMessage(ChatMessage{
+					Time:    time.Now(),
+					Type:    MsgSystem,
+					Content: sp,
+				})
+			} else {
+				m.addMessage(ChatMessage{
+					Time:    time.Now(),
+					Type:    MsgSystem,
+					Content: "*** Injected system prompt",
+				})
+			}
 		}
 
 		m.refreshViewport()

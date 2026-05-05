@@ -148,7 +148,7 @@ What it does:
   - character limit `8192`
   - width `80`
   - height `3`
-  - prompt `>> `
+  - prompt `>>`
   - line numbers disabled
   - prompt / text styles from the global theme
 - Builds a `spinner.Model` using the dot spinner and magenta styling.
@@ -887,21 +887,21 @@ Width `<= 0` returns the input unchanged.
 
 The `Theme` package variable is a struct in `themes.go`:
 
-| Field           | ANSI Color | Role                     |
-|-----------------|------------|--------------------------|
-| `Name`          | `"BitchX"` | Theme label (string, not a color) |
+| Field           | ANSI Color | Role                                     |
+| --------------- | ---------- | ---------------------------------------- |
+| `Name`          | `"BitchX"` | Theme label (string, not a color)        |
 | `Cyan`          | `14`       | Primary accent, tool calls, input prompt |
-| `Green`         | `10`       | User nicks, success       |
-| `Magenta`       | `13`       | Agent nicks, thinking     |
-| `Yellow`        | `11`       | System messages           |
-| `Red`           | `9`        | Error messages            |
-| `Blue`          | `12`       | Info, bar background      |
-| `White`         | `15`       | Primary text, bar foreground |
-| `Gray`          | `8`        | Timestamps, dim text, separators |
-| `DarkBg`        | `0`        | Black background          |
-| `BarBg`         | `4`        | Top/bottom bar background  |
-| `ThinkingBarFg` | `15`       | Thinking bar foreground    |
-| `ThinkingBarBg` | `4`        | Thinking bar background    |
+| `Green`         | `10`       | User nicks, success                      |
+| `Magenta`       | `13`       | Agent nicks, thinking                    |
+| `Yellow`        | `11`       | System messages                          |
+| `Red`           | `9`        | Error messages                           |
+| `Blue`          | `12`       | Info, bar background                     |
+| `White`         | `15`       | Primary text, bar foreground             |
+| `Gray`          | `8`        | Timestamps, dim text, separators         |
+| `DarkBg`        | `0`        | Black background                         |
+| `BarBg`         | `4`        | Top/bottom bar background                |
+| `ThinkingBarFg` | `15`       | Thinking bar foreground                  |
+| `ThinkingBarBg` | `4`        | Thinking bar background                  |
 
 The only built-in theme is **BitchX**. There is no mechanism for user-defined themes at runtime.
 
@@ -1011,7 +1011,7 @@ Visible output:
 - `Tools` header
 - `Recent` section when there are tool calls
 - per-tool status icons:
-  - running: `◉`
+  - running:
   - done: `✓`
   - error: `✗`
 - tokens line when `Tokens > 0`
@@ -1224,14 +1224,14 @@ textarea.
 
 Picker keys:
 
-| Key | Handler behavior |
-| --- | --- |
-| Enter | Selects the highlighted model. If the filter excludes everything, closes the picker and emits `Picker: no selection (filter excludes everything).` |
-| Esc or Ctrl+C | Closes without selection and emits `Picker cancelled.` |
-| Up / Down | Calls `moveCursor(-1)` or `moveCursor(1)` and rerenders the same raw message. |
-| PgUp / PgDown | Moves by `pickerVisibleRows` rows and rerenders. |
-| Backspace | Removes one rune from `query`, resets cursor to 0, refilters, and rerenders. |
-| Printable runes and Space | Appends literal text to `query`, resets cursor to 0, refilters, and rerenders. |
+| Key                       | Handler behavior                                                                                                                                   |
+| ------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Enter                     | Selects the highlighted model. If the filter excludes everything, closes the picker and emits `Picker: no selection (filter excludes everything).` |
+| Esc or Ctrl+C             | Closes without selection and emits `Picker cancelled.`                                                                                             |
+| Up / Down                 | Calls `moveCursor(-1)` or `moveCursor(1)` and rerenders the same raw message.                                                                      |
+| PgUp / PgDown             | Moves by `pickerVisibleRows` rows and rerenders.                                                                                                   |
+| Backspace                 | Removes one rune from `query`, resets cursor to 0, refilters, and rerenders.                                                                       |
+| Printable runes and Space | Appends literal text to `query`, resets cursor to 0, refilters, and rerenders.                                                                     |
 
 Filtering is substring-based and case-insensitive in `refilter`; it trims the
 query before matching. There is no fuzzy scorer, no sorting inside the picker,
@@ -1242,7 +1242,7 @@ dedupes IDs with a `seen` map.
 
 Rendering is a windowed scrollback block, not an overlay pane. `view(maxRows)`
 floors `maxRows` at 5, renders `filter> <query>`, centers the visible window
-around the cursor when possible, marks the highlighted row with `> `, and adds
+around the cursor when possible, marks the highlighted row with `>`, and adds
 `...` when more rows exist below the visible window. The active UI uses
 `pickerVisibleRows = 12`.
 
@@ -1403,7 +1403,8 @@ Notes:
 - `MsgRaw` is written without color codes, so splash art and picker views are
   stored as plain text in the transcript
 
-### `transcriptLine`, `transcriptPrefix`, `indentTranscriptContent`,
+### `transcriptLine`, `transcriptPrefix`, `indentTranscriptContent`
+
 `sanitizeTranscriptText`
 
 These are formatting helpers:
@@ -1418,10 +1419,13 @@ These are formatting helpers:
 The MP3 controller (`internal/ui/mp3.go`) is a stateful widget that embeds a functional audio player directly into the TUI. It manages process execution, panel rendering, and track state.
 
 ### 1. Library Directory
+
 The player scans the library directory, which defaults to `~/.bitchtea/mp3` (falling back to `.bitchtea/mp3` if the home directory cannot be determined). Users drop `.mp3` files here for the player to discover.
 
 ### 2. Player Detection Chain
+
 To ensure cross-platform compatibility without heavy audio dependencies, the player delegates playback to an external shell process. It probes for installed players in the following order and uses the first one found:
+
 1. `mpv` (`--no-video --really-quiet --no-terminal`)
 2. `ffplay` (`-nodisp -autoexit -loglevel error`)
 3. `mpg123` (`-q`)
@@ -1429,34 +1433,44 @@ To ensure cross-platform compatibility without heavy audio dependencies, the pla
 Standard output and standard error from the subprocess are discarded.
 
 ### 3. Pause and Resume via OS Signals
+
 Instead of relying on player-specific RPC protocols, the controller achieves pause and resume functionality by sending OS-level process control signals:
+
 - **Pause**: Sends `SIGSTOP` (`syscall.SIGSTOP`) to freeze the player process.
 - **Resume**: Sends `SIGCONT` (`syscall.SIGCONT`) to resume execution.
 - **Stop**: Sends `SIGKILL` (`syscall.SIGKILL`) to terminate the process instantly.
 
 ### 4. Panel Rendering and Layout
-When toggled visible, the MP3 panel renders as a sidebar with a rounded yellow border (`mp3PanelWidth = 34`). It only renders if there is enough vertical space (height >= 4). 
+
+When toggled visible, the MP3 panel renders as a sidebar with a rounded yellow border (`mp3PanelWidth = 34`). It only renders if there is enough vertical space (height >= 4).
 The panel includes:
+
 - A header (`MP3 Player`) and library directory path.
 - A controls cheat sheet.
 - A `Now Playing` section showing the status text.
 - A scrollable `Playlist` windowed around the current track, with the active track highlighted green and marked with `▶`.
 
 ### 5. Key Bindings
+
 While the MP3 panel is visible and the input line is empty, the player accepts direct keyboard control:
+
 - **`space`**: Toggles Pause/Resume.
 - **`←` or `j`**: Skips to the previous track.
 - **`→` or `k`**: Skips to the next track.
 
 ### 6. Track Scanning and Playlist Navigation
+
 The `scan()` method reads the library directory, keeping only `.mp3` files. It computes track durations using `go-mp3` and sorts the playlist case-insensitively by name. Navigation methods (`next()` and `prev()`) support wraparound, moving from the last track to the first and vice versa.
 
 ### 7. Progress Bar and Visualizer Rendering
+
 The player computes elapsed time based on process start time and any paused offset. The status line features two dynamic components:
+
 - **Progress Bar**: Rendered as a 10-character wide bracketed bar using `█` for filled segments and `·` for remaining time.
 - **Visualizer**: An 8-character pseudo-random audio visualizer block. It hashes the track's file path combined with the elapsed seconds to deterministically pick from 8 block-character height levels (`▁`, `▂`, `▃`, `▄`, `▅`, `▆`, `▇`, `█`), simulating a graphic equalizer.
 
 ### 8. Auto-Advance on Track Completion
+
 A background goroutine waits on the player process to exit, sending an event to the `Done()` channel. To prevent race conditions with user interactions, a `generation` counter acts as an epoch guard. When an `mp3DoneMsg` arrives with the correct epoch, the controller automatically advances to the next track if the playlist contains more than one song.
 
 ## `internal/ui/context.go` and `internal/ui/context_helpers.go`
@@ -2389,7 +2403,7 @@ Open contexts:
 Behavior:
 
 - contexts are listed in focus order
-- the active context is marked with `* `
+- the active context is marked with `*`
 - channel membership is shown in square brackets when present
 - member lists are sorted alphabetically
 
@@ -2437,14 +2451,14 @@ This file holds the startup splash art and the fixed welcome text.
 
 Six hard-coded ANSI art blocks stored as string constants:
 
-| Variable      | ANSI Color |
-|---------------|------------|
-| `splashArt1` | Cyan (`\033[1;36m`) — bitchtea ASCII logo |
-| `splashArt2` | Red (`\033[1;31m`) — BITCHTEA ASCII logo |
+| Variable     | ANSI Color                                           |
+| ------------ | ---------------------------------------------------- |
+| `splashArt1` | Cyan (`\033[1;36m`) — bitchtea ASCII logo            |
+| `splashArt2` | Red (`\033[1;31m`) — BITCHTEA ASCII logo             |
 | `splashArt3` | Magenta (`\033[1;35m`) — "bitchtea" ASCII + subtitle |
-| `splashArt4` | Yellow (`\033[1;33m`) — framed box with v0.1.0 |
-| `splashArt5` | Green (`\033[1;32m`) — framed box with tagline |
-| `splashArt6` | Red (`\033[1;31m`) — ASCII art blocks |
+| `splashArt4` | Yellow (`\033[1;33m`) — framed box with v0.1.0       |
+| `splashArt5` | Green (`\033[1;32m`) — framed box with tagline       |
+| `splashArt6` | Red (`\033[1;31m`) — ASCII art blocks                |
 
 ### `SplashArt()`
 
