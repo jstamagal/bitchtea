@@ -31,22 +31,6 @@ func TestChannel(t *testing.T) {
 	}
 }
 
-func TestSubchannel(t *testing.T) {
-	c := Subchannel("#cornhub", "website")
-	if c.Kind != KindSubchannel {
-		t.Errorf("Subchannel kind = %d, want KindSubchannel", c.Kind)
-	}
-	if got := c.Label(); got != "#cornhub.website" {
-		t.Errorf("Subchannel label = %q, want %q", got, "#cornhub.website")
-	}
-	if c.Channel != "cornhub" {
-		t.Errorf("Channel field = %q, want %q", c.Channel, "cornhub")
-	}
-	if c.Sub != "website" {
-		t.Errorf("Sub field = %q, want %q", c.Sub, "website")
-	}
-}
-
 func TestDirect(t *testing.T) {
 	c := Direct("  coding-buddy  ")
 	if c.Kind != KindDirect {
@@ -145,15 +129,11 @@ func TestFocusManager_Remove_unknownContext(t *testing.T) {
 	}
 }
 
-func TestFocusManager_DirectAndSubchannel(t *testing.T) {
+func TestFocusManager_Direct(t *testing.T) {
 	f := NewFocusManager()
 	f.SetFocus(Direct("coding-buddy"))
 	if f.ActiveLabel() != "coding-buddy" {
 		t.Errorf("direct active = %q, want coding-buddy", f.ActiveLabel())
-	}
-	f.SetFocus(Subchannel("cornhub", "website"))
-	if f.ActiveLabel() != "#cornhub.website" {
-		t.Errorf("subchannel active = %q, want #cornhub.website", f.ActiveLabel())
 	}
 }
 
@@ -172,26 +152,25 @@ func TestFocusManager_ToState_roundTrip(t *testing.T) {
 	f := NewFocusManager()
 	f.SetFocus(Channel("code"))
 	f.SetFocus(Direct("buddy"))
-	f.SetFocus(Subchannel("hub", "web"))
-	// Active is #hub.web (index 3).
+	// Active is buddy (index 2).
 
 	state := f.ToState()
-	if len(state.Contexts) != 4 {
-		t.Fatalf("expected 4 context records, got %d", len(state.Contexts))
+	if len(state.Contexts) != 3 {
+		t.Fatalf("expected 3 context records, got %d", len(state.Contexts))
 	}
-	if state.ActiveIndex != 3 {
-		t.Fatalf("expected active index 3, got %d", state.ActiveIndex)
+	if state.ActiveIndex != 2 {
+		t.Fatalf("expected active index 2, got %d", state.ActiveIndex)
 	}
 
 	f2 := NewFocusManager()
 	f2.RestoreState(state)
 
-	if f2.ActiveLabel() != "#hub.web" {
-		t.Errorf("active after restore = %q, want #hub.web", f2.ActiveLabel())
+	if f2.ActiveLabel() != "buddy" {
+		t.Errorf("active after restore = %q, want buddy", f2.ActiveLabel())
 	}
 	all := f2.All()
-	if len(all) != 4 {
-		t.Fatalf("expected 4 contexts after restore, got %d", len(all))
+	if len(all) != 3 {
+		t.Fatalf("expected 3 contexts after restore, got %d", len(all))
 	}
 	if all[0].Label() != "#main" {
 		t.Errorf("all[0] = %q, want #main", all[0].Label())
@@ -201,9 +180,6 @@ func TestFocusManager_ToState_roundTrip(t *testing.T) {
 	}
 	if all[2].Label() != "buddy" {
 		t.Errorf("all[2] = %q, want buddy", all[2].Label())
-	}
-	if all[3].Label() != "#hub.web" {
-		t.Errorf("all[3] = %q, want #hub.web", all[3].Label())
 	}
 }
 

@@ -2199,9 +2199,8 @@ currentContext  ContextKey
 
 `ContextKey` is a string alias. The default context is `DefaultContextKey`,
 whose value is `"#main"`. UI routing converts IRC focus to keys with
-`ircContextToKey`: channels become `#channel`, subchannels become
-`#channel.sub`, direct queries become the target nick, and unknown focus falls
-back to `agent.DefaultContextKey`.
+`ircContextToKey`: channels become `#channel`, direct queries become the target
+nick, and unknown focus falls back to `agent.DefaultContextKey`.
 
 ### `contextMsgs` structure
 

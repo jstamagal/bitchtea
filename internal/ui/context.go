@@ -10,31 +10,26 @@ import (
 type ContextKind uint8
 
 const (
-	KindChannel    ContextKind = iota // #channel
-	KindSubchannel                    // #channel.sub (inherits parent, writes to own)
-	KindDirect                        // persona or nick (DM-style routing)
+	KindChannel ContextKind = iota // #channel
+	KindDirect                     // persona or nick (DM-style routing)
 )
 
-// IRCContext is a named routing destination: a channel, subchannel, or direct target.
+// IRCContext is a named routing destination: a channel or direct target.
 // Comparison by value (==) is safe and is the canonical way to check identity.
 type IRCContext struct {
 	Kind    ContextKind
-	Channel string // channel name without '#'; set for KindChannel and KindSubchannel
-	Sub     string // subchannel qualifier; set only for KindSubchannel
+	Channel string // channel name without '#'; set for KindChannel
 	Target  string // persona or nick; set only for KindDirect
 }
 
 // Label returns the canonical display label for the context.
 //
-//	KindChannel    →  "#channel"
-//	KindSubchannel →  "#channel.sub"
-//	KindDirect     →  "target"
+//	KindChannel → "#channel"
+//	KindDirect  → "target"
 func (c IRCContext) Label() string {
 	switch c.Kind {
 	case KindChannel:
 		return "#" + c.Channel
-	case KindSubchannel:
-		return "#" + c.Channel + "." + c.Sub
 	case KindDirect:
 		return c.Target
 	default:
@@ -50,16 +45,6 @@ func Channel(name string) IRCContext {
 		name = "main"
 	}
 	return IRCContext{Kind: KindChannel, Channel: name}
-}
-
-// Subchannel constructs a subchannel context. Names are lowercased.
-func Subchannel(channel, sub string) IRCContext {
-	channel = strings.TrimPrefix(strings.ToLower(strings.TrimSpace(channel)), "#")
-	sub = strings.ToLower(strings.TrimSpace(sub))
-	if channel == "" {
-		channel = "main"
-	}
-	return IRCContext{Kind: KindSubchannel, Channel: channel, Sub: sub}
 }
 
 // Direct constructs a direct-target context for a persona or nick.
@@ -199,8 +184,6 @@ func contextToRecord(c IRCContext) session.ContextRecord {
 	switch c.Kind {
 	case KindChannel:
 		return session.ContextRecord{Kind: "channel", Channel: c.Channel}
-	case KindSubchannel:
-		return session.ContextRecord{Kind: "subchannel", Channel: c.Channel, Sub: c.Sub}
 	case KindDirect:
 		return session.ContextRecord{Kind: "direct", Target: c.Target}
 	default:
@@ -212,11 +195,6 @@ func recordToContext(r session.ContextRecord) (IRCContext, bool) {
 	switch r.Kind {
 	case "channel":
 		return Channel(r.Channel), true
-	case "subchannel":
-		if r.Channel == "" || r.Sub == "" {
-			return IRCContext{}, false
-		}
-		return Subchannel(r.Channel, r.Sub), true
 	case "direct":
 		if r.Target == "" {
 			return IRCContext{}, false

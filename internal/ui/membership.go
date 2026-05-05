@@ -128,13 +128,11 @@ func LoadMembershipManager(dir string) *MembershipManager {
 }
 
 // channelKeyFromCtx extracts the membership key from an IRCContext.
-// Only channel and subchannel contexts are valid; returns ("", false) for direct.
+// Only channel contexts are valid; returns ("", false) for direct.
 func channelKeyFromCtx(ctx IRCContext) (string, bool) {
 	switch ctx.Kind {
 	case KindChannel:
 		return ctx.Channel, true
-	case KindSubchannel:
-		return ctx.Channel + "." + ctx.Sub, true
 	default:
 		return "", false
 	}

@@ -101,7 +101,6 @@ tool
 ```text
 #main
 #channel
-#channel.sub
 directTarget
 ```
 
@@ -193,7 +192,6 @@ Valid `Kind` values written by the UI are:
 
 ```text
 channel
-subchannel
 direct
 ```
 
@@ -659,7 +657,6 @@ resume. It carries one of:
 ```text
 #main             — default channel (via agent.DefaultContextKey)
 #channel          — /join target
-#channel.sub      — subchannel label
 directTarget      — /query target (case-preserved)
 ```
 
@@ -773,7 +770,7 @@ not called by the normal turn completion path. Junior models should not build
 new logic on `m.contextSavedIdx` without reconciling it.
 
 Second gap: `ResumeSession` groups by `entry.Context` exactly, but
-`ircContextToKey(Subchannel("a","b"))` uses `#a.b`, and `Direct("x")` uses
+`ircContextToKey(Channel("a"))` uses `#a`, and `Direct("x")` uses
 `x`. That matches labels written by current code, but there is no validation
 or migration for malformed context labels in old session files.
 
@@ -868,11 +865,6 @@ Channel(name):
     empty -> "main"
     Label() -> "#<channel>"
 
-Subchannel(channel, sub):
-    trim/lowercase both; strip leading "#"
-    empty channel -> "main"
-    Label() -> "#<channel>.<sub>"
-
 Direct(target):
     trim space only, preserve case
     Label() -> "<target>"
@@ -881,30 +873,24 @@ Direct(target):
 `ircContextToKey` maps:
 
 ```text
-KindChannel    -> "#<channel>"
-KindSubchannel -> "#<channel>.<sub>"
-KindDirect     -> "<target>"
-default        -> "#main"
+KindChannel -> "#<channel>"
+KindDirect  -> "<target>"
+default     -> "#main"
 ```
 
 The memory scope sent to the agent at turn start is:
 
 ```text
-KindChannel    -> agent.ChannelMemoryScope(channel, nil)
-KindSubchannel -> agent.ChannelMemoryScope(sub, &ChannelMemoryScope(channel,nil))
-KindDirect     -> agent.QueryMemoryScope(target, nil)
-default        -> agent.RootMemoryScope()
+KindChannel -> agent.ChannelMemoryScope(channel, nil)
+KindDirect  -> agent.QueryMemoryScope(target, nil)
+default     -> agent.RootMemoryScope()
 ```
-
-Subchannel memory scope uses only the sub-name as the scope name with parent
-set to the parent channel. The context key/label remains `#channel.sub`.
 
 The membership key from a context is:
 
 ```text
-KindChannel    -> channel
-KindSubchannel -> channel + "." + sub
-KindDirect     -> no key
+KindChannel -> channel
+KindDirect  -> no key
 ```
 
 Membership keys are normalized by lowercasing, trimming space, and stripping a
@@ -952,7 +938,6 @@ guarantee.
 2. Drops invalid records:
 
 ```text
-subchannel with empty channel or sub
 direct with empty target
 unknown kind
 ```
@@ -1502,7 +1487,7 @@ Inactive lines start with two spaces:
   
 ```
 
-For channel/subchannel contexts with members, a sorted member list is appended:
+For channel contexts with members, a sorted member list is appended:
 
 ```text
  [<member1>, <member2>]
@@ -1563,7 +1548,7 @@ Cannot /invite in a DM context. Switch to a channel first.
 ```
 
 The optional channel argument is honored only when it starts with `#`. A third
-argument without `#` is ignored and the current channel/subchannel is used.
+argument without `#` is ignored and the current channel is used.
 
 If already joined:
 
@@ -1625,7 +1610,7 @@ Missing persona:
 Usage: /kick <persona>
 ```
 
-If current focus is not a channel/subchannel, it uses channel key:
+If current focus is not a channel, it uses channel key:
 
 ```text
 main

@@ -186,26 +186,12 @@ root
 KindChannel:
     agent.ChannelMemoryScope(ctx.Channel, nil)
 
-KindSubchannel:
-    parent = agent.ChannelMemoryScope(ctx.Channel, nil)
-    agent.ChannelMemoryScope(ctx.Sub, &parent)
-
 KindDirect:
     agent.QueryMemoryScope(ctx.Target, nil)
 
 default:
     agent.RootMemoryScope()
 ```
-
-Important subchannel behavior: subchannels are stored as a channel scope whose
-name is the sub-name, with the parent channel as a parent scope. A UI context
-`#dev.build` therefore stores scoped memory under:
-
-```text
-contexts/channels/dev/channels/build/
-```
-
-not under a `subchannels` directory.
 
 Direct contexts are query scopes. A UI `/query alice` context stores under:
 

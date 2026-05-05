@@ -154,7 +154,6 @@ func TestChannelKeyFromCtx(t *testing.T) {
 	}{
 		{Channel("main"), "main", true},
 		{Channel("#ops"), "ops", true},
-		{Subchannel("hub", "web"), "hub.web", true},
 		{Direct("buddy"), "", false},
 	}
 	for _, tt := range tests {

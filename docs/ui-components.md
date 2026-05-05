@@ -483,7 +483,6 @@ If the channel closes, it returns `agentDoneMsg{ch: ch}`.
 Maps the UI routing context into the agent memory scope:
 
 - channel -> `agent.ChannelMemoryScope(ctx.Channel, nil)`
-- subchannel -> channel parent plus a child channel scope
 - direct -> query scope
 - default -> root scope
 
@@ -1463,7 +1462,6 @@ A background goroutine waits on the player process to exit, sending an event to 
 ### `ContextKind`
 
 - `KindChannel`
-- `KindSubchannel`
 - `KindDirect`
 
 ### `IRCContext`
@@ -1472,7 +1470,6 @@ Fields:
 
 - `Kind`
 - `Channel`
-- `Sub`
 - `Target`
 
 ### `Label()`
@@ -1480,7 +1477,6 @@ Fields:
 Canonical display labels:
 
 - channel -> `#channel`
-- subchannel -> `#channel.sub`
 - direct -> `target`
 - default -> `#main`
 
@@ -1492,14 +1488,6 @@ Behavior:
 - lowercases
 - strips leading `#`
 - empty names fall back to `main`
-
-### `Subchannel(channel, sub string)`
-
-Behavior:
-
-- trims and lowercases both parts
-- strips leading `#` from the channel
-- empty channel falls back to `main`
 
 ### `Direct(target string)`
 
@@ -1541,7 +1529,6 @@ Invalid saved records are dropped during restore.
 This is the string key used for per-context agent message storage:
 
 - channel -> `#channel`
-- subchannel -> `#channel.sub`
 - direct -> `target`
 - default -> `agent.DefaultContextKey`
 
@@ -1622,7 +1609,7 @@ Important details:
 
 ### `channelKeyFromCtx(ctx)`
 
-Extracts the membership key for channel or subchannel contexts.
+Extracts the membership key for channel contexts.
 
 Direct contexts return `("", false)`.
 
@@ -1641,7 +1628,7 @@ Usage:
 Behavior:
 
 - the explicit third argument only counts when it starts with `#`
-- otherwise the current channel or subchannel is used
+- otherwise the current channel is used
 - direct contexts are rejected with:
 
 ```text
@@ -1695,7 +1682,7 @@ Usage:
 
 Behavior:
 
-- current channel or subchannel is used when possible
+- current channel is used when possible
 - direct contexts fall back to `main`
 - missing membership emits:
 

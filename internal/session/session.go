@@ -82,9 +82,9 @@ type Checkpoint struct {
 
 // ContextRecord is a serializable representation of a single IRC routing context.
 type ContextRecord struct {
-	Kind    string `json:"kind"`              // "channel", "subchannel", "direct"
+	Kind    string `json:"kind"`              // "channel" or "direct"
 	Channel string `json:"channel,omitempty"` // channel name (no '#')
-	Sub     string `json:"sub,omitempty"`     // subchannel qualifier
+	Sub     string `json:"sub,omitempty"`     // legacy: subchannel qualifier (unused, kept for old session files)
 	Target  string `json:"target,omitempty"`  // persona or nick for direct
 }
 
