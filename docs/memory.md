@@ -1641,8 +1641,8 @@ Known gaps that junior models should not paper over:
 - Search is lexical and path-ordered. It is not semantic retrieval.
 - Search returns at most one hit per file, even if multiple headings match.
 - `search_memory` has no scope override; only `write_memory` does.
-- `write_memory` daily mode writes headings that still say
-  `pre-compaction flush`, even when the write came directly from the tool.
+- `write_memory` daily mode now correctly labels its headings as
+  `tool-write flush` rather than `pre-compaction flush` (bt-wire.8).
 - Daemon query-scope consolidation is flat and cannot express query-under-
   channel parentage.
 - Existing stale docs saying `write_memory` is missing should be fixed or

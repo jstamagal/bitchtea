@@ -162,18 +162,42 @@ func TestAppendHot_headingFormat(t *testing.T) {
 	}
 }
 
-func TestAppendDailyForScope_headingAlwaysSaysPreCompaction(t *testing.T) {
+func TestAppendDailyForScope_headingReflectsWriterSource(t *testing.T) {
 	sessionDir, workDir := testDirs(t)
 	when := time.Date(2026, 5, 4, 12, 30, 45, 0, time.UTC)
 
-	if err := AppendDailyForScope(sessionDir, workDir, RootScope(), when, "daily note"); err != nil {
-		t.Fatalf("AppendDailyForScope() error = %v", err)
+	// Compaction source
+	path := DailyPathForScope(sessionDir, workDir, RootScope(), when)
+	os.Remove(path) // fresh start
+	if err := AppendDailyForScope(sessionDir, workDir, RootScope(), when, SourceCompaction, "daily note"); err != nil {
+		t.Fatalf("AppendDailyForScope(compaction) error = %v", err)
+	}
+	got := readFile(t, path)
+	want := "## 2026-05-04T12:30:45Z compaction flush\n\ndaily note\n\n"
+	if got != want {
+		t.Fatalf("compaction daily entry = %q, want %q", got, want)
 	}
 
-	got := readFile(t, DailyPathForScope(sessionDir, workDir, RootScope(), when))
-	want := "## 2026-05-04T12:30:45Z pre-compaction flush\n\ndaily note\n\n"
-	if got != want {
-		t.Fatalf("daily entry = %q, want %q", got, want)
+	// Tool-write source — re-create path for clean start
+	os.Remove(path)
+	if err := AppendDailyForScope(sessionDir, workDir, RootScope(), when, SourceToolWrite, "tool write note"); err != nil {
+		t.Fatalf("AppendDailyForScope(tool-write) error = %v", err)
+	}
+	got = readFile(t, path)
+	wantTool := "## 2026-05-04T12:30:45Z tool-write flush\n\ntool write note\n\n"
+	if got != wantTool {
+		t.Fatalf("tool-write daily entry = %q, want %q", got, wantTool)
+	}
+
+	// Daemon-consolidation source
+	os.Remove(path)
+	if err := AppendDailyForScope(sessionDir, workDir, RootScope(), when, SourceDaemonConsolidation, "daemon note"); err != nil {
+		t.Fatalf("AppendDailyForScope(daemon) error = %v", err)
+	}
+	got = readFile(t, path)
+	wantDaemon := "## 2026-05-04T12:30:45Z daemon-consolidation flush\n\ndaemon note\n\n"
+	if got != wantDaemon {
+		t.Fatalf("daemon daily entry = %q, want %q", got, wantDaemon)
 	}
 }
 
@@ -183,7 +207,7 @@ func TestSearchInScope_allTermsRequired(t *testing.T) {
 	if err := AppendHot(sessionDir, workDir, RootScope(), when, "first", "alpha beta"); err != nil {
 		t.Fatal(err)
 	}
-	if err := AppendDailyForScope(sessionDir, workDir, RootScope(), when, "alpha only"); err != nil {
+	if err := AppendDailyForScope(sessionDir, workDir, RootScope(), when, SourceCompaction, "alpha only"); err != nil {
 		t.Fatal(err)
 	}
 

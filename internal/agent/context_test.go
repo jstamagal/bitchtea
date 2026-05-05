@@ -6,6 +6,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	memorypkg "github.com/jstamagal/bitchtea/internal/memory"
 )
 
 func TestDiscoverContextFiles(t *testing.T) {
@@ -62,7 +64,7 @@ func TestAppendDailyMemory(t *testing.T) {
 	sessionDir := filepath.Join(t.TempDir(), "sessions")
 	when := time.Date(2026, 4, 8, 13, 14, 15, 0, time.UTC)
 
-	if err := AppendDailyMemory(sessionDir, workDir, when, "- Keep the IRC metaphor\n- Restore channel focus on restart"); err != nil {
+	if err := AppendDailyMemory(sessionDir, workDir, when, memorypkg.SourceCompaction, "- Keep the IRC metaphor\n- Restore channel focus on restart"); err != nil {
 		t.Fatalf("append daily memory: %v", err)
 	}
 
@@ -73,7 +75,7 @@ func TestAppendDailyMemory(t *testing.T) {
 	}
 
 	content := string(data)
-	if !strings.Contains(content, "## 2026-04-08T13:14:15Z pre-compaction flush") {
+	if !strings.Contains(content, "## 2026-04-08T13:14:15Z compaction flush") {
 		t.Fatalf("missing flush heading: %q", content)
 	}
 	if !strings.Contains(content, "Keep the IRC metaphor") {
@@ -92,7 +94,7 @@ func TestSearchMemoryFindsHotAndDurableMarkdown(t *testing.T) {
 	if err := SaveMemory(workDir, "# Working memory\n- Keep the IRC metaphor intact\n"); err != nil {
 		t.Fatalf("save memory: %v", err)
 	}
-	if err := AppendDailyMemory(sessionDir, workDir, when, "- Restore channel focus after restart\n- Query memory should inherit parent notes"); err != nil {
+	if err := AppendDailyMemory(sessionDir, workDir, when, memorypkg.SourceCompaction, "- Restore channel focus after restart\n- Query memory should inherit parent notes"); err != nil {
 		t.Fatalf("append daily memory: %v", err)
 	}
 
@@ -106,7 +108,7 @@ func TestSearchMemoryFindsHotAndDurableMarkdown(t *testing.T) {
 	if !strings.Contains(results[0].Source, "memory/") {
 		t.Fatalf("expected durable memory source, got %q", results[0].Source)
 	}
-	if !strings.Contains(results[0].Heading, "pre-compaction flush") {
+	if !strings.Contains(results[0].Heading, "compaction flush") {
 		t.Fatalf("expected flush heading, got %q", results[0].Heading)
 	}
 	if !strings.Contains(results[0].Snippet, "Restore channel focus") {
@@ -167,7 +169,7 @@ func TestScopedMemorySearchInheritsParentsWithoutLeakingChildWrites(t *testing.T
 	if err := SaveScopedMemory(sessionDir, workDir, query, "# Query memory\n- Query-only scratchpad\n"); err != nil {
 		t.Fatalf("save query memory: %v", err)
 	}
-	if err := AppendScopedDailyMemory(sessionDir, workDir, channel, when, "- Channel durable note"); err != nil {
+	if err := AppendScopedDailyMemory(sessionDir, workDir, channel, when, memorypkg.SourceCompaction, "- Channel durable note"); err != nil {
 		t.Fatalf("append scoped daily memory: %v", err)
 	}
 

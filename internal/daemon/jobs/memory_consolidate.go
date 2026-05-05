@@ -53,7 +53,7 @@ type memoryConsolidateOutput struct {
 // hand-edits HOT.md, our markers just accumulate next to their notes.
 const consolidatedMarkerPrefix = "<!-- bitchtea-consolidated:"
 
-// dailyEntry is a parsed `## TIMESTAMP pre-compaction flush\n\nBODY` block
+// dailyEntry is a parsed `## TIMESTAMP <source> flush\n\nBODY` block
 // from a daily memory file. The raw body is preserved verbatim so we don't
 // silently rewrite the user's content during consolidation.
 type dailyEntry struct {
@@ -318,11 +318,7 @@ func appendConsolidatedBlock(hotPath, marker string, entry dailyEntry) error {
 // parseDailyEntries reads a daily memory file and returns its entries in
 // file order. Daily files have the format produced by AppendDailyForScope:
 //
-//   ## RFC3339 pre-compaction flush
-//
-//   <body lines...>
-//
-//   ## RFC3339 pre-compaction flush
+//   ## RFC3339 <source> flush
 //
 //   <body lines...>
 //

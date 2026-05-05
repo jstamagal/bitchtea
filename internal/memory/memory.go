@@ -14,6 +14,17 @@ import (
 
 var nonAlphaNum = regexp.MustCompile(`[^a-z0-9]+`)
 
+// DailyWriterSource labels the caller that produced a daily memory entry so the
+// heading can differentiate compaction, explicit tool writes, and daemon
+// consolidation.
+type DailyWriterSource string
+
+const (
+	SourceCompaction           DailyWriterSource = "compaction"
+	SourceToolWrite            DailyWriterSource = "tool-write"
+	SourceDaemonConsolidation  DailyWriterSource = "daemon-consolidation"
+)
+
 type ScopeKind string
 
 const (
@@ -146,13 +157,13 @@ func DailyPathForScope(sessionDir, workDir string, scope Scope, when time.Time) 
 }
 
 // AppendDaily appends a dated durable-memory checkpoint for later recall.
-func AppendDaily(sessionDir, workDir string, when time.Time, content string) error {
-	return AppendDailyForScope(sessionDir, workDir, RootScope(), when, content)
+func AppendDaily(sessionDir, workDir string, when time.Time, source DailyWriterSource, content string) error {
+	return AppendDailyForScope(sessionDir, workDir, RootScope(), when, source, content)
 }
 
 // AppendDailyForScope appends a dated durable-memory checkpoint for a scope.
 // Uses kernel-level flock to prevent interleaved writes from concurrent bitchtea processes.
-func AppendDailyForScope(sessionDir, workDir string, scope Scope, when time.Time, content string) error {
+func AppendDailyForScope(sessionDir, workDir string, scope Scope, when time.Time, source DailyWriterSource, content string) error {
 	content = strings.TrimSpace(content)
 	if content == "" {
 		return nil
@@ -174,7 +185,11 @@ func AppendDailyForScope(sessionDir, workDir string, scope Scope, when time.Time
 	}
 	defer syscall.Flock(int(f.Fd()), syscall.LOCK_UN) //nolint:errcheck
 
-	entry := fmt.Sprintf("## %s pre-compaction flush\n\n%s\n\n", when.Format(time.RFC3339), content)
+	label := string(source)
+	if label == "" {
+		label = "compaction"
+	}
+	entry := fmt.Sprintf("## %s %s flush\n\n%s\n\n", when.Format(time.RFC3339), label, content)
 	if _, err := f.WriteString(entry); err != nil {
 		return fmt.Errorf("append daily memory: %w", err)
 	}

@@ -97,13 +97,13 @@ func ScopedDailyMemoryPath(sessionDir, workDir string, scope MemoryScope, when t
 }
 
 // AppendDailyMemory appends a dated durable-memory checkpoint for later recall.
-func AppendDailyMemory(sessionDir, workDir string, when time.Time, content string) error {
-	return memorypkg.AppendDaily(sessionDir, workDir, when, content)
+func AppendDailyMemory(sessionDir, workDir string, when time.Time, source memorypkg.DailyWriterSource, content string) error {
+	return memorypkg.AppendDaily(sessionDir, workDir, when, source, content)
 }
 
 // AppendScopedDailyMemory appends durable memory for a context scope.
-func AppendScopedDailyMemory(sessionDir, workDir string, scope MemoryScope, when time.Time, content string) error {
-	return memorypkg.AppendDailyForScope(sessionDir, workDir, scope, when, content)
+func AppendScopedDailyMemory(sessionDir, workDir string, scope MemoryScope, when time.Time, source memorypkg.DailyWriterSource, content string) error {
+	return memorypkg.AppendDailyForScope(sessionDir, workDir, scope, when, source, content)
 }
 
 // MemorySearchResult is a single recall hit from hot or durable markdown memory.

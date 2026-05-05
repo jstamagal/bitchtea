@@ -38,7 +38,9 @@ func newMemoryFixture(t *testing.T) memoryFixture {
 
 // writeDaily writes a daily file with the same shape AppendDailyForScope
 // emits. day is YYYY-MM-DD; entries is a list of (rfc3339-timestamp, body)
-// pairs to embed as `## TS pre-compaction flush\n\nBODY` blocks.
+// pairs to embed as `## TS compaction flush\n\nBODY` blocks (heading
+// defaults to "compaction" to match the pre-fix format that parseDailyEntries
+// already handles — it extracts only timestamp from the heading).
 func (f memoryFixture) writeDaily(t *testing.T, scope memory.Scope, day string, entries [][2]string) {
 	t.Helper()
 	when, err := time.Parse("2006-01-02", day)
@@ -51,7 +53,7 @@ func (f memoryFixture) writeDaily(t *testing.T, scope memory.Scope, day string, 
 	}
 	var sb strings.Builder
 	for _, e := range entries {
-		sb.WriteString("## " + e[0] + " pre-compaction flush\n\n")
+		sb.WriteString("## " + e[0] + " compaction flush\n\n")
 		sb.WriteString(e[1])
 		sb.WriteString("\n\n")
 	}
