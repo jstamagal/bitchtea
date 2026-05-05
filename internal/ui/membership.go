@@ -3,6 +3,7 @@ package ui
 import (
 	"sort"
 	"strings"
+	"sync"
 
 	"github.com/jstamagal/bitchtea/internal/session"
 )
@@ -10,6 +11,7 @@ import (
 // MembershipManager tracks which personas are joined in which channels.
 // Personas must be explicitly invited; they don't see channels by default.
 type MembershipManager struct {
+	mu sync.Mutex
 	// channels maps channel key (without '#') → set of persona names
 	channels map[string]map[string]struct{}
 }
@@ -23,6 +25,8 @@ func NewMembershipManager() *MembershipManager {
 
 // Invite adds persona to channel. Returns true if newly added, false if already present.
 func (m *MembershipManager) Invite(channelKey, persona string) bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	channelKey = normalizeMembershipKey(channelKey)
 	persona = strings.TrimSpace(persona)
 	if channelKey == "" || persona == "" {
@@ -40,6 +44,8 @@ func (m *MembershipManager) Invite(channelKey, persona string) bool {
 
 // Part removes persona from channel. Returns true if they were present.
 func (m *MembershipManager) Part(channelKey, persona string) bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	channelKey = normalizeMembershipKey(channelKey)
 	persona = strings.TrimSpace(persona)
 	members, ok := m.channels[channelKey]
@@ -58,6 +64,8 @@ func (m *MembershipManager) Part(channelKey, persona string) bool {
 
 // Members returns the sorted list of personas joined to the channel.
 func (m *MembershipManager) Members(channelKey string) []string {
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	channelKey = normalizeMembershipKey(channelKey)
 	members, ok := m.channels[channelKey]
 	if !ok {
@@ -73,6 +81,8 @@ func (m *MembershipManager) Members(channelKey string) []string {
 
 // IsJoined reports whether persona is a member of channel.
 func (m *MembershipManager) IsJoined(channelKey, persona string) bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	channelKey = normalizeMembershipKey(channelKey)
 	persona = strings.TrimSpace(persona)
 	members, ok := m.channels[channelKey]
@@ -85,6 +95,8 @@ func (m *MembershipManager) IsJoined(channelKey, persona string) bool {
 
 // ToState converts to a serializable MembershipState.
 func (m *MembershipManager) ToState() session.MembershipState {
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	channels := make(map[string][]string, len(m.channels))
 	for ch, members := range m.channels {
 		names := make([]string, 0, len(members))
@@ -99,6 +111,8 @@ func (m *MembershipManager) ToState() session.MembershipState {
 
 // RestoreState replaces state from a persisted MembershipState.
 func (m *MembershipManager) RestoreState(state session.MembershipState) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	m.channels = make(map[string]map[string]struct{}, len(state.Channels))
 	for ch, personas := range state.Channels {
 		if len(personas) == 0 {
