@@ -47,7 +47,10 @@ The UI uses three Bubbles components directly:
 - `viewport.Model` for scrollback.
 - `spinner.Model` for the thinking / tool-call status indicator.
 
-Mouse wheel support comes from Bubble Tea plus `viewport.MouseWheelEnabled`.
+Scrollback is keyboard-driven (PgUp/PgDn/arrows) — mouse capture is
+intentionally disabled so the terminal's native text selection works for
+copy/paste.
+
 The textarea is configured with a fixed height and a hard character limit.
 
 ### Lip Gloss
@@ -228,13 +231,12 @@ Important behavior:
 - spinner tick
 - MP3 tick
 - `tea.EnterAltScreen`
-- `tea.EnableMouseCellMotion`
 - `showSplash()`
 
 This is the terminal bootstrap:
 
-- enter the alt screen
-- enable mouse motion
+- enter the alt screen (mouse capture intentionally NOT enabled — see
+  the Bubble Tea section for rationale)
 - start the cursor blink
 - start spinner and MP3 timers
 - inject the splash block into the viewport

@@ -362,7 +362,6 @@ func (m Model) Init() tea.Cmd {
 		m.spinner.Tick,
 		mp3TickCmd(),
 		tea.EnterAltScreen,
-		tea.EnableMouseCellMotion,
 		m.showSplash(),
 	)
 }
@@ -411,8 +410,6 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if !m.ready {
 			m.viewport = viewport.New(vpWidth, vpHeight)
 			m.viewport.SetContent(m.viewContent)
-			m.viewport.MouseWheelEnabled = true
-			m.viewport.MouseWheelDelta = 3
 			m.ready = true
 		} else {
 			m.viewport.Width = vpWidth
