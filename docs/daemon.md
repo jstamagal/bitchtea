@@ -312,7 +312,7 @@ Jobs are written as JSON to `mail/<ulid>.json`. Schema
 
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
-| `kind` | string | yes | Job type; known values: `session-checkpoint`, `memory-consolidate` |
+| `kind` | string | yes | Job type; known values: `session-checkpoint`, `memory-consolidate`, `stale-cleanup` |
 | `args` | object | no | Kind-specific arguments, opaque to the daemon shell |
 | `work_dir` | string | no | Absolute workspace path; required by handlers |
 | `session_path` | string | no | Path to session JSONL; used by checkpoint handler |
@@ -374,12 +374,13 @@ moves every job to `failed/` with `"no handler registered"`.
 
 ### Registered job kinds
 
-Two kinds are registered (`jobs.go:77`):
+Three kinds are registered (`jobs.go:77`):
 
 | Kind constant | String value | Handler | File |
 |--------------|--------------|---------|------|
 | `KindSessionCheckpoint` | `session-checkpoint` | `handleSessionCheckpoint` | `checkpoint.go:49` |
 | `KindMemoryConsolidate` | `memory-consolidate` | `handleMemoryConsolidate` | `memory_consolidate.go:75` |
+| `KindStaleCleanup` | `stale-cleanup` | `handleStaleCleanup` | `stale_cleanup.go` |
 
 Adding a new kind requires:
 1. Define the kind constant in `jobs.go`.
@@ -449,6 +450,56 @@ The next run scans `HOT.md` for existing markers and skips entries whose
 markers are already present (`memory_consolidate.go:259-284`).
 
 Bound: 60s context timeout (`memory_consolidate.go:79`).
+
+### stale-cleanup
+
+Archives session JSONL files older than a configured cutoff into a sibling
+archive directory. Designed to run on a slow cadence (daily / on-shutdown)
+to keep `~/.bitchtea/sessions/` from growing without bound.
+
+Args shape (`stale_cleanup.go`):
+```json
+{
+  "session_dir": "/abs/path/to/sessions",
+  "archive_dir": "/abs/path/to/archive",
+  "max_age_days": 30
+}
+```
+
+Output shape (`stale_cleanup.go`):
+```json
+{
+  "scanned": 14,
+  "archived": 9,
+  "skipped": 1,
+  "conflicts": ["2026-01-02_080000.jsonl"]
+}
+```
+
+Behavior:
+- Cutoff is `now - max_age_days * 24h`. Any `*.jsonl` directly under
+  `session_dir` whose mtime is strictly before the cutoff is moved to
+  `archive_dir/<basename>`. Sidecar files (e.g.
+  `.bitchtea_checkpoint.json`) and non-`.jsonl` entries are left in place.
+- `archive_dir` is created on demand (so a fresh host doesn't need to
+  pre-provision it) but must NOT live inside `session_dir` — that
+  configuration is rejected to avoid the next run rescanning the archive.
+- `max_age_days >= 0` is required; negative values fail with a clear
+  diagnostic.
+- Cross-filesystem moves fall back to copy + remove; mtime is preserved on
+  the destination so a downstream consumer can still reason about the
+  session's original age.
+
+Idempotency: archival uses `os.Rename` (or copy+remove on EXDEV), so after
+a successful run the source no longer exists. A re-run with the same cutoff
+finds nothing new, leaving the archive layout identical. Destination
+collisions (a file with the same basename already in the archive) are
+never overwritten — the source is left in place and reported in
+`conflicts` so an operator can resolve manually.
+
+Bound: 60s context timeout. Cancellation is checked before the directory
+listing and between every per-file move so a SIGTERM-driven shutdown
+aborts cleanly without a half-archived state.
 
 ### Dispatch flow
 
@@ -572,6 +623,7 @@ does today; the daemon picks up where the queue left off.
 | `internal/daemon/jobs/jobs.go` | Dispatcher registry, kind constants, result helpers |
 | `internal/daemon/jobs/checkpoint.go` | session-checkpoint handler |
 | `internal/daemon/jobs/memory_consolidate.go` | memory-consolidate handler |
+| `internal/daemon/jobs/stale_cleanup.go` | stale-cleanup handler |
 | `internal/daemon/e2e_test.go` | End-to-end smoke test (real binary, real round-trip) |
 | `internal/daemon/integration_test.go` | Failure-mode tests (stale lock, recovery, etc.) |
 | `internal/daemon/jobs/dispatch_test.go` | Dispatch integration tests with full daemon run |
@@ -703,6 +755,7 @@ processOnce(ctx, mailbox, logger, dispatch)   ③ dequeue + dispatch
   │       ├─ switch job.Kind                    ⑤ kind dispatch
   │       │    "session-checkpoint" → handleSessionCheckpoint
   │       │    "memory-consolidate" → handleMemoryConsolidate
+  │       │    "stale-cleanup"      → handleStaleCleanup
   │       │    (future kinds)       → Result{Success: false, Error: "no handler"}
   │       │
   │       └─ return Result{Success, Output, StartedAt, FinishedAt}

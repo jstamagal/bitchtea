@@ -36,8 +36,9 @@ type Handler func(ctx context.Context, job daemon.Job) daemon.Result
 // jobs package needs to know the concrete vocabulary; the daemon scaffold
 // stays kind-agnostic.
 const (
-	KindSessionCheckpoint  = "session-checkpoint"
-	KindMemoryConsolidate  = "memory-consolidate"
+	KindSessionCheckpoint = "session-checkpoint"
+	KindMemoryConsolidate = "memory-consolidate"
+	KindStaleCleanup      = "stale-cleanup"
 )
 
 // Handle dispatches a job envelope to the registered handler for its kind.
@@ -77,6 +78,7 @@ func Handle(ctx context.Context, job daemon.Job) daemon.Result {
 var registry = map[string]Handler{
 	KindSessionCheckpoint: handleSessionCheckpoint,
 	KindMemoryConsolidate: handleMemoryConsolidate,
+	KindStaleCleanup:      handleStaleCleanup,
 }
 
 // successResult builds a success=true Result with output set to the JSON
