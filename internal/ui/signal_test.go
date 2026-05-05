@@ -7,7 +7,7 @@ import (
 )
 
 func TestSuspendMsgHandling(t *testing.T) {
-	m := testModel(t)
+	m, _ := testModel(t)
 
 	// Send SuspendMsg and verify it returns tea.Suspend command
 	updatedModel, cmd := m.Update(tea.SuspendMsg{})
@@ -28,7 +28,7 @@ func TestSuspendMsgHandling(t *testing.T) {
 }
 
 func TestQuitMsgCancelsStreaming(t *testing.T) {
-	m := testModel(t)
+	m, _ := testModel(t)
 
 	// Simulate streaming state
 	m.streaming = true
@@ -55,7 +55,7 @@ func TestQuitMsgCancelsStreaming(t *testing.T) {
 }
 
 func TestQuitMsgWhenNotStreaming(t *testing.T) {
-	m := testModel(t)
+	m, _ := testModel(t)
 
 	// Ensure not streaming
 	m.streaming = false

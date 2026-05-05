@@ -92,7 +92,7 @@ func TestToolPanelResultTruncation(t *testing.T) {
 }
 
 func TestResumeSessionRestoresAgentMessagesAndToolNick(t *testing.T) {
-	model := testModel(t)
+	model, _ := testModel(t)
 	sess := &session.Session{
 		Path: "resume.jsonl",
 		Entries: []session.Entry{
@@ -134,7 +134,7 @@ func TestResumeSessionRestoresAgentMessagesAndToolNick(t *testing.T) {
 }
 
 func TestResumeSessionHidesBootstrapEntriesFromDisplay(t *testing.T) {
-	model := testModel(t)
+	model, _ := testModel(t)
 	sess := &session.Session{
 		Path: "resume.jsonl",
 		Entries: []session.Entry{
@@ -160,7 +160,7 @@ func TestResumeSessionHidesBootstrapEntriesFromDisplay(t *testing.T) {
 }
 
 func TestThemeCommandDisabled(t *testing.T) {
-	model := testModel(t)
+	model, _ := testModel(t)
 	updated, _ := model.handleCommand("/theme nord")
 	got := updated.(Model)
 

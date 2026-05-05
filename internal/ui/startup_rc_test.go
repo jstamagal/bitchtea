@@ -7,7 +7,7 @@ import (
 )
 
 func TestExecuteStartupCommandRunsSilently(t *testing.T) {
-	m := testModel(t)
+	m, _ := testModel(t)
 
 	m.ExecuteStartupCommand("join #code")
 
@@ -20,7 +20,7 @@ func TestExecuteStartupCommandRunsSilently(t *testing.T) {
 }
 
 func TestResumeThenExecuteStartupCommandKeepsMessagesAndUpdatesFocus(t *testing.T) {
-	m := testModel(t)
+	m, _ := testModel(t)
 	sess := &session.Session{
 		Path: "resume.jsonl",
 		Entries: []session.Entry{

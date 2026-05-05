@@ -20,7 +20,7 @@ func TestLookupSlashCommandSupportsAliases(t *testing.T) {
 		t.Fatal("expected non-nil handlers")
 	}
 
-	baseModel := testModel(t)
+	baseModel, _ := testModel(t)
 	helpResult, _ := helpHandler(baseModel, "/help", []string{"/help"})
 	aliasResult, _ := aliasHandler(baseModel, "/h", []string{"/h"})
 
@@ -32,7 +32,7 @@ func TestLookupSlashCommandSupportsAliases(t *testing.T) {
 }
 
 func TestHandleCommandUsesAliasRegistry(t *testing.T) {
-	m := testModel(t)
+	m, _ := testModel(t)
 
 	result, _ := m.handleCommand("/h")
 	msg := lastMsg(result)
@@ -49,7 +49,7 @@ func TestHandleCommandUsesAliasRegistry(t *testing.T) {
 }
 
 func TestHandleCommandUnknownCommandStillErrors(t *testing.T) {
-	m := testModel(t)
+	m, _ := testModel(t)
 
 	result, _ := m.handleCommand("/definitely-not-real")
 	msg := lastMsg(result)
@@ -78,7 +78,7 @@ func TestRemovedRootCommandsAreNotRegistered(t *testing.T) {
 		}
 	}
 
-	m := testModel(t)
+	m, _ := testModel(t)
 	for _, cmd := range removed {
 		result, _ := m.handleCommand(cmd)
 		msg := lastMsg(result)
@@ -108,7 +108,7 @@ func TestSetRoutesToRemovedRootHandlersStillWork(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.desc, func(t *testing.T) {
-			m := testModel(t)
+			m, _ := testModel(t)
 			result, _ := m.handleCommand(tc.input)
 			model := result.(Model)
 			for _, msg := range model.messages {
@@ -127,7 +127,7 @@ func TestSetRoutesToRemovedRootHandlersStillWork(t *testing.T) {
 // --- IRC routing commands ---
 
 func TestJoinCommandSwitchesActiveContext(t *testing.T) {
-	m := testModel(t)
+	m, _ := testModel(t)
 	result, _ := handleJoinCommand(m, "/join #code", []string{"/join", "#code"})
 	if result.focus.ActiveLabel() != "#code" {
 		t.Errorf("active = %q, want #code", result.focus.ActiveLabel())
@@ -135,7 +135,7 @@ func TestJoinCommandSwitchesActiveContext(t *testing.T) {
 }
 
 func TestJoinCommandMissingArgErrors(t *testing.T) {
-	m := testModel(t)
+	m, _ := testModel(t)
 	result, _ := handleJoinCommand(m, "/join", []string{"/join"})
 	if len(result.messages) == 0 || result.messages[len(result.messages)-1].Type != MsgError {
 		t.Error("expected error message")
@@ -143,7 +143,7 @@ func TestJoinCommandMissingArgErrors(t *testing.T) {
 }
 
 func TestPartCommandLeavesCurrentContext(t *testing.T) {
-	m := testModel(t)
+	m, _ := testModel(t)
 	m2, _ := handleJoinCommand(m, "/join #code", []string{"/join", "#code"})
 	m3, _ := handlePartCommand(m2, "/part", []string{"/part"})
 	if m3.focus.ActiveLabel() == "#code" {
@@ -155,7 +155,7 @@ func TestPartCommandLeavesCurrentContext(t *testing.T) {
 }
 
 func TestPartCommandRefusesLastContext(t *testing.T) {
-	m := testModel(t)
+	m, _ := testModel(t)
 	result, _ := handlePartCommand(m, "/part", []string{"/part"})
 	if len(result.messages) == 0 || result.messages[len(result.messages)-1].Type != MsgError {
 		t.Error("expected error when parting last context")
@@ -163,7 +163,7 @@ func TestPartCommandRefusesLastContext(t *testing.T) {
 }
 
 func TestQueryCommandOpensDirect(t *testing.T) {
-	m := testModel(t)
+	m, _ := testModel(t)
 	result, _ := handleQueryCommand(m, "/query buddy", []string{"/query", "buddy"})
 	if result.focus.ActiveLabel() != "buddy" {
 		t.Errorf("active = %q, want buddy", result.focus.ActiveLabel())
@@ -171,7 +171,7 @@ func TestQueryCommandOpensDirect(t *testing.T) {
 }
 
 func TestChannelsCommandListsAll(t *testing.T) {
-	m := testModel(t)
+	m, _ := testModel(t)
 	m.focus.SetFocus(Channel("code"))
 	m.focus.SetFocus(Channel("ops"))
 	result, _ := handleChannelsCommand(m, "/channels", []string{"/channels"})
@@ -182,7 +182,7 @@ func TestChannelsCommandListsAll(t *testing.T) {
 }
 
 func TestJoinPersistsFocusState(t *testing.T) {
-	m := testModel(t)
+	m, _ := testModel(t)
 	result, _ := handleJoinCommand(m, "/join #persist", []string{"/join", "#persist"})
 	restored := LoadFocusManager(result.config.SessionDir)
 	for _, ctx := range restored.All() {
