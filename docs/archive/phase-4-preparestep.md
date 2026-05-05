@@ -200,3 +200,11 @@ shape they have to fit:
 - **Cache marker scope for `zai-anthropic`**: `service: zai-anthropic` speaks Anthropic wire format but is an upstream proxy. Until a captured-payload test confirms cache_control round-trips correctly, treat as **off**. Re-enable when verified.
 - **Tool refresh frequency**: every step is safe but possibly wasteful. A revision counter on `*tools.Registry` is cheap; adding it is in scope for `bt-p4-tool-refresh`.
 - **PrepareStep concurrency**: fantasy invokes the hook synchronously, but it closes over `*Agent`. If a future change ever runs steps concurrently, the `a.messages` mirror needs a mutex. Not an issue today.
+
+## Status
+
+All work shipped. Residual notes are forward-looking (future MCP tool registry
+mutation, future provider-specific `ProviderOptions` on `prepared`, future
+concurrent steps needing a mutex on the `a.messages` mirror) and not blockers.
+Design rationale was ported into `docs/agent-loop.md` under the PrepareStep
+section. This document is retained for historical context.

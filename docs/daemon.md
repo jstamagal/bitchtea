@@ -283,7 +283,7 @@ recovery scan and the signal handler setup, then polls every `PollEvery`
 interval.
 
 The combined `fsnotify`+poll approach from the design doc
-(`docs/phase-7-process-model.md`) is future work. The current implementation
+(`docs/archive/phase-7-process-model.md`) is future work. The current implementation
 is poll-only, which is safe and simple. There is no correctness concern with
 a slow poll — the daemon is doing background work, and a few seconds of delay
 is unnoticeable.
@@ -819,3 +819,89 @@ recoverCrashedJobs(mailbox, startTime, logger)
 | ⑦ | `internal/daemon/mailbox.go:138` | `Mailbox.Fail` |
 | ⑧ | `internal/daemon/run.go:197` | `recoverCrashedJobs` |
 | TUI | `internal/ui/model.go:1318` | daemon checkpoint submission |
+
+## Design rationale
+
+Originally documented in `archive/phase-7-daemon-audit.md` and
+`archive/phase-7-process-model.md` (both archived).
+
+**Opt-in, additive, per-workspace.** The TUI must remain fully usable
+without it; nothing the daemon does is on the critical path of a turn. The
+audit's "value-add, not gap-fill" framing applies — a daemon that's down
+means the TUI behaves as it does today, which is fine. No fallback
+compaction path, no degraded-mode warnings, no nag.
+
+**Single instance per user, system-wide.** Per-workspace daemons would
+multiply pidfile bookkeeping for no real benefit; the daemon already keys
+all per-workspace work via the `WorkDir` field inside each job envelope.
+One process, one lock, one mailbox, regardless of how many checkouts the
+user has.
+
+**Pidfile informational, flock authoritative.** The kernel releases flock
+on process exit even on SIGKILL, so a stale pidfile cannot fool the
+liveness check. There is no "is the pid alive" probe — flock subsumes it.
+A dead process cannot hold a flock, so acquiring the lock is sufficient
+proof that no daemon is live. The pidfile lives at `~/.bitchtea/daemon.pid`
+rather than `~/.bitchtea/daemon/daemon.pid` so the TUI can find it without
+knowing the mailbox layout.
+
+**File mailbox over unix socket or HTTP.** Three options were ranked: file
+mailbox (chosen), unix socket, local HTTP. The mailbox wins on simplicity:
+zero protocol code, survives daemon restart, debuggable with `cat`,
+durable across both daemon and TUI crashes. Unix socket is the obvious
+upgrade if latency ever matters. Local HTTP was rejected as overkill (port
+allocation, firewall noise). The latency floor of the poll interval is
+acceptable because the daemon is doing background work — a few seconds of
+delay is unnoticeable.
+
+**ULID filenames.** ULIDs sort by creation time and embed enough
+randomness to avoid collisions across requestors. The result file uses the
+same ULID as the request — trivial correlation, no envelope-side ID
+needed.
+
+**Atomic write via tmp+rename.** POSIX `rename` is atomic within a
+filesystem, which `~/.bitchtea/` always is. The reader (daemon for `mail/`,
+TUI for `done/`) only ever sees fully-written files. The daemon moves a
+completed job by writing the result atomically to `done/` (or `failed/`)
+then removing the `mail/` entry — separate syscalls, no cross-directory
+rename that could clobber an existing same-name file in the target dir.
+
+**`success: false` goes to `done/`, not `failed/`.** The split
+distinguishes "job ran to completion with an error" (`done/`) from "daemon
+refused to run the job at all" (`failed/`). Unknown kinds, malformed
+envelopes, and shutdown-deadline misses go to `failed/`; handler returns
+with `success: false` go to `done/`. This lets consumers surface "tried
+and failed" differently from "couldn't even start".
+
+**Crash recovery uses mtime, not envelope `submitted_at`.** Mtime is
+harder to spoof and correctly survives clock skew. It is set by `rename`
+at write time, so it represents the moment the file became visible to the
+daemon. Files with mtime before the daemon's start time are assumed to be
+from a crashed instance and moved to `failed/`.
+
+**Do not requeue crashed jobs.** Moving to `failed/` prevents a loop on
+input that crashes the daemon. The cost is that a one-time transient
+failure (e.g. host OOM during the job) needs operator action to re-submit;
+the alternative — an infinite crash loop on a poison-pill envelope — is
+worse.
+
+**Malformed envelopes are left in `mail/`, not auto-deleted.** Silently
+removing data the operator might want to inspect is worse than leaving a
+broken file in place. The parse error is logged; the operator removes the
+file by hand.
+
+**State ownership split.** The daemon never appends to a TUI-owned session
+JSONL; it writes its own `daemon_<ts>.jsonl` files. Reading is fine
+(`session.Load`, `FantasyFromEntries`). For memory, both processes write
+the same files (`HOT.md`, daily files) via flock-serialized helpers
+(`memory.AppendHot`, `memory.AppendDailyForScope`); concurrent writes
+interleave at the entry boundary, never mid-line. The flock discipline on
+session and memory writes is the load-bearing invariant — a second writer
+(the daemon) is already safe today because the locks are kernel-level, not
+in-process.
+
+**No hardcoded compaction model.** The prior (deleted) daemon presumably
+locked compaction to a single model; the current design takes model choice
+from job args or daemon config. Hardcoding the model would force every
+user onto whatever was current at build time and ignore profile/provider
+choices the user already made.

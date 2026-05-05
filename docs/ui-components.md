@@ -299,12 +299,12 @@ Exact visible text templates:
 
 ```text
 Type a message to start coding. Use /help for commands.
-/model to switch models. /quit to exit. Don't be a wimp.
+/models to browse, /set model to switch. /quit to exit. Don't be a wimp.
 Use @filename to include file contents. /set auto-next on for autopilot.
 ```
 
-The `/model` line in the splash and MOTD is stale. The root `/model` command
-is intentionally not registered. The live path is `/set model`.
+The MOTD points at `/models` (the picker) and `/set model` (the actual switcher).
+The root `/model` command is intentionally not registered.
 
 #### `tea.KeyMsg`
 
@@ -1755,12 +1755,13 @@ The live root slash commands are:
 /kick
 ```
 
-Important mismatch:
+Notes on the surface:
 
-- `/model` is mentioned in splash / MOTD copy, but it is not registered.
-- the root `/provider`, `/baseurl`, `/apikey`, `/auto-next`, `/auto-idea`,
+- The MOTD points at `/models` (the picker) and `/set model` (the actual
+  switcher); the root `/model` command is intentionally not registered.
+- The root `/provider`, `/baseurl`, `/apikey`, `/auto-next`, `/auto-idea`,
   and `/sound` commands are also intentionally absent.
-- the supported path is `/set ...`.
+- The supported path is `/set ...`.
 
 ### `helpCommandText`
 
@@ -2527,14 +2528,13 @@ Visible text:
 ```text
 ─────────────────────────────────────────────────────────────
 Type a message to start coding. Use /help for commands.
-/model to switch models. /quit to exit. Don't be a wimp.
+/models to browse, /set model to switch. /quit to exit. Don't be a wimp.
 Use @filename to include file contents. /set auto-next on for autopilot.
 ─────────────────────────────────────────────────────────────
 ```
 
-Important mismatch:
-
-- the `/model` mention is stale, because `/model` is not a registered command.
+The MOTD points at `/models` (the picker) and `/set model` (the actual
+switcher). The root `/model` command is intentionally not registered.
 
 ## Wiring Gaps and Test Coverage Notes
 
@@ -2543,8 +2543,6 @@ shape of the behavior.
 
 ### Stale or incomplete wiring
 
-- `/model` is still mentioned in splash and MOTD, but the root command is
-  not registered.
 - `helpCommandText` is hard-coded instead of being generated from the command
   registry, so it can drift.
 - `saveCurrentContextMessages()` exists but is not called by the normal save

@@ -226,3 +226,16 @@ adapters compile and the agent runs on the legacy type.
   splitting into `lossy_reasoning`, `lossy_media`, `lossy_parts`? Probably
   not for v1 — the field exists to warn the downgrade reader, not to
   drive UI.
+
+## Status
+
+All work shipped. `fantasy.Message` is the canonical in-memory type, the
+v1 JSONL envelope (with dual-write legacy fields and `legacy_lossy` flag)
+is in production, and the v0 fallback reader keeps old session files
+loading. Design rationale (multi-part / reasoning / file-media / typed
+ToolResultPart motivation, dual-write JSONL rollback strategy, adapter
+direction inside `internal/llm`, `legacy_lossy` single-boolean choice,
+deferred ProviderOptions persistence) was already ported into
+`docs/streaming.md` (Design rationale section) and `docs/sessions.md`
+(Design rationale: dual-write JSONL envelope subsection). This document
+is retained for historical context.

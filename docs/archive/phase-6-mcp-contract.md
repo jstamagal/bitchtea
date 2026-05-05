@@ -293,3 +293,12 @@ The contract this doc nails down:
   `Record(server, tool, args, result)` callback.
 - Expose `/mcp list` in this phase or wait for `bt-p6-verify`? Leaning
   verify — keeps this phase pure-design.
+
+## Status
+
+Client, tools, security shipped; resources read with cap; sampling deferred;
+prompts deferred indefinitely. Design rationale (per-workspace, three-layer
+opt-in, env-only interpolation, namespace convention, secret-redaction
+boundary, no-prompts/no-sampling reasoning) was ported into `docs/mcp.md`
+under the Design rationale section. This document is retained for
+historical context.

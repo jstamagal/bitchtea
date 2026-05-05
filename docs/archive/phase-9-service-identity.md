@@ -176,3 +176,15 @@ it slots in at layer 2.
   `OPENAI_BASE_URL` pointing at, e.g., a local proxy: `Service` will still
   be `"openai"`. Acceptable for now; a future heuristic could downgrade to
   `"custom"` when the host doesn't match `api.openai.com`.
+
+## Status
+
+All work shipped. `Service` field is live on `Config` and `Profile`,
+built-in profile defaults updated, env-detection path sets both `Provider`
+and `Service`, lazy default-on-load via `deriveService`, `/set` clobber
+semantics in place, `ProfileAllowsEmptyAPIKey` reduced to a `Service ==
+"ollama"` check, and per-service cache marker gate enabled. Design
+rationale (Service-vs-Provider separation, URL-sniffing-breaks reasoning,
+lazy-default-on-load policy, why-`/set`-clobbers-to-custom, rollback
+shape) was ported into `docs/providers.md` under the Design rationale
+section. This document is retained for historical context.

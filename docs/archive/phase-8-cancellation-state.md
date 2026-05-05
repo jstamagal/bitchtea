@@ -137,3 +137,19 @@ This design fixes it two ways:
 - Does Esc x1 during a `terminal_*` PTY tool just cancel the wait/snapshot, or does it kill the PTY? Proposed: cancel only the in-flight call (e.g. `terminal_wait`), leave the PTY alive — `terminal_close` is a separate, explicit tool.
 - Should the synthetic result text be configurable per-tool? Probably no for v1; a single constant is easier to test and to reason about.
 - Cost-tracking: a cancelled tool call still consumed input tokens. Count it as usual; nothing to design here.
+
+## Status
+
+All work shipped. Per-tool cancellation, Esc/Ctrl+C ladder semantics,
+ToolContextManager, and the synthetic tool-result contract are live (see
+`internal/llm/tool_context.go` and `internal/ui/model.go`). One operational
+deviation from this design: the wrappers now return
+`fantasy.NewTextErrorResponse(fmt.Sprintf("Error: %v", err))` rather than a
+literal `"user cancelled this tool call"` string for Esc x1; what matters
+operationally is that they return a `fantasy.ToolResponse` with `nil` Go
+error so the fantasy stream stays alive. Design rationale (Model-owns-both,
+Ctrl+C-blunter-than-Esc, panel-priority, synthetic-result-must-be-
+ToolResponse-not-error) was ported into `docs/signals-and-keys.md` under the
+Design rationale section, with complementary detail already present in
+`docs/agent-loop.md`'s Per-Tool Cancellation section. This document is
+retained for historical context.

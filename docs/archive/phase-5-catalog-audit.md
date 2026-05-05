@@ -207,3 +207,10 @@ offline operation.
   catwalk v0.35.1 was tagged. Document a version-bump cadence so we don't
   drift more than a few months from upstream even when the user is fully
   offline.
+
+## Status
+
+All work shipped. Picker UI, autoupdate, fuzzy finder, and cost-sync landed.
+Design rationale (single-file shape, cache-dir layout, soft TTL + embedded
+floor, built-in cohabitation) was ported into `docs/catalog.md` under the
+Design rationale section. This document is retained for historical context.

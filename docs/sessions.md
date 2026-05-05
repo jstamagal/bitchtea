@@ -492,6 +492,44 @@ tool      -> tool message with one ToolResultPart(ToolCallID, text Content)
 other     -> fantasy.MessageRole(Role), one TextPart(Content)
 ```
 
+### Design rationale: dual-write JSONL envelope
+
+Originally documented in `archive/phase-3-message-contract.md` (archived).
+
+The v1 entry shape carries both `msg` (canonical fantasy message) and the
+legacy `role` / `content` / `tool_calls` fields on the same line. Reasons
+the dual-write was kept rather than ripping the legacy fields out:
+
+- **Append-only is non-negotiable.** `Append` is the only writer. There is
+  no rewrite step, no whole-file migration. Sessions written before v1
+  must keep loading forever — they are not date-cut.
+- **Rollback is the dual-write itself.** Because every v1 entry also
+  carries the legacy fields, a downgraded binary loses no log lines. At
+  worst it loses fidelity on entries flagged `legacy_lossy: true`.
+- **Mid-file mixing is allowed.** A session may interleave v0 and v1
+  entries (resumed across an upgrade, or an old binary appending into a
+  v1 file). The reader handles each entry on its own merits; there is no
+  whole-file version check.
+- **Unknown future part types degrade, never crash.** An unknown
+  `MessagePart` `type` becomes a `TextPart` with the raw JSON as text.
+
+The cost is one extra `content` field per entry — a few hundred bytes,
+negligible vs. the `msg` envelope itself. Removing the legacy fields is
+deferred until after the `Client.StreamChat` boundary stops needing
+`[]llm.Message`.
+
+A user who wants a "clean" v1-only file can `/fork` after upgrading; the
+fork copies entries verbatim, then new appends are v1.
+
+`legacy_lossy` is a single boolean. Splitting it into
+`lossy_reasoning` / `lossy_media` / `lossy_parts` was considered and
+rejected — the field exists to warn the downgrade reader, not to drive UI.
+
+`ProviderOptions` persistence on session entries was deferred: cache
+markers are per-step rather than per-message, and the design left the
+question of whether to strip on write open. Today the field is persisted
+inside `msg` with no strip step.
+
 ## Display Projection On Resume
 
 `session.DisplayEntries(entries)` removes entries where:

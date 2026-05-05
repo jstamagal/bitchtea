@@ -302,4 +302,67 @@ MCP tests use `fakeServer` (a `mcp.Server` implementation) injected via
 | `internal/mcp/redact.go` | Secret redaction for transcripts and session JSONL |
 | `internal/llm/mcp_tools.go` | Fantasy tool adapter, tool assembly, MCP→fantasy schema bridge |
 
-🦍💪🤝 APES STRONK TOGETHER 🦍💪🤝
+## Design rationale
+
+Originally documented in `archive/phase-6-mcp-contract.md` (archived).
+
+**Per-workspace, never global.** The useful set of MCP servers is a property
+of *this checkout*, not the user — a frontend repo wants different servers
+than a sysadmin scripting dir. Global profiles and `~/.bitchtearc` are
+intentionally not enable sites; the only enable site is the workspace
+`mcp.json`. This also means a hostile workspace cannot turn on MCP behind
+the user's back across all of their repos.
+
+**Three opt-in layers, all required.** (1) file exists, (2) top-level
+`enabled: true`, (3) per-server `enabled: true`. A user who has never heard
+of MCP must never see an MCP-flavored error, tool name, or transcript line.
+Failing any layer silences the corresponding scope.
+
+**Both transports up front.** `stdio` covers everything `npm install`-able
+locally; `http` covers the homelab-shared-server case real for solo-dev
+setups. Adding HTTP later would force a config-format migration. Websocket
+was rejected as having no compelling user.
+
+**`${env:VARNAME}` is the only interpolation form.** No `$VAR`, no shell
+expansion, no defaulting. A reference to an unset variable is a load-time
+error and the server is skipped — we do *not* silently substitute the empty
+string, because an empty bearer token is a footgun, not a no-op. The inline-
+secret screen (`sk-`, `ghp_`, etc.) is a heuristic, not a vault, but it
+catches every obvious paste.
+
+**Configured secrets never reach transcript or session JSONL; tool
+args/results do.** Connection config (env maps, headers) is structurally
+invisible to logging. Tool args and results flow through the same path as
+`bash` output — if the user passes a token *as a tool argument*, it shows
+up. That is expected behavior, not a bug. The boundary is "did the user
+hand it to a tool intentionally" vs "did the config system resolve a
+secret to make the connection work."
+
+**`mcp__<server>__<tool>` namespace.** Double-underscore separators match
+the convention Claude Code's MCP plugins already use, so prompts written for
+that host stay portable. It also resolves the collision case: a server
+exposing `read` becomes `mcp__fs__read`, distinct from the built-in `read`,
+which keeps its unprefixed name.
+
+**Local built-in tools always win on collision.** Built-ins are appended
+first; an MCP tool with a colliding name is dropped and logged. Built-ins
+live in this repo and have been audited; a third-party MCP server is *its
+author's* code running with *your* environment.
+
+**Prompts skipped, sampling not supported.** Templated-prompt-injection
+overlaps badly with bitchtea's slash commands and per-workspace
+`AGENTS.md` / `CLAUDE.md` discovery. Sampling (server-asks-host-to-call-an-
+LLM) opens a billing and authorization hole that is not worth the v1
+complexity; servers requiring it see "method not found" and should degrade.
+
+**A failing MCP server cannot crash the agent loop.** Connect timeouts,
+mid-turn server death, schema errors, and HTTP non-2xx all surface as a
+tool error returned to the model — never a Go panic and never a silent hang.
+A misbehaving third-party process must not be able to take down the user's
+session.
+
+**Permission hook is consulted on every call, including reconnect retries.**
+Built-in tools never go through it. v1 default is allow-all (the trust gate
+is enabling MCP at all); a stricter `Authorizer` is a follow-up. The hook
+runs *with resolved args* (after JSON parsing) but before they reach the
+wire, leaving room for a future implementation to gate on argument shape.

@@ -106,6 +106,37 @@ transcript, mapping fantasy's multi-part messages back into bitchtea's
 single-string + ToolCalls/ToolCallID shape. `LLMToFantasy` (`convert.go:181`)
 is the inverse used during session restore.
 
+#### Design rationale
+
+Originally documented in `archive/phase-3-message-contract.md` (archived).
+
+The canonical in-memory message type is `fantasy.Message` rather than the old
+flat `llm.Message`. The reasons that drove the swap:
+
+- **Multi-part content per turn.** Assistant text + tool calls live in one
+  ordered slice instead of being smeared across `Content` + `ToolCalls`.
+- **Reasoning preserved across turns.** `ReasoningPart` survives the round
+  trip; previously it was emitted as a `thinking` event and dropped.
+- **First-class file/media parts.** `preview_image` results stop being
+  base64-stuffed text. Anthropic image input becomes addressable.
+- **Per-message `ProviderOptions`.** Cache markers and service gates can
+  attach without smuggling state through message text.
+- **`ToolResultPart.Output` typed (text/error/media).** A tool error is no
+  longer indistinguishable from a successful result whose body happens to
+  start with `error:`.
+
+The cost: a flat string field is gone, so UI rendering and tests that grep
+`msg.Content` need a `firstText(msg) string` helper. JSON serialization
+needed a versioned envelope (see `sessions.md`).
+
+Adapter direction was deliberately kept inside `internal/llm`. Adding the
+fantasy↔bitchtea conversion to `session` would have required `session → llm
+→ fantasy`, which is fine for the dependency graph but breaks the symmetry
+of "all conversion lives in `internal/llm`". The adapter pair
+(`FantasySliceToLLM` / `LLMToFantasy`) is the last bridge: removing it
+means `Client.StreamChat` taking `[]fantasy.Message` directly. Until then
+the agent converts on every call.
+
 ### Tool Context Manager
 
 `streamOnce` creates a `ToolContextManager` per turn (via

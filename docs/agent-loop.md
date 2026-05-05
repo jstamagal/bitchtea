@@ -792,6 +792,56 @@ drained in `PrepareStep`, but `a.messages` stores a different synthetic text:
 That means prepared provider context and persisted agent history do not match
 exactly for this not-currently-wired path.
 
+#### Design rationale
+
+Originally documented in `archive/phase-4-preparestep.md` (archived).
+
+PrepareStep owns five concerns and runs them in a fixed order on every step.
+The order is not arbitrary:
+
+- **Cancellation first.** Returning `stepCtx.Err()` is cheap (no allocations,
+  no I/O) and every later concern is wasted work if the turn is dying. An
+  Esc x2 / Ctrl+C arriving between steps must not silently consume a queued
+  prompt or trigger a tool-list rebuild for a turn already on its way out.
+  This hook covers the *between-steps* gap that the per-tool cancellation
+  path (see Per-Tool Cancellation above) does not.
+- **Drain before tool refresh.** A drained user message may legitimately
+  request a tool reconfiguration (e.g. user pastes `/mcp connect ...` then a
+  real prompt). Refreshing first then draining can leave the turn one step
+  behind the user's intent.
+- **Drain before cache markers.** Anthropic prompt caching attaches
+  `cache_control: {type: "ephemeral"}` to the last stable boundary. Appending
+  a user message moves that boundary, so stamping the marker first and then
+  appending invalidates the marker that was just placed.
+- **Cache markers before provider gates.** Provider gates may need to inspect
+  or adjust the cache marker shape — for example, stripping it for a
+  non-Anthropic upstream that crept in via `Service: "custom"`.
+- **Provider gates last.** They want the *final* `prepared` shape after every
+  earlier concern has had its say.
+
+Failure handling follows a single principle: only cancellation-class errors
+(`context.Canceled`, `context.DeadlineExceeded`) propagate up. Everything
+else is best-effort and degrades to a slightly less-optimized step. A tool
+refresh failure must not kill an in-progress turn — the model can keep working
+with the tools it already has. A cache-marker placement failure drops the
+marker for that step and continues. A provider-gate failure skips the gate.
+
+Two concerns deliberately do *not* live in PrepareStep:
+
+- `prepared.System` is fixed at `Stream` setup time. Re-injecting per-step
+  would invalidate Anthropic's cache prefix.
+- Per-tool cancellation lives one layer deeper, in `bitchteaTool.Run`. The
+  `stepCtx` returned from PrepareStep is unchanged. PrepareStep only sees
+  the gap *between* steps; per-tool cancellation owns the gap *during* a
+  tool call. See `docs/archive/phase-8-cancellation-state.md` (archived) and the
+  Per-Tool Cancellation section above.
+
+The `a.messages` mirror rule for the queue drain matters: if the model
+crashes between steps, the next session resume must see the drained messages
+in history, otherwise the user's typed-and-queued work disappears. Cache
+markers and tool refresh do *not* mirror into `a.messages` — they are
+per-step-only mutations of `prepared`.
+
 ### Fantasy callbacks
 
 The fantasy stream is called as:

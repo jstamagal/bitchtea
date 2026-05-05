@@ -18,17 +18,18 @@ tool dispatch for the typed tools) is fantasy-native.
 
 | Phase | Doc | Status |
 |---|---|---|
-| 3 — Fantasy message contract | `phase-3-message-contract.md` | SHIPPED |
-| 4 — PrepareStep responsibilities | `phase-4-preparestep.md` | SHIPPED |
-| 5 — Catwalk catalog audit | `phase-5-catalog-audit.md` | SHIPPED |
-| 6 — MCP transport / config / security | `phase-6-mcp-contract.md` | SHIPPED for client; resources/prompts/sampling future |
-| 7 — Daemon audit + process model | `phase-7-daemon-audit.md`, `phase-7-process-model.md` | SHIPPED |
-| 8 — Per-tool cancellation state machine | `phase-8-cancellation-state.md` | SHIPPED |
-| 9 — Service identity field | `phase-9-service-identity.md` | SHIPPED |
+| 3 — Fantasy message contract | `archive/phase-3-message-contract.md` | SHIPPED with residuals (StreamChat boundary still `[]llm.Message`; ProviderOptions persistence deferred) |
+| 4 — PrepareStep responsibilities | `archive/phase-4-preparestep.md` | SHIPPED |
+| 5 — Catwalk catalog audit | `archive/phase-5-catalog-audit.md` | SHIPPED with residual (background catalog refresh via daemon NOT wired) |
+| 6 — MCP transport / config / security | `archive/phase-6-mcp-contract.md` | SHIPPED for client; resources/prompts/sampling future |
+| 7 — Daemon audit + process model | `archive/phase-7-daemon-audit.md`, `archive/phase-7-process-model.md` | SHIPPED |
+| 8 — Per-tool cancellation state machine | `archive/phase-8-cancellation-state.md` | SHIPPED |
+| 9 — Service identity field | `archive/phase-9-service-identity.md` | SHIPPED |
 
-The phase docs are *design contracts*, not changelogs. They describe what the
-architecture must satisfy. Even after a phase ships, the doc stays as the
-reference for the design decisions baked in.
+Phase docs are *design contracts*, not changelogs. They describe what the
+architecture must satisfy. Their rationale has been ported into the live
+maintainer docs above; the contracts themselves now live under `archive/`
+as the reference for the design decisions baked in.
 
 ## Known loose ends
 

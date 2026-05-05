@@ -186,3 +186,57 @@ App-level overrides before textarea editing:
 The textarea is initialized with placeholder `"type something, coward..."`, a
 character limit of 8192, width 80, height 3, prompt `">> "`, focused state, and
 line numbers disabled.
+
+## 8. Design rationale
+
+Originally documented in `archive/phase-8-cancellation-state.md` (archived).
+
+**The Model owns both cancellers (turn and per-tool).** The Model is the
+single Bubble Tea actor that receives key events. Pushing the per-tool
+canceller into the Agent would require a key->Agent channel, which adds
+latency and a sync point we do not need. Two scopes, two cancellers, both
+on `*Model`: `m.cancel` (turn) and the lookup that backs
+`m.agent.CancelTool(m.activeToolCallID)` (single in-flight tool). The
+per-tool path lives on the LLM client's `ToolContextManager` precisely so
+the Model can reach it through `Agent.CancelTool` without owning the map
+itself.
+
+**Ctrl+C is intentionally blunter than Esc.** Ctrl+C never does tool-only
+cancel — it only goes to turn-cancel, queue-clear, quit. Two reasons. (1)
+Ctrl+C is the universal "kill what is happening" key; users hitting it
+during a runaway tool expect the *turn* to die, not the tool to be silently
+swapped for a synthetic result and the model to keep going. (2) Ctrl+C
+already serves the third escalation step (quit), so giving it a separate
+tool-only stage would either dilute that meaning or require a four-press
+ladder.
+
+**Panel close has priority over both ladders.** Esc with the tool panel or
+MP3 panel open closes the panel without consuming a stage. The user
+intuition for Esc-with-overlay is "dismiss the overlay"; consuming a ladder
+stage would make the next deliberate Esc behave one stage further along
+than the user expects.
+
+**Esc x3 / Ctrl+C-third-press graduate within a window.** The ladders
+reset (1.5s for Esc, 3s for Ctrl+C) so a user who bumps the key once
+during a long stream is not one keypress away from clearing their queue
+or quitting on their next intentional press. Different windows because
+Ctrl+C carries a quit risk that Esc does not — a slower graduation gives
+more chance to abort.
+
+**Cancellation propagation goes through context, not custom signaling.**
+Every tool context is a child of the turn context, so Esc x2 / streaming
+Ctrl+C cancel active tools through the parent context rather than
+through `Agent.CancelTool`. A separate code path for the
+"turn-cancel-also-cancels-tools" case would duplicate the wrap-and-track
+logic that already exists; deriving from the parent ctx gives it for free.
+
+**The synthetic tool result must be a `fantasy.ToolResponse`, not a Go
+error.** This is the root cause of `bt-s2z`. Returning an error from
+`bitchteaTool.Run` aborts the whole fantasy stream — fantasy treats it as
+"the model machinery is broken, give up". Returning a normal text response
+("user cancelled this tool call") feeds the model a result it can pivot
+on, leaving the turn alive. The discriminator: tool ctx cancelled while
+turn ctx is alive means user-cancelled-tool (synthetic result), turn ctx
+cancelled means real cancellation (let the stream die through fantasy's
+normal abort path), tool returned its own error means tool-error (existing
+`NewTextErrorResponse` path).

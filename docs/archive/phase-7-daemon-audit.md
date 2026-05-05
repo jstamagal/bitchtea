@@ -117,3 +117,12 @@ Pick (1) for v1. Re-evaluate when latency matters. (2) is the obvious upgrade pa
 - Result delivery to a *running* TUI: does the daemon re-use the background-activity status-line surface (`m.backgroundActivity` in `internal/ui/model.go:107`)? That requires the TUI to poll `done/`. Acceptable; defer the polling cadence to `bt-p7-process-model`.
 - Should the daemon be opt-in per-workspace via a marker file (`<WorkDir>/.bitchtea/daemon-enabled`) the way Phase 6 gates MCP? Strongly leaning yes — silent background processes surprise users.
 - Crash-resume: if the daemon dies mid-job, is the mail file requeued or moved to `failed/`? `failed/` keeps the queue moving; requeue can loop on bad input.
+
+## Status
+
+All work shipped. Daemon binary, mailbox IPC, lock/pid handling, crash
+recovery, and the three job kinds (session-checkpoint, memory-consolidate,
+stale-cleanup) are live. Design rationale (state ownership split, deleted
+assumptions, IPC ranking, package boundaries) was ported into
+`docs/daemon.md` under the Design rationale section. This document is
+retained for historical context.

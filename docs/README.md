@@ -19,22 +19,23 @@ is at (phase status, known loose ends, in-flight items).
 | [daemon.md](daemon.md) | Daemon binary, mailbox IPC, registered jobs, lifecycle |
 | [mcp.md](mcp.md) | MCP client, security gates, opt-in layers |
 
-## Phase Contracts (design history)
+## Phase Contracts (archived design history)
 
-These are design contracts written *before* the work landed. They stay in the
-tree as the reference for the architectural decisions baked in. All eight have
-**SHIPPED** banners as of 2026-05-04 (Phase 6 client-side only).
+The eight phase contracts have been moved to [archive/](archive/) now that
+their rationale has been ported into the live docs above. Each archived
+doc carries a `Status:` footer noting whether it is fully shipped or has
+known residuals (Phases 3, 5, and 6 do).
 
-| Doc | What it locks down |
-|---|---|
-| [phase-3-message-contract.md](phase-3-message-contract.md) | Fantasy-native in-memory and on-disk message contract |
-| [phase-4-preparestep.md](phase-4-preparestep.md) | `PrepareStep` ownership: cache, queue drain, tool refresh |
-| [phase-5-catalog-audit.md](phase-5-catalog-audit.md) | Catwalk fetch, on-disk cache, ETag, offline behavior |
-| [phase-6-mcp-contract.md](phase-6-mcp-contract.md) | MCP transport, config layout, security checklist |
-| [phase-7-daemon-audit.md](phase-7-daemon-audit.md) | What the daemon may reuse from existing exports |
-| [phase-7-process-model.md](phase-7-process-model.md) | Daemon lifecycle, IPC, locking, crash recovery |
-| [phase-8-cancellation-state.md](phase-8-cancellation-state.md) | Per-tool cancellation state machine (Esc x1 vs x2 vs x3) |
-| [phase-9-service-identity.md](phase-9-service-identity.md) | `Service` field separate from wire-format `Provider` |
+| Doc | What it locked down | Live doc with rationale |
+|---|---|---|
+| [archive/phase-3-message-contract.md](archive/phase-3-message-contract.md) | Fantasy-native in-memory and on-disk message contract | [streaming.md](streaming.md), [sessions.md](sessions.md) |
+| [archive/phase-4-preparestep.md](archive/phase-4-preparestep.md) | `PrepareStep` ownership: cache, queue drain, tool refresh | [agent-loop.md](agent-loop.md) |
+| [archive/phase-5-catalog-audit.md](archive/phase-5-catalog-audit.md) | Catwalk fetch, on-disk cache, ETag, offline behavior | [catalog.md](catalog.md) |
+| [archive/phase-6-mcp-contract.md](archive/phase-6-mcp-contract.md) | MCP transport, config layout, security checklist | [mcp.md](mcp.md) |
+| [archive/phase-7-daemon-audit.md](archive/phase-7-daemon-audit.md) | What the daemon may reuse from existing exports | [daemon.md](daemon.md) |
+| [archive/phase-7-process-model.md](archive/phase-7-process-model.md) | Daemon lifecycle, IPC, locking, crash recovery | [daemon.md](daemon.md) |
+| [archive/phase-8-cancellation-state.md](archive/phase-8-cancellation-state.md) | Per-tool cancellation state machine (Esc x1 vs x2 vs x3) | [signals-and-keys.md](signals-and-keys.md), [agent-loop.md](agent-loop.md) |
+| [archive/phase-9-service-identity.md](archive/phase-9-service-identity.md) | `Service` field separate from wire-format `Provider` | [providers.md](providers.md) |
 
 ## User-Facing References
 

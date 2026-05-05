@@ -13,9 +13,10 @@ import (
 
 // Client is bitchtea's wrapper around a fantasy.Provider + LanguageModel
 // pair. Public fields are exposed for slash-command introspection
-// (`/provider`, `/baseurl`, `/model`); to mutate them at runtime, callers
-// MUST use the Set* methods so the cached provider rebuilds with the new
-// values and the mutex protects against in-flight stream calls.
+// (`/set provider`, `/set baseurl`, `/set model`); to mutate them at
+// runtime, callers MUST use the Set* methods so the cached provider
+// rebuilds with the new values and the mutex protects against in-flight
+// stream calls.
 type Client struct {
 	APIKey   string
 	BaseURL  string

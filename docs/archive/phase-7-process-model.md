@@ -218,3 +218,14 @@ each — those are part of the default `go test ./...` run.
 - **Job cancellation** (carried from audit OQ): `cancel/<ulid>.json` written by the requestor, polled by the daemon. Cheap to add later if needed; not v1.
 - **fsnotify on macOS**: design assumes Linux/inotify. macOS users get the 1s poll fallback. Whether we ship a daemon binary for macOS at all is a `bt-p7-cli` question.
 - **Result delivery to a *running* TUI** (carried from audit OQ): this doc commits the TUI to polling `done/`. Cadence is a UI decision — proposed default 2s while a known ULID is outstanding, no polling otherwise. Final answer in `bt-p7-cli`.
+
+## Status
+
+All work shipped. Single-instance lock, lifecycle (start / SIGTERM drain /
+SIGKILL recovery), file mailbox protocol, ULID correlation, atomic write
+discipline, success/failed split, and crash recovery are implemented and
+tested (see `internal/daemon/` and the `TestDaemonE2E` smoke test). Design
+rationale (single-instance choice, pidfile-vs-flock, IPC ranking,
+mtime-over-submitted_at, do-not-requeue, success-vs-failed semantics) was
+ported into `docs/daemon.md` under the Design rationale section. This
+document is retained for historical context.

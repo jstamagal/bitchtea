@@ -293,3 +293,61 @@ disambiguating model IDs that appear under multiple providers.
 | `/set baseurl`         | `BaseURL`, `Service`→`custom` | Yes (clears `Profile`) |
 | `/set service`         | `Service` only           | No                |
 | `/profile load <name>` | All connection fields    | Yes (sets `Profile`) |
+
+## Design rationale
+
+Originally documented in `archive/phase-9-service-identity.md` (archived).
+
+**Why `Service` is separate from `Provider`.** `Provider` is the *wire
+format* — `openai` or `anthropic`. Every OpenAI-compatible upstream
+(Ollama, OpenRouter, z.ai, Vercel, xAI, copilot, aihubmix, etc.) ships
+with `Provider: "openai"`. That single field is not enough to decide
+whether OpenRouter `reasoning` params should be forwarded, whether to
+suppress Ollama's `stream_options.include_usage`, whether Anthropic
+`cache_control` blocks are safe (native vs proxy that merely speaks the
+wire format like `zai-anthropic`), whether an empty `APIKey` is allowed,
+or which fantasy provider package to instantiate. `Service` is the source
+of truth for those gates; `Provider` keeps its wire-dialect role.
+
+**URL sniffing breaks the moment a user sets a custom BaseURL.** Pre-
+Phase-9 code inferred service from the host of `BaseURL` (e.g.
+`localhost:11434` → ollama, `openrouter.ai` → openrouter). That works
+until a user runs an Ollama instance on a non-standard port, fronts
+OpenRouter with a corporate proxy, or points `OPENAI_BASE_URL` at a
+local development stub. Carrying `Service` explicitly makes the gate
+intentional rather than a coincidence of hostname matching. The
+host-based `routeOpenAICompatible` path is kept as a fallback for
+pre-Phase-9 configs only.
+
+**Lazy default-on-load, no rewrite.** Profiles saved before `Service`
+existed lack the field. On `LoadProfile`, an empty `Service` is
+back-filled by `deriveService`: built-in name match wins, then base URL
+host match against known built-ins, then fall back to `"custom"`. The
+file is *not* rewritten — the next deliberate `/profile save` persists
+the field naturally. This keeps disk diffs minimal and avoids the class
+of bugs that come with implicit-write-on-read.
+
+**`/set baseurl` and `/set provider` clobber `Service` to `"custom"`.**
+The user is opting into a custom transport — the previous service
+identity may no longer be accurate, and per-service behavior gates
+(cache markers, reasoning forwarding) should fall back to a safe
+default rather than apply stale gating against the new endpoint. The
+unconditional clobber was chosen over a conditional "only when host no
+longer matches" rule because the simpler rule is easier to reason about;
+revisit if it ever surprises users editing a known-service URL in place.
+`/set service` is the explicit knob for users who want to keep the new
+URL but assert a known service identity.
+
+**`Service: "ollama"` is the only allowed empty-API-key case.**
+`ProfileAllowsEmptyAPIKey` simply tests `cfg.Service == "ollama"` — no
+URL prefix sniffing, no special-case for `localhost`. Ollama is the only
+shipped service designed for fully local access without auth; every
+other service requires a key and is rejected at startup if one is
+missing.
+
+**Rollback is clean.** Deleting the `Service` field from `Config` and
+`Profile` reverts cleanly: saved profiles with `service: "..."` survive
+the downgrade because old binaries ignore unknown JSON fields (no
+`DisallowUnknownFields` on profiles). The only loss is per-service
+gates, which fall back to the URL-sniffing paths that are still
+present.

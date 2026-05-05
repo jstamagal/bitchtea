@@ -286,3 +286,48 @@ type Provider interface {
 
 A one-method interface lets tests inject an `httptest.Server` or a fake
 provider instead of the real catwalk HTTP client.
+
+## Design rationale
+
+Originally documented in `archive/phase-5-catalog-audit.md` (archived).
+
+**Single-file cache, not per-service.** Per-service files
+(`~/.bitchtea/catalog/<provider>.json`) were considered and rejected because
+catwalk only exposes the bulk `GET /v2/providers` endpoint. Splitting on disk
+would force us to fan out a single HTTP response into many files for no
+benefit, and the single-file shape matches how catwalk itself ships the
+embedded payload.
+
+**Cache directory, not a single file at the root.** `~/.bitchtea/catalog/`
+(rather than `~/.bitchtea/models.json`) leaves room for future companions —
+e.g. a per-user model-overrides file or a future `pricing.json` snapshot —
+without polluting the `~/.bitchtea/` root. `config.MigrateDataPaths()` was
+not modified for this phase: there is no prior XDG location to migrate from,
+so the directory is created lazily on first write.
+
+**Soft TTL with embedded hard floor.** Two clocks, one tunable: the soft TTL
+(default 24h) drives whether a refresh fires; the embedded snapshot is the
+floor that guarantees the picker is never empty. A stale cache is *always*
+preferred to no cache. We never delete the cache file as a recovery step —
+corruption is handled by parse-failure falling through to embedded.
+
+**Pass `[]catwalk.Provider` through verbatim.** The picker, fuzzy finder, and
+cost source need raw fields (context window, supports_images, can_reason,
+pricing). Projecting a smaller shape would force every consumer to learn two
+types and re-import lost fields later. The size cost is negligible (catwalk's
+full payload is well under 1 MiB).
+
+**Built-in profiles cohabit with catwalk.** `builtinProfiles` continues to own
+*connection identity* (`Provider`, `Service`, `BaseURL`, `APIKeyEnv`, default
+`Model`) — that is the only thing that lets `--profile zai-anthropic` work
+without a network trip. Catwalk owns *model metadata* (full model lists per
+provider, pricing, context window, capabilities). Conflict resolution: when
+both sources name the same model id, catwalk wins for *metadata*, built-in
+wins for *defaults* (which model loads when you select the profile cold).
+Profiles are never rewritten from the catalog; profile load remains an
+offline operation.
+
+**Refresh failure is silent on the boot path.** Errors only surface from a
+manual `/models refresh`. The boot path is fire-and-forget so a slow or
+broken catwalk endpoint cannot block startup or spam the transcript on every
+launch.
