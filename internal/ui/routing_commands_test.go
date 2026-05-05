@@ -10,7 +10,7 @@ import (
 // --- /join ---
 
 func TestHandleJoinCommand_switchesFocus(t *testing.T) {
-	m := newTestModel(t)
+	m := testModel(t)
 	result, _ := handleJoinCommand(m, "/join #code", []string{"/join", "#code"})
 	if result.focus.ActiveLabel() != "#code" {
 		t.Errorf("focus = %q, want #code", result.focus.ActiveLabel())
@@ -22,7 +22,7 @@ func TestHandleJoinCommand_switchesFocus(t *testing.T) {
 }
 
 func TestHandleJoinCommand_noArg(t *testing.T) {
-	m := newTestModel(t)
+	m := testModel(t)
 	result, _ := handleJoinCommand(m, "/join", []string{"/join"})
 	msg := lastMsg(result)
 	if msg.Type != MsgError {
@@ -31,7 +31,7 @@ func TestHandleJoinCommand_noArg(t *testing.T) {
 }
 
 func TestHandleJoinCommand_stripsHash(t *testing.T) {
-	m := newTestModel(t)
+	m := testModel(t)
 	result, _ := handleJoinCommand(m, "/join general", []string{"/join", "general"})
 	if result.focus.ActiveLabel() != "#general" {
 		t.Errorf("focus = %q, want #general", result.focus.ActiveLabel())
@@ -39,7 +39,7 @@ func TestHandleJoinCommand_stripsHash(t *testing.T) {
 }
 
 func TestHandleJoinCommand_updatesAgentContextAndScopeWhenIdle(t *testing.T) {
-	m := newTestModel(t)
+	m := testModel(t)
 
 	result, _ := handleJoinCommand(m, "/join #ch", []string{"/join", "#ch"})
 
@@ -56,7 +56,7 @@ func TestHandleJoinCommand_updatesAgentContextAndScopeWhenIdle(t *testing.T) {
 // --- /part ---
 
 func TestHandlePartCommand_leavesCurrentFocus(t *testing.T) {
-	m := newTestModel(t)
+	m := testModel(t)
 	// Add a second context so we can leave it
 	m.focus.SetFocus(Channel("code"))
 	result, _ := handlePartCommand(m, "/part", []string{"/part"})
@@ -70,7 +70,7 @@ func TestHandlePartCommand_leavesCurrentFocus(t *testing.T) {
 }
 
 func TestHandlePartCommand_namedContext(t *testing.T) {
-	m := newTestModel(t)
+	m := testModel(t)
 	m.focus.SetFocus(Channel("code"))
 	m.focus.SetFocus(Channel("main")) // back to main
 	result, _ := handlePartCommand(m, "/part #code", []string{"/part", "#code"})
@@ -82,7 +82,7 @@ func TestHandlePartCommand_namedContext(t *testing.T) {
 }
 
 func TestHandlePartCommand_lastContextRefused(t *testing.T) {
-	m := newTestModel(t)
+	m := testModel(t)
 	result, _ := handlePartCommand(m, "/part", []string{"/part"})
 	msg := lastMsg(result)
 	if msg.Type != MsgError {
@@ -91,7 +91,7 @@ func TestHandlePartCommand_lastContextRefused(t *testing.T) {
 }
 
 func TestHandlePartCommand_updatesAgentContextAndScopeWhenIdle(t *testing.T) {
-	m := newTestModel(t)
+	m := testModel(t)
 	m.focus.SetFocus(Channel("code"))
 	result, _ := handlePartCommand(m, "/part", []string{"/part"})
 
@@ -108,7 +108,7 @@ func TestHandlePartCommand_updatesAgentContextAndScopeWhenIdle(t *testing.T) {
 // --- /query ---
 
 func TestHandleQueryCommand_setDirectFocus(t *testing.T) {
-	m := newTestModel(t)
+	m := testModel(t)
 	result, _ := handleQueryCommand(m, "/query claude", []string{"/query", "claude"})
 	if result.focus.Active().Kind != KindDirect {
 		t.Errorf("expected KindDirect after /query, got %v", result.focus.Active().Kind)
@@ -123,7 +123,7 @@ func TestHandleQueryCommand_setDirectFocus(t *testing.T) {
 }
 
 func TestHandleQueryCommand_noArg(t *testing.T) {
-	m := newTestModel(t)
+	m := testModel(t)
 	result, _ := handleQueryCommand(m, "/query", []string{"/query"})
 	msg := lastMsg(result)
 	if msg.Type != MsgError {
@@ -132,7 +132,7 @@ func TestHandleQueryCommand_noArg(t *testing.T) {
 }
 
 func TestHandleQueryCommand_updatesAgentContextAndScopeWhenIdle(t *testing.T) {
-	m := newTestModel(t)
+	m := testModel(t)
 
 	result, _ := handleQueryCommand(m, "/query claude", []string{"/query", "claude"})
 
@@ -149,7 +149,7 @@ func TestHandleQueryCommand_updatesAgentContextAndScopeWhenIdle(t *testing.T) {
 // --- /msg ---
 
 func TestHandleMsgCommand_noArg(t *testing.T) {
-	m := newTestModel(t)
+	m := testModel(t)
 	result, _ := handleMsgCommand(m, "/msg", []string{"/msg"})
 	msg := lastMsg(result)
 	if msg.Type != MsgError {
@@ -158,7 +158,7 @@ func TestHandleMsgCommand_noArg(t *testing.T) {
 }
 
 func TestHandleMsgCommand_oneArg(t *testing.T) {
-	m := newTestModel(t)
+	m := testModel(t)
 	result, _ := handleMsgCommand(m, "/msg claude", []string{"/msg", "claude"})
 	msg := lastMsg(result)
 	if msg.Type != MsgError {
@@ -167,7 +167,7 @@ func TestHandleMsgCommand_oneArg(t *testing.T) {
 }
 
 func TestHandleMsgCommand_doesNotChangeFocus(t *testing.T) {
-	m := newTestModel(t)
+	m := testModel(t)
 	before := m.focus.ActiveLabel()
 	// handleMsgCommand will try to sendToAgent (which needs real infra), so
 	// we just check focus is unchanged and an appropriate user message appears.
@@ -181,7 +181,7 @@ func TestHandleMsgCommand_doesNotChangeFocus(t *testing.T) {
 // --- routeMessage with Direct focus ---
 
 func TestRouteMessage_directFocusPrefixesDisplay(t *testing.T) {
-	m := newTestModel(t)
+	m := testModel(t)
 	m.focus.SetFocus(Direct("claude"))
 	// routeMessage calls sendToAgent which requires a real agent.
 	// We test only that the display message is prefixed correctly.

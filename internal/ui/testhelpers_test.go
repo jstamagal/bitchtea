@@ -27,9 +27,10 @@ func sessionFixturePath(t *testing.T, name string) string {
 //
 // It uses config.DefaultConfig() so the resulting Config carries the same
 // defaults a freshly-launched binary would (UserNick, AgentNick, MaxTokens,
-// Service, etc.) — the only fields overridden are the on-disk locations,
-// which are pinned to t.TempDir() values so tests cannot stomp on each
-// other or on the real ~/.bitchtea state.
+// Service, etc.) — the only fields overridden are the on-disk locations
+// (pinned to t.TempDir() so tests cannot stomp each other or the real
+// ~/.bitchtea state) plus a stub APIKey so /set apikey display tests can
+// assert the expected mask.
 //
 // The returned *config.Config is the same one held by the Model. Callers
 // that need to write fixtures into SessionDir or read flags back out can
@@ -42,6 +43,7 @@ func sessionFixturePath(t *testing.T, name string) string {
 func testModel(t *testing.T) (Model, *config.Config) {
 	t.Helper()
 	cfg := config.DefaultConfig()
+	cfg.APIKey = "sk-test-key-12345"
 	cfg.WorkDir = t.TempDir()
 	cfg.SessionDir = t.TempDir()
 	cfg.LogDir = t.TempDir()

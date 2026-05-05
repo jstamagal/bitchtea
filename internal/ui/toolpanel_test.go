@@ -4,7 +4,6 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/jstamagal/bitchtea/internal/config"
 	"github.com/jstamagal/bitchtea/internal/llm"
 	"github.com/jstamagal/bitchtea/internal/session"
 )
@@ -93,11 +92,7 @@ func TestToolPanelResultTruncation(t *testing.T) {
 }
 
 func TestResumeSessionRestoresAgentMessagesAndToolNick(t *testing.T) {
-	cfg := config.DefaultConfig()
-	cfg.WorkDir = t.TempDir()
-	cfg.SessionDir = t.TempDir()
-
-	model := NewModel(&cfg)
+	model := testModel(t)
 	sess := &session.Session{
 		Path: "resume.jsonl",
 		Entries: []session.Entry{
@@ -139,11 +134,7 @@ func TestResumeSessionRestoresAgentMessagesAndToolNick(t *testing.T) {
 }
 
 func TestResumeSessionHidesBootstrapEntriesFromDisplay(t *testing.T) {
-	cfg := config.DefaultConfig()
-	cfg.WorkDir = t.TempDir()
-	cfg.SessionDir = t.TempDir()
-
-	model := NewModel(&cfg)
+	model := testModel(t)
 	sess := &session.Session{
 		Path: "resume.jsonl",
 		Entries: []session.Entry{
@@ -169,11 +160,7 @@ func TestResumeSessionHidesBootstrapEntriesFromDisplay(t *testing.T) {
 }
 
 func TestThemeCommandDisabled(t *testing.T) {
-	cfg := config.DefaultConfig()
-	cfg.WorkDir = t.TempDir()
-	cfg.SessionDir = t.TempDir()
-
-	model := NewModel(&cfg)
+	model := testModel(t)
 	updated, _ := model.handleCommand("/theme nord")
 	got := updated.(Model)
 

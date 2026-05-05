@@ -39,6 +39,7 @@ const (
 	KindSessionCheckpoint = "session-checkpoint"
 	KindMemoryConsolidate = "memory-consolidate"
 	KindStaleCleanup      = "stale-cleanup"
+	KindSessionStitch     = "session-stitch"
 )
 
 // Handle dispatches a job envelope to the registered handler for its kind.
@@ -79,6 +80,7 @@ var registry = map[string]Handler{
 	KindSessionCheckpoint: handleSessionCheckpoint,
 	KindMemoryConsolidate: handleMemoryConsolidate,
 	KindStaleCleanup:      handleStaleCleanup,
+	KindSessionStitch:     handleSessionStitch,
 }
 
 // successResult builds a success=true Result with output set to the JSON

@@ -4,13 +4,10 @@ import (
 	"testing"
 
 	tea "github.com/charmbracelet/bubbletea"
-	"github.com/jstamagal/bitchtea/internal/config"
 )
 
 func TestSuspendMsgHandling(t *testing.T) {
-	cfg := config.DefaultConfig()
-	cfg.APIKey = "test-key"
-	m := NewModel(&cfg)
+	m := testModel(t)
 
 	// Send SuspendMsg and verify it returns tea.Suspend command
 	updatedModel, cmd := m.Update(tea.SuspendMsg{})
@@ -31,9 +28,7 @@ func TestSuspendMsgHandling(t *testing.T) {
 }
 
 func TestQuitMsgCancelsStreaming(t *testing.T) {
-	cfg := config.DefaultConfig()
-	cfg.APIKey = "test-key"
-	m := NewModel(&cfg)
+	m := testModel(t)
 
 	// Simulate streaming state
 	m.streaming = true
@@ -60,9 +55,7 @@ func TestQuitMsgCancelsStreaming(t *testing.T) {
 }
 
 func TestQuitMsgWhenNotStreaming(t *testing.T) {
-	cfg := config.DefaultConfig()
-	cfg.APIKey = "test-key"
-	m := NewModel(&cfg)
+	m := testModel(t)
 
 	// Ensure not streaming
 	m.streaming = false

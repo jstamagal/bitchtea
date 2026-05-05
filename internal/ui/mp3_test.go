@@ -88,7 +88,7 @@ func TestMP3CommandStartsPlaybackAndShowsPanel(t *testing.T) {
 		return newFakeMP3Process(), nil
 	}
 
-	m := newTestModel(t)
+	m := testModel(t)
 	result, cmd := m.handleCommand("/mp3")
 	model := result.(Model)
 	msg := lastMsg(result)
@@ -125,7 +125,7 @@ func TestMP3KeybindingsControlPlayback(t *testing.T) {
 		return proc, nil
 	}
 
-	m := newTestModel(t)
+	m := testModel(t)
 	result, _ := m.handleCommand("/mp3")
 	model := result.(Model)
 	model.input.SetValue("")
@@ -175,7 +175,7 @@ func TestMP3StatusTextIncludesTrackProgress(t *testing.T) {
 }
 
 func TestMP3HelpCommandDocumentsControls(t *testing.T) {
-	m := newTestModel(t)
+	m := testModel(t)
 	result, _ := m.handleCommand("/help")
 	msg := lastMsg(result)
 	if !strings.Contains(msg.Content, "/mp3 [cmd]") {

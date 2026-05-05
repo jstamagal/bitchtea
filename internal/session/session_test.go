@@ -519,3 +519,150 @@ func TestDisplayEntriesFiltersBootstrapEntries(t *testing.T) {
 	}
 }
 
+// --- Fixture-based resume tests ------------------------------------------------
+
+func fixturePath(name string) string {
+	return filepath.Join("testdata", name)
+}
+
+func TestLoadV0BasicFixture(t *testing.T) {
+	sess, err := Load(fixturePath("v0_basic.jsonl"))
+	if err != nil {
+		t.Fatalf("load v0 fixture: %v", err)
+	}
+	if len(sess.Entries) != 4 {
+		t.Fatalf("expected 4 entries, got %d", len(sess.Entries))
+	}
+	if sess.Entries[0].Role != "user" || !strings.Contains(sess.Entries[0].Content, "check README") {
+		t.Fatalf("unexpected first entry: %+v", sess.Entries[0])
+	}
+	if sess.Entries[1].V != 0 {
+		t.Fatalf("expected v0 entry, got v=%d", sess.Entries[1].V)
+	}
+	// Tool call entries carry tool_calls on v0.
+	if len(sess.Entries[1].ToolCalls) != 1 || sess.Entries[1].ToolCalls[0].Function.Name != "read" {
+		t.Fatalf("expected tool call entry, got %+v", sess.Entries[1])
+	}
+	if sess.Entries[2].ToolCallID != "call_a" {
+		t.Fatalf("expected tool entry call_a, got %q", sess.Entries[2].ToolCallID)
+	}
+}
+
+func TestLoadV1BasicFixture(t *testing.T) {
+	sess, err := Load(fixturePath("v1_basic.jsonl"))
+	if err != nil {
+		t.Fatalf("load v1 fixture: %v", err)
+	}
+	if len(sess.Entries) != 4 {
+		t.Fatalf("expected 4 entries, got %d", len(sess.Entries))
+	}
+	for i, e := range sess.Entries {
+		if e.V != EntrySchemaVersion {
+			t.Errorf("entry %d expected v1, got v=%d", i, e.V)
+		}
+		if e.Msg == nil {
+			t.Errorf("entry %d expected Msg populated for v1", i)
+		}
+	}
+	// Roundtrip through FantasyFromEntries should produce 4 messages.
+	msgs := FantasyFromEntries(sess.Entries)
+	if len(msgs) != 4 {
+		t.Fatalf("expected 4 fantasy messages, got %d", len(msgs))
+	}
+}
+
+func TestLoadMultiContextFixture(t *testing.T) {
+	sess, err := Load(fixturePath("multi_context.jsonl"))
+	if err != nil {
+		t.Fatalf("load multi-context fixture: %v", err)
+	}
+	if len(sess.Entries) != 6 {
+		t.Fatalf("expected 6 entries, got %d", len(sess.Entries))
+	}
+	wantContexts := []string{"#ops", "#ops", "#engineering", "#engineering", "alice", "alice"}
+	for i, want := range wantContexts {
+		if got := sess.Entries[i].Context; got != want {
+			t.Errorf("entry %d: expected context %q, got %q", i, want, got)
+		}
+	}
+}
+
+func TestLoadCorruptedFixtureSkipsBadLines(t *testing.T) {
+	sess, err := Load(fixturePath("corrupted.jsonl"))
+	if err != nil {
+		t.Fatalf("load corrupted fixture: %v", err)
+	}
+	// corrupted.jsonl has 5 lines: 3 valid JSON, 1 garbage text, 1 truncated JSON.
+	// Load skips malformed lines, so we expect 3 valid entries.
+	if len(sess.Entries) != 3 {
+		t.Fatalf("expected 3 entries (skipping 2 corrupted lines), got %d", len(sess.Entries))
+	}
+	wantOrder := []string{"first valid", "second valid", "third valid after corruption"}
+	for i, want := range wantOrder {
+		if got := sess.Entries[i].Content; got != want {
+			t.Errorf("entry %d = %q, want %q", i, got, want)
+		}
+	}
+}
+
+func TestForkWithNonexistentIDCopiesAll(t *testing.T) {
+	dir := t.TempDir()
+
+	s, err := New(dir)
+	if err != nil {
+		t.Fatalf("new session: %v", err)
+	}
+
+	s.Append(Entry{Role: "user", Content: "first"})
+	s.Append(Entry{Role: "assistant", Content: "reply"})
+
+	// Fork from an ID that doesn't exist — the copy loop never hits the
+	// break so it copies every entry, producing a full-clone fork.
+	forked, err := s.Fork("nonexistent-id")
+	if err != nil {
+		t.Fatalf("fork with nonexistent ID should not error: %v", err)
+	}
+	if len(forked.Entries) != len(s.Entries) {
+		t.Fatalf("nonexistent fork ID should copy all entries, got %d want %d", len(forked.Entries), len(s.Entries))
+	}
+}
+
+func TestTreeEmptySession(t *testing.T) {
+	dir := t.TempDir()
+
+	s, err := New(dir)
+	if err != nil {
+		t.Fatalf("new session: %v", err)
+	}
+
+	// Don't append any entries — Tree should return the empty marker.
+	got := s.Tree()
+	if got != "(empty session)" {
+		t.Fatalf("empty session Tree = %q, want %q", got, "(empty session)")
+	}
+}
+
+func TestTreeNoForks(t *testing.T) {
+	dir := t.TempDir()
+
+	s, err := New(dir)
+	if err != nil {
+		t.Fatalf("new session: %v", err)
+	}
+
+	s.Append(Entry{Role: "user", Content: "hello"})
+	s.Append(Entry{Role: "assistant", Content: "world"})
+
+	got := s.Tree()
+	if got == "" {
+		t.Fatal("expected non-empty tree for session with entries")
+	}
+	if !strings.Contains(got, "hello") {
+		t.Fatalf("tree should contain entry content, got %q", got)
+	}
+	// A linear (no-fork) tree should not have branch markers.
+	if strings.Contains(got, "fork") {
+		t.Fatalf("linear session tree should not mention forks, got %q", got)
+	}
+}
+

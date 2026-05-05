@@ -49,7 +49,7 @@ func TestModelsCommandRegistered(t *testing.T) {
 // TestModelsCommandHelpMentionsModels guards that /help mentions /models so
 // users discover the command.
 func TestModelsCommandHelpMentionsModels(t *testing.T) {
-	m := newTestModel(t)
+	m := testModel(t)
 	result, _ := m.handleCommand("/help")
 	if !strings.Contains(lastMsg(result).Content, "/models") {
 		t.Fatalf("expected /help output to mention /models, got %q", lastMsg(result).Content)
@@ -60,7 +60,7 @@ func TestModelsCommandHelpMentionsModels(t *testing.T) {
 // service identity wired up.
 func TestModelsCommandUnsetService(t *testing.T) {
 	stubCatalog(t, []catwalk.Provider{openrouterFixture()})
-	m := newTestModel(t)
+	m := testModel(t)
 	m.config.Service = ""
 
 	result, _ := m.handleCommand("/models")
@@ -80,7 +80,7 @@ func TestModelsCommandUnsetService(t *testing.T) {
 // catalog.Load yields zero providers.
 func TestModelsCommandEmptyCatalog(t *testing.T) {
 	stubCatalog(t, nil)
-	m := newTestModel(t)
+	m := testModel(t)
 	m.config.Service = "openrouter"
 
 	result, _ := m.handleCommand("/models")
@@ -101,7 +101,7 @@ func TestModelsCommandEmptyCatalog(t *testing.T) {
 // service value.
 func TestModelsCommandUnknownService(t *testing.T) {
 	stubCatalog(t, []catwalk.Provider{openrouterFixture()})
-	m := newTestModel(t)
+	m := testModel(t)
 	m.config.Service = "totally-fake-service"
 
 	result, _ := m.handleCommand("/models")
@@ -128,7 +128,7 @@ func TestModelsCommandUnknownService(t *testing.T) {
 // in a state we can inspect.
 func TestModelsCommandOpensPicker(t *testing.T) {
 	stubCatalog(t, []catwalk.Provider{openrouterFixture()})
-	m := newTestModel(t)
+	m := testModel(t)
 	m.config.Service = "openrouter"
 
 	result, _ := m.handleCommand("/models")
@@ -153,7 +153,7 @@ func TestModelsCommandOpensPicker(t *testing.T) {
 // case-insensitive — /set service OPENROUTER must still find the catalog row.
 func TestModelsCommandCaseInsensitiveServiceMatch(t *testing.T) {
 	stubCatalog(t, []catwalk.Provider{openrouterFixture()})
-	m := newTestModel(t)
+	m := testModel(t)
 	m.config.Service = "OpenRouter"
 
 	result, _ := m.handleCommand("/models")
@@ -168,7 +168,7 @@ func TestModelsCommandCaseInsensitiveServiceMatch(t *testing.T) {
 // changed and the loaded profile tag was cleared.
 func TestModelsCommandPickerSelectionInvokesSetModel(t *testing.T) {
 	stubCatalog(t, []catwalk.Provider{openrouterFixture()})
-	m := newTestModel(t)
+	m := testModel(t)
 	m.config.Service = "openrouter"
 	m.config.Profile = "openrouter" // pretend a profile was loaded
 
@@ -207,7 +207,7 @@ func TestModelsCommandPickerSelectionInvokesSetModel(t *testing.T) {
 // touching agent.Model().
 func TestModelsCommandPickerEscCancels(t *testing.T) {
 	stubCatalog(t, []catwalk.Provider{openrouterFixture()})
-	m := newTestModel(t)
+	m := testModel(t)
 	m.config.Service = "openrouter"
 	originalModel := m.agent.Model()
 
@@ -236,7 +236,7 @@ func TestModelsCommandPickerEscCancels(t *testing.T) {
 // narrows the visible list and the selection respects the filter.
 func TestModelsCommandPickerFiltersByQuery(t *testing.T) {
 	stubCatalog(t, []catwalk.Provider{openrouterFixture()})
-	m := newTestModel(t)
+	m := testModel(t)
 	m.config.Service = "openrouter"
 
 	result, _ := m.handleCommand("/models")
@@ -271,7 +271,7 @@ func TestModelsCommandPickerFiltersByQuery(t *testing.T) {
 // filter does not crash and shows a "no selection" message on Enter.
 func TestModelsCommandPickerFilterEmptyResult(t *testing.T) {
 	stubCatalog(t, []catwalk.Provider{openrouterFixture()})
-	m := newTestModel(t)
+	m := testModel(t)
 	m.config.Service = "openrouter"
 
 	result, _ := m.handleCommand("/models")
@@ -485,7 +485,7 @@ func TestModelsForServiceSkipsEmptyIDs(t *testing.T) {
 // consistent after opening and typing into it via Update.
 func TestHandleModelsCommandPickerStateAfterFilter(t *testing.T) {
 	stubCatalog(t, []catwalk.Provider{openrouterFixture()})
-	m := newTestModel(t)
+	m := testModel(t)
 	m.config.Service = "openrouter"
 
 	result, _ := m.handleCommand("/models")
@@ -512,7 +512,7 @@ func TestHandleModelsCommandPickerStateAfterFilter(t *testing.T) {
 // against surrounding whitespace.
 func TestHandleModelsCommandServiceStripped(t *testing.T) {
 	stubCatalog(t, []catwalk.Provider{openrouterFixture()})
-	m := newTestModel(t)
+	m := testModel(t)
 	m.config.Service = "  openrouter  "
 
 	result, _ := m.handleCommand("/models")

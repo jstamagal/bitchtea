@@ -6,24 +6,7 @@ import (
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
-
-	"github.com/jstamagal/bitchtea/internal/config"
 )
-
-func newTestModel(t *testing.T) Model {
-	t.Helper()
-	dataDir := t.TempDir()
-	cfg := &config.Config{
-		APIKey:     "sk-test-key-12345",
-		BaseURL:    "https://api.openai.com/v1",
-		Model:      "gpt-4o",
-		Provider:   "openai",
-		WorkDir:    dataDir,
-		SessionDir: dataDir + "/sessions",
-		LogDir:     dataDir + "/logs",
-	}
-	return NewModel(cfg)
-}
 
 // lastMsg returns the last message from the model returned by handleCommand
 func lastMsg(m tea.Model) ChatMessage {
@@ -64,7 +47,7 @@ func TestProviderAcceptsAnyValueVerbatim(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			m := newTestModel(t)
+			m := testModel(t)
 			result, _ := m.handleCommand(tt.input)
 			model := result.(Model)
 			msgs := allMsgs(result)
@@ -104,7 +87,7 @@ func TestBaseURLAcceptsAnyValueVerbatim(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			m := newTestModel(t)
+			m := testModel(t)
 			result, _ := m.handleCommand(tt.input)
 			model := result.(Model)
 			msgs := allMsgs(result)
@@ -143,7 +126,7 @@ func TestAPIKeyAcceptsAnyValueVerbatim(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			m := newTestModel(t)
+			m := testModel(t)
 			result, _ := m.handleCommand(tt.input)
 			model := result.(Model)
 			msg := lastMsg(result)
@@ -175,7 +158,7 @@ func TestModelAcceptsAnyValueVerbatim(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			m := newTestModel(t)
+			m := testModel(t)
 			result, _ := m.handleCommand(tt.input)
 			model := result.(Model)
 
@@ -214,7 +197,7 @@ func TestSetModelBareOpensPicker(t *testing.T) {
 }
 
 func TestProviderChangeWarnsWhenBaseURLLooksOpenAICompatible(t *testing.T) {
-	m := newTestModel(t)
+	m := testModel(t)
 	m.config.BaseURL = "http://127.0.0.1:3456"
 	m.agent.SetBaseURL(m.config.BaseURL)
 
@@ -232,7 +215,7 @@ func TestProviderChangeWarnsWhenBaseURLLooksOpenAICompatible(t *testing.T) {
 }
 
 func TestBaseURLChangeWarnsWhenProviderLikelyMismatched(t *testing.T) {
-	m := newTestModel(t)
+	m := testModel(t)
 	m.config.Provider = "anthropic"
 	m.agent.SetProvider("anthropic")
 
@@ -250,7 +233,7 @@ func TestBaseURLChangeWarnsWhenProviderLikelyMismatched(t *testing.T) {
 }
 
 func TestProfileNameThatMatchesProviderSuggestsProviderCommand(t *testing.T) {
-	m := newTestModel(t)
+	m := testModel(t)
 
 	result, _ := m.handleCommand("/profile anthropic")
 	msg := lastMsg(result)
@@ -263,7 +246,7 @@ func TestProfileNameThatMatchesProviderSuggestsProviderCommand(t *testing.T) {
 }
 
 func TestProfileLoadNameThatMatchesProviderSuggestsProviderCommand(t *testing.T) {
-	m := newTestModel(t)
+	m := testModel(t)
 
 	result, _ := m.handleCommand("/profile load openai")
 	msg := lastMsg(result)
@@ -278,7 +261,7 @@ func TestProfileLoadNameThatMatchesProviderSuggestsProviderCommand(t *testing.T)
 func TestProfileLoadMasksAPIKeyAndAvoidsDuplicateMessages(t *testing.T) {
 	t.Setenv("OPENROUTER_API_KEY", "sk-or-v1-1234567890ABCD")
 
-	m := newTestModel(t)
+	m := testModel(t)
 	result, _ := m.handleCommand("/profile load openrouter")
 	msgs := allMsgs(result)
 	if len(msgs) != 1 {
@@ -294,7 +277,7 @@ func TestProfileLoadMasksAPIKeyAndAvoidsDuplicateMessages(t *testing.T) {
 }
 
 func TestProfileCommandHintsWhenProviderNameIsUsed(t *testing.T) {
-	m := newTestModel(t)
+	m := testModel(t)
 
 	result, _ := m.handleCommand("/profile anthropic")
 	msg := lastMsg(result)
@@ -312,7 +295,7 @@ func TestProfileCommandHintsWhenProviderNameIsUsed(t *testing.T) {
 func TestProfileDirectLoadMasksAPIKeyAndEmitsSingleMessage(t *testing.T) {
 	t.Setenv("OPENROUTER_API_KEY", "sk-or-v1-1234567890abcdef")
 
-	m := newTestModel(t)
+	m := testModel(t)
 	result, _ := m.handleCommand("/profile openrouter")
 	model := result.(Model)
 
@@ -338,7 +321,7 @@ func TestProfileDirectLoadMasksAPIKeyAndEmitsSingleMessage(t *testing.T) {
 func TestManualConnectionChangeClearsLoadedProfile(t *testing.T) {
 	t.Setenv("OPENROUTER_API_KEY", "sk-or-v1-1234567890abcdef")
 
-	m := newTestModel(t)
+	m := testModel(t)
 	result, _ := m.handleCommand("/profile openrouter")
 	model := result.(Model)
 	if model.config.Profile != "openrouter" {
@@ -353,7 +336,7 @@ func TestManualConnectionChangeClearsLoadedProfile(t *testing.T) {
 }
 
 func TestProviderMessageShowsEffectiveEndpoint(t *testing.T) {
-	m := newTestModel(t)
+	m := testModel(t)
 
 	result, _ := m.handleCommand("/set provider anthropic")
 	text := allMsgText(result)
@@ -364,7 +347,7 @@ func TestProviderMessageShowsEffectiveEndpoint(t *testing.T) {
 }
 
 func TestBaseURLMessageShowsEffectiveEndpoint(t *testing.T) {
-	m := newTestModel(t)
+	m := testModel(t)
 
 	result, _ := m.handleCommand("/set baseurl https://api.example.com/v1")
 	text := allMsgText(result)
@@ -377,7 +360,7 @@ func TestBaseURLMessageShowsEffectiveEndpoint(t *testing.T) {
 func TestProfileLoadVerboseMasksAPIKeyAndShowsEndpoint(t *testing.T) {
 	t.Setenv("OPENROUTER_API_KEY", "sk-or-v1-1234567890abcdef")
 
-	m := newTestModel(t)
+	m := testModel(t)
 	result, _ := m.handleCommand("/profile load openrouter")
 	model := result.(Model)
 
@@ -397,7 +380,7 @@ func TestProfileLoadVerboseMasksAPIKeyAndShowsEndpoint(t *testing.T) {
 }
 
 func TestBaseURLWarnsWhenEndpointSuffixIsIncluded(t *testing.T) {
-	m := newTestModel(t)
+	m := testModel(t)
 
 	result, _ := m.handleCommand("/set baseurl https://api.example.com/v1/chat/completions")
 	msg := lastMsg(result)
@@ -410,7 +393,7 @@ func TestBaseURLWarnsWhenEndpointSuffixIsIncluded(t *testing.T) {
 }
 
 func TestProviderWarnsForSuspiciousOpenAIBaseURLUnderAnthropic(t *testing.T) {
-	m := newTestModel(t)
+	m := testModel(t)
 
 	result, _ := m.handleCommand("/set provider anthropic")
 	model := result.(Model)
@@ -439,7 +422,7 @@ func TestDebugCommand(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			m := newTestModel(t)
+			m := testModel(t)
 			result, _ := m.handleCommand(tt.input)
 			msg := lastMsg(result)
 			if !strings.Contains(msg.Content, tt.wantContain) {
@@ -456,7 +439,7 @@ func TestDebugCommand(t *testing.T) {
 }
 
 func TestDebugModeToggle(t *testing.T) {
-	m := newTestModel(t)
+	m := testModel(t)
 
 	// Off by default
 	if m.debugMode {
@@ -480,7 +463,7 @@ func TestDebugModeToggle(t *testing.T) {
 
 func TestActivityCommand(t *testing.T) {
 	t.Run("shows queued activity and marks it read", func(t *testing.T) {
-		m := newTestModel(t)
+		m := testModel(t)
 		m.NotifyBackgroundActivity(BackgroundActivity{
 			Time:    nowForTests(),
 			Context: "#ops",
@@ -509,7 +492,7 @@ func TestActivityCommand(t *testing.T) {
 	})
 
 	t.Run("clear empties queue", func(t *testing.T) {
-		m := newTestModel(t)
+		m := testModel(t)
 		m.NotifyBackgroundActivity(BackgroundActivity{Context: "#ops", Sender: "daemon", Summary: "heartbeat failed"})
 
 		result, _ := m.handleCommand("/activity clear")
@@ -528,7 +511,7 @@ func TestActivityCommand(t *testing.T) {
 	})
 
 	t.Run("invalid args error", func(t *testing.T) {
-		m := newTestModel(t)
+		m := testModel(t)
 		result, _ := m.handleCommand("/activity nope")
 		msg := lastMsg(result)
 		if msg.Type != MsgError {
@@ -545,7 +528,7 @@ func nowForTests() time.Time {
 }
 
 func TestDebugStatusShowsCurrent(t *testing.T) {
-	m := newTestModel(t)
+	m := testModel(t)
 
 	// Enable debug first
 	result, _ := m.handleCommand("/debug on")
