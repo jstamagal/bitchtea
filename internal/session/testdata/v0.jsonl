@@ -1,0 +1,4 @@
+{"ts":"2026-04-01T12:00:00Z","id":"1","role":"user","content":"check README"}
+{"ts":"2026-04-01T12:00:01Z","id":"2","parent_id":"1","role":"assistant","content":"Reading.","tool_calls":[{"id":"call_a","type":"function","function":{"name":"read","arguments":"{\"path\":\"README.md\"}"}}]}
+{"ts":"2026-04-01T12:00:02Z","id":"3","parent_id":"2","role":"tool","content":"# README contents","tool_call_id":"call_a","tool_name":"read"}
+{"ts":"2026-04-01T12:00:03Z","id":"4","parent_id":"3","role":"assistant","content":"Done."}

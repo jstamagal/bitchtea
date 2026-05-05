@@ -5,6 +5,8 @@ import (
 	"strings"
 	"testing"
 
+	"charm.land/fantasy"
+
 	"github.com/jstamagal/bitchtea/internal/session"
 )
 
@@ -74,6 +76,108 @@ func TestInviteCommandShowsJoinNoticeAndCatchup(t *testing.T) {
 	if catchupMsg.Type != MsgSystem {
 		t.Errorf("expected system message for catch-up, got %v", catchupMsg.Type)
 	}
+}
+
+// TestInviteCommandInjectsPersonaIntoAgentContext is the bt-wire.4 acceptance
+// test: after /invite reviewer in #main, the agent's per-context history for
+// #main must contain a note that names the persona and the channel, so the
+// next streamed turn sees the membership change. Without this injection, the
+// LLM has no way to learn about /invite — membership is pure UI metadata.
+func TestInviteCommandInjectsPersonaIntoAgentContext(t *testing.T) {
+	m := newTestModel(t)
+	result, _ := handleInviteCommand(m, "/invite reviewer", []string{"/invite", "reviewer"})
+
+	rm := result
+	rm.agent.SetContext("#main")
+	msgs := rm.agent.Messages()
+
+	if len(msgs) <= rm.agent.BootstrapMessageCount() {
+		t.Fatalf("expected agent #main context to gain messages beyond bootstrap, got %d (bootstrap=%d)",
+			len(msgs), rm.agent.BootstrapMessageCount())
+	}
+
+	combined := joinMessageText(msgs[rm.agent.BootstrapMessageCount():])
+	for _, want := range []string{"reviewer", "#main", "joined", "membership update"} {
+		if !strings.Contains(combined, want) {
+			t.Errorf("agent #main context missing %q in injected note; transcript:\n%s", want, combined)
+		}
+	}
+}
+
+// TestInviteCommandInjectsIntoNamedChannelNotFocus verifies cross-context
+// routing: when /invite targets a different channel than the active focus,
+// the persona note must land in the target channel's per-context history,
+// not the active focus's. This protects #engineering's history from leaking
+// into #ops just because the user typed /invite while focused on #ops.
+func TestInviteCommandInjectsIntoNamedChannelNotFocus(t *testing.T) {
+	m := newTestModel(t)
+	m.focus.SetFocus(Channel("ops"))
+	result, _ := handleInviteCommand(m, "/invite oncall #engineering",
+		[]string{"/invite", "oncall", "#engineering"})
+
+	rm := result
+	rm.agent.SetContext("#engineering")
+	engMsgs := rm.agent.Messages()
+	engBoot := rm.agent.BootstrapMessageCount()
+	engInjected := joinMessageText(engMsgs[engBoot:])
+	if !strings.Contains(engInjected, "oncall") || !strings.Contains(engInjected, "#engineering") {
+		t.Errorf("expected #engineering context to gain persona note, got: %q", engInjected)
+	}
+
+	rm.agent.SetContext("#ops")
+	opsMsgs := rm.agent.Messages()
+	opsBoot := rm.agent.BootstrapMessageCount()
+	opsInjected := joinMessageText(opsMsgs[opsBoot:])
+	if strings.Contains(opsInjected, "oncall") {
+		t.Errorf("#ops context should not see #engineering invite note, got: %q", opsInjected)
+	}
+}
+
+// TestKickCommandInjectsRemovalIntoAgentContext mirrors the invite path:
+// after /kick, the agent's channel history must learn the persona has left
+// so it stops modeling them as a participant.
+func TestKickCommandInjectsRemovalIntoAgentContext(t *testing.T) {
+	m := newTestModel(t)
+	m.membership.Invite("main", "reviewer")
+	// Pre-seed the join note so the kick note doesn't accidentally pass on
+	// "reviewer" alone — the kick text must mention removal explicitly.
+	m.agent.InitContext("#main")
+	m.agent.InjectNoteInContext("#main", "reviewer joined seed")
+
+	result, _ := handleKickCommand(m, "/kick reviewer", []string{"/kick", "reviewer"})
+
+	rm := result
+	rm.agent.SetContext("#main")
+	msgs := rm.agent.Messages()
+	combined := joinMessageText(msgs[rm.agent.BootstrapMessageCount():])
+
+	for _, want := range []string{"reviewer", "removed", "#main", "membership update"} {
+		if !strings.Contains(combined, want) {
+			t.Errorf("agent #main context missing %q in kick note; transcript:\n%s", want, combined)
+		}
+	}
+}
+
+// joinMessageText is a test helper that flattens a slice of fantasy.Message
+// into a single searchable string by concatenating each message's text parts.
+// Mirrors agent.messageText (unexported) for the ui package.
+func joinMessageText(msgs []fantasy.Message) string {
+	var sb strings.Builder
+	for _, msg := range msgs {
+		for _, part := range msg.Content {
+			switch p := part.(type) {
+			case fantasy.TextPart:
+				sb.WriteString(p.Text)
+				sb.WriteString("\n")
+			case *fantasy.TextPart:
+				if p != nil {
+					sb.WriteString(p.Text)
+					sb.WriteString("\n")
+				}
+			}
+		}
+	}
+	return sb.String()
 }
 
 func TestInviteCommandPersistsMembership(t *testing.T) {

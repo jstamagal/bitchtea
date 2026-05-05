@@ -8,6 +8,8 @@ Slash commands control the TUI. Use them to bend the session to your will.
 - **`/part [#channel]`**: Leave the current or named context.
 - **`/query <nick>`**: Open a direct persistent conversation with a persona/nick.
 - **`/msg <nick> <text>`**: Send a one-shot message to a nick without changing focus.
+- **`/invite <persona> [#channel]`**: Add a persona to the current (or named) channel. Persists membership and tells the agent the persona is now in the room.
+- **`/kick <persona>`**: Remove a persona from the current channel. Persists membership and tells the agent the persona has left.
 - **`/channels`** (or **`/ch`**): List all open contexts and their active members.
 
 ## 🧠 MODEL & CONFIG
@@ -120,6 +122,17 @@ When a command or message is committed (Enter), the model undergoes a transition
 - **Deferred (next agent turn)**: If the part changed the active focus, the next `startAgentTurn` is what actually swaps `agent.SetContext` + `agent.SetScope` to match.
 - **Viewport Output**: `Parted <label> — now in <new active label>`.
 
+#### `/invite <persona> [#channel]` and `/kick <persona>` (Persona Routing)
+- **Immediate Handshake**: `handleInviteCommand` / `handleKickCommand` (`internal/ui/invite.go`) update `m.membership` (persisted to `.bitchtea_membership.json`), then call `m.agent.InitContext(ctxKey)` + `m.agent.InjectNoteInContext(ctxKey, …)` so the targeted channel's per-context history gains a `[membership update]` user/assistant pair *before* the next streamed turn. The note names the persona, the channel, and the post-change member list — the agent's only signal that membership shifted.
+- **Design choice (bt-wire.4)**: Of the three options considered — (a) splice membership into the system prompt, (b) expose a `list_members` tool, (c) inject a "<persona> joined" user message into the channel's history — bitchtea ships option **(c)**. Reasons:
+  - Reuses the existing `InjectNoteInContext` infrastructure used elsewhere for catch-up notes.
+  - Per-context: only the targeted channel's history sees the note, so `#engineering` membership never leaks into `#ops`.
+  - Persists naturally through session JSONL (notes are real `fantasy.Message`s with `Context` set on save).
+  - Survives compaction the same way other in-channel messages do — the bootstrap boundary is respected, and compacted notes get summarized into daily memory.
+  - Mirrors the IRC mental model: `*** alice joined #channel` is a chat-level event, not metadata.
+- **Cross-context safety**: `InjectNoteInContext` keeps `a.messages` and `contextMsgs[currentContext]` in sync when the target key matches the active context (slice-header bug fixed in bt-wire.4). When the target key is a different context, only that context's slice grows; the active turn is untouched.
+- **Viewport Output**: `*** <persona> joined #<channel>` followed by a session catch-up summary (`/invite`); `*** <persona> has been kicked from #<channel>` (`/kick`).
+
 ### 📜 COMMAND VERBATIM MAP
 
 | Command | Viewport Output (sysMsg) | Agent Handshake |
@@ -129,6 +142,8 @@ When a command or message is committed (Enter), the model undergoes a transition
 | `/join #ch` | `Joined #ch` | None inline — `focus.SetFocus` + `focus.Save`; `agent.SetContext`/`SetScope` deferred to next `startAgentTurn` |
 | `/query nick` | `Query open: @nick` | None inline — `focus.SetFocus(Direct("nick"))` + `focus.Save`; agent swap deferred to next `startAgentTurn` |
 | `/part [target]` | `Parted <label> — now in <new>` | None inline — `focus.Remove` + `focus.Save`; agent swap deferred to next `startAgentTurn` |
+| `/invite p [#ch]` | `*** p joined #ch` + catch-up | `agent.InitContext("#ch")` + `agent.InjectNoteInContext("#ch", …)` (immediate, scoped to target context) |
+| `/kick p` | `*** p has been kicked from #ch` | `agent.InitContext("#ch")` + `agent.InjectNoteInContext("#ch", …)` (immediate, scoped to target context) |
 | `/debug on` | `Debug mode: ON` | `a.SetDebugHook(fn)` (Wraps HTTP transport) |
 | `/set k v` | `K set to: V` | Syncs `a.SetProvider/Model/etc` if profile-related |
 

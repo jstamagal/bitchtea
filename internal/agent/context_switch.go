@@ -49,18 +49,26 @@ func (a *Agent) SetSavedIdx(key ContextKey, idx int) {
 // InjectNoteInContext adds a synthetic context note to a specific context's
 // message history without switching to it. If the context doesn't exist in
 // the map, the note is appended to the current context instead.
+//
+// The active a.messages slice header is kept in sync with contextMsgs when the
+// target key matches currentContext — without this, an append() that grows
+// the backing array leaves a.messages pointing at the old (shorter) array
+// while contextMsgs holds the new one, so the next streamed turn would not
+// see the injected note. bt-wire.4's /invite path is the first caller and
+// regression-tests this exact case.
 func (a *Agent) InjectNoteInContext(key ContextKey, note string) {
+	user := newUserMessage(note)
+	ack := newAssistantMessage("Understood.")
 	if msgs, ok := a.contextMsgs[key]; ok {
-		a.contextMsgs[key] = append(msgs,
-			newUserMessage(note),
-			newAssistantMessage("Understood."),
-		)
-	} else {
-		a.messages = append(a.messages,
-			newUserMessage(note),
-			newAssistantMessage("Understood."),
-		)
+		a.contextMsgs[key] = append(msgs, user, ack)
+		if key == a.currentContext {
+			a.messages = a.contextMsgs[key]
+		}
+		return
 	}
+	// Unknown context: append to the active history and keep the map in sync.
+	a.messages = append(a.messages, user, ack)
+	a.contextMsgs[a.currentContext] = a.messages
 }
 
 // RestoreContextMessages restores messages for a specific context without
