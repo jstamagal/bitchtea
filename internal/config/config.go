@@ -297,6 +297,26 @@ func LoadProfile(name string) (*Profile, error) {
 	return &p, nil
 }
 
+// ListServices returns the sorted, unique upstream service identities known
+// to the built-in profile registry (e.g. "openai", "anthropic", "ollama",
+// "openrouter", "zai-openai", ...). Used for `/set service` enumeration.
+// Custom services configured via `/set service <name>` are not enumerated
+// because they have no registry entry to discover.
+func ListServices() []string {
+	seen := make(map[string]struct{}, len(builtinProfiles))
+	for _, p := range builtinProfiles {
+		if p.Service != "" {
+			seen[p.Service] = struct{}{}
+		}
+	}
+	out := make([]string, 0, len(seen))
+	for s := range seen {
+		out = append(out, s)
+	}
+	sort.Strings(out)
+	return out
+}
+
 // ListProfiles returns all saved profile names
 func ListProfiles() []string {
 	namesMap := make(map[string]struct{}, len(builtinProfiles))

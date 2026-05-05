@@ -3,6 +3,7 @@ package ui
 import (
 	"context"
 	"fmt"
+	"os"
 	"path/filepath"
 	"strings"
 	"time"
@@ -39,6 +40,8 @@ var slashCommandRegistry = registerSlashCommands(
 	slashCommandSpec{names: []string{"/compact"}, handler: handleCompactCommand},
 	slashCommandSpec{names: []string{"/copy"}, handler: handleCopyCommand},
 	slashCommandSpec{names: []string{"/tokens"}, handler: handleTokensCommand},
+	slashCommandSpec{names: []string{"/status"}, handler: handleStatusCommand},
+	slashCommandSpec{names: []string{"/save"}, handler: handleSaveCommand},
 	slashCommandSpec{names: []string{"/debug"}, handler: handleDebugCommand},
 	slashCommandSpec{names: []string{"/activity"}, handler: handleActivityCommand},
 	slashCommandSpec{names: []string{"/mp3"}, handler: handleMP3Command},
@@ -93,6 +96,8 @@ const helpCommandText = "Commands:\n" +
 	"  /restart            Reset agent and start a fresh conversation\n" +
 	"  /copy [n]           Copy last or nth assistant response\n" +
 	"  /tokens             Token usage estimate\n" +
+	"  /status             Show endpoint, model, context window usage, cost\n" +
+	"  /save               Snapshot current settings to bitchtearc (auto-backup)\n" +
 	"  /memory             Show MEMORY.md contents\n" +
 	"  /sessions           List saved sessions\n" +
 	"  /resume <number>    Resume a session by number\n" +
@@ -139,8 +144,21 @@ func handleSetCommand(m Model, input string, parts []string) (Model, tea.Cmd) {
 
 	key := strings.ToLower(parts[1])
 	if len(parts) == 2 {
-		if key == "service" {
-			m.sysMsg(fmt.Sprintf("service = %s", serviceDisplay(m.config.Service)))
+		// Enumerable keys: bare `/set <key>` opens a picker or lists choices
+		// instead of just echoing the current value. The user can still see
+		// the current value with bare `/set` (the all-keys listing).
+		switch key {
+		case "model":
+			return handleModelsCommand(m, "/models", []string{"/models"})
+		case "profile":
+			return handleProfileCommand(m, "/profile", []string{"/profile"})
+		case "provider":
+			m.sysMsg(fmt.Sprintf("provider = %s\n  available: openai, anthropic\n  set: /set provider <name>", m.config.Provider))
+			return m, nil
+		case "service":
+			names := config.ListServices()
+			cur := serviceDisplay(m.config.Service)
+			m.sysMsg(fmt.Sprintf("service = %s\n  available: %s\n  set: /set service <name>", cur, strings.Join(names, ", ")))
 			return m, nil
 		}
 		value, ok := config.GetSetting(m.config, key)
@@ -301,6 +319,154 @@ func handleTokensCommand(m Model, _ string, _ []string) (Model, tea.Cmd) {
 	m.sysMsg(fmt.Sprintf("~%s tokens | $%.4f | %d messages | %d turns",
 		formatTokens(tokens), cost, msgs, m.agent.TurnCount))
 	return m, nil
+}
+
+// handleStatusCommand prints the active connection state plus context-window
+// usage. This is the read-only counterpart to /set: where /set lists or mutates
+// individual keys, /status snapshots the whole picture in one screen.
+func handleStatusCommand(m Model, _ string, _ []string) (Model, tea.Cmd) {
+	cfg := m.config
+	tokens := m.agent.EstimateTokens()
+	ctxWindow := lookupContextWindow(cfg.Service, cfg.Model)
+	endpoint := transportEndpointPreview(cfg.Provider, cfg.BaseURL)
+
+	var ctxLine string
+	switch {
+	case ctxWindow > 0:
+		pct := float64(tokens) / float64(ctxWindow) * 100
+		ctxLine = fmt.Sprintf("~%s / %s tokens (%.1f%%)", formatTokens(tokens), formatTokens(int(ctxWindow)), pct)
+	default:
+		ctxLine = fmt.Sprintf("~%s tokens (window unknown)", formatTokens(tokens))
+	}
+
+	profile := cfg.Profile
+	if profile == "" {
+		profile = "<none>"
+	}
+
+	var sb strings.Builder
+	sb.WriteString("Status:\n")
+	sb.WriteString(fmt.Sprintf("  profile:   %s\n", profile))
+	sb.WriteString(fmt.Sprintf("  service:   %s\n", serviceDisplay(cfg.Service)))
+	sb.WriteString(fmt.Sprintf("  provider:  %s\n", cfg.Provider))
+	sb.WriteString(fmt.Sprintf("  model:     %s\n", cfg.Model))
+	sb.WriteString(fmt.Sprintf("  baseurl:   %s\n", cfg.BaseURL))
+	sb.WriteString(fmt.Sprintf("  endpoint:  %s\n", endpoint))
+	sb.WriteString(fmt.Sprintf("  apikey:    %s\n", maskSecret(cfg.APIKey)))
+	sb.WriteString(fmt.Sprintf("  context:   %s\n", ctxLine))
+	sb.WriteString(fmt.Sprintf("  cost:      $%.4f\n", m.agent.Cost()))
+	sb.WriteString(fmt.Sprintf("  messages:  %d\n", m.agent.MessageCount()))
+	sb.WriteString(fmt.Sprintf("  turns:     %d", m.agent.TurnCount))
+	m.sysMsg(sb.String())
+	return m, nil
+}
+
+// lookupContextWindow returns the catwalk-reported context window for the
+// active model, or 0 when the catalog has no entry. Service is the join key
+// (matches catwalk.Provider.ID); model is matched case-insensitively against
+// catwalk.Model.ID. Falls back to scanning every provider when service is empty
+// so a hand-rolled config still surfaces a window when the model ID is unique.
+func lookupContextWindow(service, modelID string) int64 {
+	modelID = strings.TrimSpace(modelID)
+	if modelID == "" {
+		return 0
+	}
+	env := loadModelCatalog()
+	if len(env.Providers) == 0 {
+		return 0
+	}
+	svc := strings.TrimSpace(strings.ToLower(service))
+	for i := range env.Providers {
+		p := &env.Providers[i]
+		if svc != "" && !strings.EqualFold(strings.TrimSpace(string(p.ID)), svc) {
+			continue
+		}
+		for j := range p.Models {
+			if strings.EqualFold(p.Models[j].ID, modelID) {
+				return p.Models[j].ContextWindow
+			}
+		}
+	}
+	return 0
+}
+
+// handleSaveCommand snapshots the current connection state to the rc file at
+// config.RCPath() (typically ~/.bitchtea/bitchtearc). Any existing rc file is
+// renamed to bitchtearc.bak-YYYYMMDD-HHMMSS first so the user can roll back.
+//
+// We deliberately persist raw values (including the API key) — the rc lives
+// under ~/.bitchtea/ which is already 0o700 and the user owns the risk per
+// CLAUDE.md ("no artificial guardrails"). Same trust model as /profile save.
+func handleSaveCommand(m Model, _ string, _ []string) (Model, tea.Cmd) {
+	rcPath := config.RCPath()
+	if err := os.MkdirAll(filepath.Dir(rcPath), 0o700); err != nil {
+		m.errMsg(fmt.Sprintf("save: cannot create %s: %v", filepath.Dir(rcPath), err))
+		return m, nil
+	}
+
+	var backupNote string
+	if _, err := os.Stat(rcPath); err == nil {
+		backup := rcPath + ".bak-" + time.Now().Format("20060102-150405")
+		if err := os.Rename(rcPath, backup); err != nil {
+			m.errMsg(fmt.Sprintf("save: cannot back up existing rc: %v", err))
+			return m, nil
+		}
+		backupNote = fmt.Sprintf(" (previous backed up to %s)", filepath.Base(backup))
+	}
+
+	body := buildRCSnapshot(m.config)
+	if err := os.WriteFile(rcPath, []byte(body), 0o600); err != nil {
+		m.errMsg(fmt.Sprintf("save: cannot write %s: %v", rcPath, err))
+		return m, nil
+	}
+	m.sysMsg(fmt.Sprintf("Saved current config to %s%s.", rcPath, backupNote))
+	return m, nil
+}
+
+// buildRCSnapshot serializes cfg as a sequence of `set <key> <value>` lines
+// that ApplyRCSetCommands will replay at next startup. Order mirrors
+// config.SetKeys() so the file reads top-to-bottom in the same order /set
+// lists them. Empty values are skipped — a missing apikey is more useful as
+// "fall back to env" than as a recorded blank that would clobber it.
+func buildRCSnapshot(cfg *config.Config) string {
+	var sb strings.Builder
+	sb.WriteString("# bitchtea startup commands — written by /save on ")
+	sb.WriteString(time.Now().Format(time.RFC3339))
+	sb.WriteString("\n")
+
+	write := func(key, value string) {
+		value = strings.TrimSpace(value)
+		if value == "" {
+			return
+		}
+		sb.WriteString("set ")
+		sb.WriteString(key)
+		sb.WriteString(" ")
+		sb.WriteString(value)
+		sb.WriteString("\n")
+	}
+
+	// Profile first: ApplyProfile clobbers provider/model/baseurl/apikey/service,
+	// so writing it before the explicit overrides means subsequent set lines
+	// can refine on top. Also drops the profile tag if the snapshot mixes hand
+	// edits — /set profile re-applies the named profile cleanly at boot.
+	write("profile", cfg.Profile)
+	write("provider", cfg.Provider)
+	write("model", cfg.Model)
+	write("baseurl", cfg.BaseURL)
+	write("apikey", cfg.APIKey)
+	write("nick", cfg.UserNick)
+	write("sound", boolRCValue(cfg.NotificationSound))
+	write("auto-next", boolRCValue(cfg.AutoNextSteps))
+	write("auto-idea", boolRCValue(cfg.AutoNextIdea))
+	return sb.String()
+}
+
+func boolRCValue(v bool) string {
+	if v {
+		return "on"
+	}
+	return "off"
 }
 
 func handleDebugCommand(m Model, _ string, parts []string) (Model, tea.Cmd) {

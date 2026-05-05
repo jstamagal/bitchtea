@@ -171,7 +171,6 @@ func TestModelAcceptsAnyValueVerbatim(t *testing.T) {
 		{"claude-3.5-sonnet", "/set model claude-3.5-sonnet", "Model switched to", "claude-3.5-sonnet"},
 		{"single char x", "/set model x", "Model switched to", "x"},
 		{"no dot or dash", "/set model foobar", "Model switched to", "foobar"},
-		{"no arg shows current", "/set model", "model = gpt-4o", "gpt-4o"},
 	}
 
 	for _, tt := range tests {
@@ -198,6 +197,19 @@ func TestModelAcceptsAnyValueVerbatim(t *testing.T) {
 				t.Errorf("model = %q, want %q", model.config.Model, tt.wantStored)
 			}
 		})
+	}
+}
+
+// Bare `/set model` is the unified picker entry point — it must NOT silently
+// echo the current value (that's what the all-keys bare `/set` listing is
+// for). It should route to handleModelsCommand. With no active service in the
+// test fixture, the picker errors helpfully instead of opening blank.
+func TestSetModelBareOpensPicker(t *testing.T) {
+	m := newTestModel(t)
+	result, _ := m.handleCommand("/set model")
+	msg := lastMsg(result)
+	if !strings.Contains(msg.Content, "no active service") && !strings.Contains(msg.Content, "models for") {
+		t.Fatalf("expected picker-opening behavior (picker title or service-required error), got %q", msg.Content)
 	}
 }
 
