@@ -41,6 +41,18 @@ func handleInviteCommand(m Model, _ string, parts []string) (Model, tea.Cmd) {
 	m.membership.Invite(channelKey, persona)
 	_ = m.membership.Save(m.config.SessionDir)
 
+	// Inject persona awareness into the agent's per-channel history so the
+	// next turn streams with knowledge that <persona> has joined. Routing-
+	// model decision: option (c) from bt-wire.4 — a "<persona> joined" user
+	// message in the channel's context, mirroring how /invite reads in IRC.
+	// See docs/commands.md "/invite" trace for rationale.
+	if m.agent != nil {
+		ctxKey := "#" + channelKey
+		m.agent.InitContext(ctxKey)
+		members := m.membership.Members(channelKey)
+		m.agent.InjectNoteInContext(ctxKey, buildPersonaJoinNote(persona, channelKey, members))
+	}
+
 	m.addMessage(ChatMessage{
 		Time:    time.Now(),
 		Type:    MsgSystem,
@@ -80,8 +92,49 @@ func handleKickCommand(m Model, _ string, parts []string) (Model, tea.Cmd) {
 	m.membership.Part(channelKey, persona)
 	_ = m.membership.Save(m.config.SessionDir)
 
+	// Mirror of /invite: tell the agent the persona has left this channel so
+	// future turns in #<channel> stop treating them as a participant. The
+	// note is scoped to the channel's per-context history; other contexts
+	// are unaffected.
+	if m.agent != nil {
+		ctxKey := "#" + channelKey
+		m.agent.InitContext(ctxKey)
+		members := m.membership.Members(channelKey)
+		m.agent.InjectNoteInContext(ctxKey, buildPersonaPartNote(persona, channelKey, members))
+	}
+
 	m.sysMsg(fmt.Sprintf("*** %s has been kicked from #%s", persona, channelKey))
 	return m, nil
+}
+
+// buildPersonaJoinNote crafts the user-facing context note injected into the
+// agent's per-channel message history when /invite adds a persona. Members is
+// the post-invite member list (already includes the new persona). The note is
+// the only signal the agent receives about membership — it must be explicit.
+func buildPersonaJoinNote(persona, channelKey string, members []string) string {
+	memberList := strings.Join(members, ", ")
+	if memberList == "" {
+		memberList = persona
+	}
+	return fmt.Sprintf(
+		"[membership update] '%s' has joined #%s as a participant. Treat '%s' as another collaborator in this room — future user messages may direct work to '%s', address them by name, or expect their voice in the conversation. Current members of #%s: %s.",
+		persona, channelKey, persona, persona, channelKey, memberList,
+	)
+}
+
+// buildPersonaPartNote crafts the user-facing context note injected when /kick
+// removes a persona. Members is the post-kick list (already excludes the kicked
+// persona); when empty we say so explicitly so the agent doesn't keep modeling
+// invisible participants.
+func buildPersonaPartNote(persona, channelKey string, members []string) string {
+	memberList := strings.Join(members, ", ")
+	if memberList == "" {
+		memberList = "no other personas"
+	}
+	return fmt.Sprintf(
+		"[membership update] '%s' has been removed from #%s and is no longer a participant in this room. Stop addressing '%s' or expecting their voice here. Remaining members of #%s: %s.",
+		persona, channelKey, persona, channelKey, memberList,
+	)
 }
 
 // buildChannelCatchup builds a catch-up summary from session history for a channel.
