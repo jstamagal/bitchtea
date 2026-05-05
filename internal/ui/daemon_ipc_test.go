@@ -23,7 +23,15 @@ func TestDaemonIPCPath(t *testing.T) {
 		t.Skip("skipping integration test in short mode")
 	}
 
-	base := t.TempDir()
+	// submitDaemonCheckpoint() resolves the daemon base via config.BaseDir(),
+	// which derives from $HOME. Pin HOME to a tempdir so the production
+	// resolver and the test agree on where the daemon lives.
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	base := config.BaseDir()
+	if err := os.MkdirAll(base, 0o755); err != nil {
+		t.Fatalf("mkdir base: %v", err)
+	}
 	workDir := t.TempDir()
 
 	// Create a session the TUI can reference.
