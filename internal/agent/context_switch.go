@@ -67,6 +67,12 @@ func (a *Agent) InjectNoteInContext(key ContextKey, note string) {
 // switching to it. The context is created if it doesn't exist. Bootstrap
 // messages are forced to match the current system prompt, same as
 // RestoreMessages.
+//
+// bt-wire.10: when a non-default context is restored from a saved session, any
+// "Context memory for X:" exchange already present in those messages should be
+// recorded in injectedPaths so SetScope(X) on the eventual context switch does
+// not double-inject. This is additive — it does not clear markers tracked for
+// other contexts.
 func (a *Agent) RestoreContextMessages(key ContextKey, messages []fantasy.Message) {
 	msgs := append([]fantasy.Message(nil), messages...)
 	systemPrompt := buildSystemPrompt(a.config, a.tools.Definitions())
@@ -76,4 +82,5 @@ func (a *Agent) RestoreContextMessages(key ContextKey, messages []fantasy.Messag
 		msgs[0] = newSystemMessage(systemPrompt)
 	}
 	a.contextMsgs[key] = msgs
+	a.scanInjectedPathsFromMessages(msgs)
 }

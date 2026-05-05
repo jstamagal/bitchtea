@@ -685,18 +685,13 @@ func TestSetScopeRootDoesNotDoubleInjectBootstrapMemory(t *testing.T) {
 	}
 }
 
-// TestResumeOverwritesPreInjectedMemory reproduces the bt-wire.10 bug:
+// TestResumeOverwritesPreInjectedMemory exercises the bt-wire.10 fix:
 // SetScope marks a HOT path as injected, then RestoreMessages replaces the
-// message slice — the injected messages are lost but the marker stays,
-// preventing future re-injection.
-//
-// This test is skipped until bt-wire.10 is fixed (RestoreMessages must reset
-// injectedPaths or SetScope must check whether the injected messages are still
-// present rather than relying on the boolean markers).
+// message slice. The injected messages are lost, so the marker must be
+// rebuilt from whatever the restored slice actually contains; otherwise
+// future SetScope calls become no-ops and the scoped HOT.md is permanently
+// missing from the conversation.
 func TestResumeOverwritesPreInjectedMemory(t *testing.T) {
-	t.Skip("bt-wire.10: pre-resume scoped injection markers are not cleared on RestoreMessages, " +
-		"so HOT.md content is lost after resume and never re-injected")
-
 	workDir := t.TempDir()
 	sessionDir := t.TempDir()
 
@@ -753,4 +748,97 @@ func TestResumeOverwritesPreInjectedMemory(t *testing.T) {
 		}
 	}
 	t.Error("bt-wire.10 bug: HOT.md content was NOT re-injected after RestoreMessages because injectedPaths was not reset")
+}
+
+// TestRestoreMessagesPreservesInjectionMarkerWhenContentSurvived locks in the
+// other half of the bt-wire.10 fix: when the restored slice already contains
+// a "Context memory for X:" exchange (because the saved session captured it),
+// SetScope(X) on the next turn must NOT re-inject the same content. Otherwise
+// the LLM gets the HOT.md content twice in a row after every resume.
+func TestRestoreMessagesPreservesInjectionMarkerWhenContentSurvived(t *testing.T) {
+	workDir := t.TempDir()
+	sessionDir := t.TempDir()
+
+	hotContent := "# Channel Y\n- Survived through resume\n"
+	scope := ChannelMemoryScope("y-channel", nil)
+	if err := SaveScopedMemory(sessionDir, workDir, scope, hotContent); err != nil {
+		t.Fatalf("save scoped memory: %v", err)
+	}
+
+	cfg := config.DefaultConfig()
+	cfg.WorkDir = workDir
+	cfg.SessionDir = sessionDir
+
+	agent := NewAgentWithStreamer(&cfg, &fakeStreamer{})
+
+	// Simulate a saved session whose messages already include the SetScope
+	// injection (this is what session.Append captures after a turn run while
+	// the scope was active).
+	saved := []fantasy.Message{
+		fantasyTextMessage("user", "Context memory for #y-channel:\n\n"+hotContent),
+		fantasyTextMessage("assistant", "Got it."),
+		fantasyTextMessage("user", "first real user message"),
+	}
+	agent.RestoreMessages(saved)
+
+	preCount := len(agent.messages)
+
+	// SetScope(scope) should be a no-op now: the scan rebuilt the marker, so
+	// the restored "Context memory for #y-channel:" exchange isn't duplicated.
+	agent.SetScope(scope)
+
+	if got := len(agent.messages) - preCount; got != 0 {
+		t.Fatalf("SetScope after RestoreMessages double-injected: added %d messages, expected 0", got)
+	}
+
+	// Sanity: the surviving copy is still present.
+	found := false
+	for _, m := range agent.messages {
+		if strings.Contains(msgText(m), "Survived through resume") {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatal("expected restored HOT.md content to remain in messages")
+	}
+}
+
+// TestRestoreContextMessagesScansForInjectionMarker covers the additive scan
+// in RestoreContextMessages: when a non-default context is restored, any
+// "Context memory for X:" content saved with that context must register in
+// injectedPaths so that the eventual SetContext + SetScope on first use
+// doesn't double-inject.
+func TestRestoreContextMessagesScansForInjectionMarker(t *testing.T) {
+	workDir := t.TempDir()
+	sessionDir := t.TempDir()
+
+	hotContent := "# Channel Z\n- Background context\n"
+	scope := ChannelMemoryScope("z-channel", nil)
+	if err := SaveScopedMemory(sessionDir, workDir, scope, hotContent); err != nil {
+		t.Fatalf("save scoped memory: %v", err)
+	}
+
+	cfg := config.DefaultConfig()
+	cfg.WorkDir = workDir
+	cfg.SessionDir = sessionDir
+
+	agent := NewAgentWithStreamer(&cfg, &fakeStreamer{})
+
+	// Restore the non-default context's saved messages, which include the
+	// previous SetScope injection.
+	ctxKey := ContextKey("#z-channel")
+	saved := []fantasy.Message{
+		fantasyTextMessage("user", "Context memory for #z-channel:\n\n"+hotContent),
+		fantasyTextMessage("assistant", "Got it."),
+	}
+	agent.RestoreContextMessages(ctxKey, saved)
+
+	// Switch to that context and call SetScope — it must not double-inject.
+	agent.SetContext(ctxKey)
+	preCount := len(agent.messages)
+	agent.SetScope(scope)
+	if got := len(agent.messages) - preCount; got != 0 {
+		t.Fatalf("SetScope after RestoreContextMessages double-injected: added %d messages, expected 0", got)
+	}
 }

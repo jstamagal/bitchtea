@@ -794,11 +794,19 @@ Root scope also has a hot path (`<WorkDir>/MEMORY.md`). Bootstrap now tracks
 the root hot path in `injectedPaths`, so a subsequent `SetScope(root)` call
 skips re-injection — the bootstrap message already covers it.
 
-Important resume gap: `NewModel` calls `SetScope` before `ResumeSession`. If
-that pre-resume scoped injection marks a path and `ResumeSession` then replaces
-the active message slice, the injected memory message can be discarded while
-the path remains marked. Later turns in that process will not re-inject that
-same HOT file.
+Resume bookkeeping (bt-wire.10): `NewModel` calls `SetScope` before
+`ResumeSession`, so a pre-resume scoped injection happens against the
+about-to-be-replaced message slice. To keep `injectedPaths` in sync,
+`Agent.RestoreMessages` clears the marker map and then scans the freshly
+restored slice for the synthetic exchanges produced by previous injections —
+`Here is the session memory from previous work:` for the root MEMORY.md
+bootstrap and `Context memory for <label>:` for scoped HOT injections — and
+re-records the corresponding HOT path. `Agent.RestoreContextMessages` runs
+the same scan additively so non-default contexts restored from session
+entries don't double-inject when the eventual `SetContext` + `SetScope`
+fires. Net effect: after resume, scoped HOT.md is re-injectable on the next
+turn whenever the saved bootstrap didn't already carry it, and is not
+duplicated when it did.
 
 ## `/memory` Command
 

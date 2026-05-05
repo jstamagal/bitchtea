@@ -1122,6 +1122,13 @@ func (a *Agent) InjectNote(note string) {
 // restored slice already starts with one, its content is overwritten;
 // otherwise a system message is prepended. This matches the pre-Phase-3
 // behavior so callers (UI ResumeSession, headless --resume) don't change.
+//
+// bt-wire.10: the pre-resume `injectedPaths` markers are stale once the
+// active message slice is replaced — any HOT.md content the SetScope call at
+// NewModel time appended is now gone, but the marker would otherwise persist
+// and prevent re-injection on the next SetScope. Reset the markers and then
+// scan the freshly-restored slice so we re-track only those scopes whose
+// "Context memory for X:" / root-memory bootstrap message is actually present.
 func (a *Agent) RestoreMessages(messages []fantasy.Message) {
 	a.messages = append([]fantasy.Message(nil), messages...)
 	systemPrompt := buildSystemPrompt(a.config, a.tools.Definitions())
@@ -1143,8 +1150,67 @@ func (a *Agent) RestoreMessages(messages []fantasy.Message) {
 	a.lastCompletedFollowUp = followUpKindNone
 	a.lastAssistantRaw = ""
 
+	// Drop pre-resume injection markers (they refer to messages that were
+	// just overwritten) and rebuild from whatever survives in the restored
+	// slice so SetScope on the next turn neither double-injects nor stays a
+	// no-op when the saved bootstrap was missing the scoped memory.
+	a.injectedPaths = make(map[string]bool)
+	a.scanInjectedPathsFromMessages(a.messages)
+
 	// Sync the context map so the current context points to the restored messages.
 	a.contextMsgs[a.currentContext] = a.messages
+}
+
+// scanInjectedPathsFromMessages walks msgs looking for the synthetic context
+// exchanges produced by SetScope ("Context memory for <label>:") and the root
+// MEMORY.md bootstrap injection ("Here is the session memory from previous
+// work:") and records the corresponding HOT path in a.injectedPaths. Used by
+// RestoreMessages and RestoreContextMessages to keep injection bookkeeping in
+// sync with the post-resume message state.
+func (a *Agent) scanInjectedPathsFromMessages(msgs []fantasy.Message) {
+	for _, msg := range msgs {
+		if msg.Role != fantasy.MessageRoleUser {
+			continue
+		}
+		text := messageText(msg)
+		if strings.HasPrefix(text, "Here is the session memory from previous work:") {
+			rootHotPath := ScopedHotMemoryPath(a.config.SessionDir, a.config.WorkDir, RootMemoryScope())
+			a.injectedPaths[rootHotPath] = true
+			continue
+		}
+		if !strings.HasPrefix(text, "Context memory for ") {
+			continue
+		}
+		rest := text[len("Context memory for "):]
+		colonIdx := strings.IndexByte(rest, ':')
+		if colonIdx <= 0 {
+			continue
+		}
+		label := strings.TrimSpace(rest[:colonIdx])
+		if label == "" {
+			continue
+		}
+		scope := scopeFromLabel(label)
+		path := ScopedHotMemoryPath(a.config.SessionDir, a.config.WorkDir, scope)
+		a.injectedPaths[path] = true
+	}
+}
+
+// scopeFromLabel inverts scopeLabel: "root" → root, "#X" → channel X,
+// otherwise → query scope keyed by the bare label. The mapping is best-effort
+// (we cannot reconstruct nested parents from a label alone), which is fine
+// for the only caller — injection-marker rebuild — because all that matters
+// is that ScopedHotMemoryPath returns the same path the original SetScope
+// call produced.
+func scopeFromLabel(label string) MemoryScope {
+	switch {
+	case label == "root":
+		return RootMemoryScope()
+	case strings.HasPrefix(label, "#"):
+		return ChannelMemoryScope(label[1:], nil)
+	default:
+		return QueryMemoryScope(label, nil)
+	}
 }
 
 // Reset clears the conversation history back to its bootstrap state — system
