@@ -1,37 +1,15 @@
 package ui
 
 import (
-	"encoding/json"
-	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 
 	"charm.land/fantasy"
 
-	"github.com/jstamagal/bitchtea/internal/config"
 	"github.com/jstamagal/bitchtea/internal/llm"
 	"github.com/jstamagal/bitchtea/internal/session"
 )
-
-// writeJSONL writes the supplied entries as one JSON line each.
-func writeJSONL(t *testing.T, path string, entries []session.Entry) {
-	t.Helper()
-	f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0644)
-	if err != nil {
-		t.Fatalf("open fixture: %v", err)
-	}
-	defer f.Close()
-	for _, e := range entries {
-		data, err := json.Marshal(e)
-		if err != nil {
-			t.Fatalf("marshal entry: %v", err)
-		}
-		if _, err := f.Write(append(data, '\n')); err != nil {
-			t.Fatalf("write entry: %v", err)
-		}
-	}
-}
 
 // findMessage returns the first ChatMessage whose Content contains needle, or
 // the empty ChatMessage and false.
@@ -44,27 +22,15 @@ func findMessage(msgs []ChatMessage, needle string) (ChatMessage, bool) {
 	return ChatMessage{}, false
 }
 
-// TestResumeFromV0FixtureFile builds a hand-written legacy JSONL fixture on
-// disk, loads it through session.Load, and verifies ResumeSession populates
+// TestResumeFromV0FixtureFile loads the canonical v0 JSONL fixture from
+// disk, runs it through session.Load, and verifies ResumeSession populates
 // both the agent history and the chat viewport. This exercises the full
 // disk-to-viewport path that --resume uses, not just the in-memory shortcut
-// that the existing tests cover.
+// that the existing tests cover. The fixture lives in
+// internal/session/testdata/v0.jsonl so the UI and session packages share
+// the same on-disk shape.
 func TestResumeFromV0FixtureFile(t *testing.T) {
-	dir := t.TempDir()
-	path := filepath.Join(dir, "v0.jsonl")
-
-	fixture := strings.Join([]string{
-		`{"ts":"2026-04-01T12:00:00Z","id":"1","role":"user","content":"check README"}`,
-		`{"ts":"2026-04-01T12:00:01Z","id":"2","parent_id":"1","role":"assistant","content":"Reading.","tool_calls":[{"id":"call_a","type":"function","function":{"name":"read","arguments":"{\"path\":\"README.md\"}"}}]}`,
-		`{"ts":"2026-04-01T12:00:02Z","id":"3","parent_id":"2","role":"tool","content":"# README contents","tool_call_id":"call_a","tool_name":"read"}`,
-		`{"ts":"2026-04-01T12:00:03Z","id":"4","parent_id":"3","role":"assistant","content":"Done."}`,
-	}, "\n") + "\n"
-
-	if err := os.WriteFile(path, []byte(fixture), 0644); err != nil {
-		t.Fatalf("write fixture: %v", err)
-	}
-
-	sess, err := session.Load(path)
+	sess, err := session.Load(sessionFixturePath(t, "v0.jsonl"))
 	if err != nil {
 		t.Fatalf("load v0 fixture: %v", err)
 	}
@@ -72,10 +38,7 @@ func TestResumeFromV0FixtureFile(t *testing.T) {
 		t.Fatalf("expected 4 entries, got %d", len(sess.Entries))
 	}
 
-	cfg := config.DefaultConfig()
-	cfg.WorkDir = t.TempDir()
-	cfg.SessionDir = t.TempDir()
-	model := NewModel(&cfg)
+	model, _ := testModel(t)
 	model.ResumeSession(sess)
 
 	// RestoreMessages prepends a system prompt if the restored slice doesn't
@@ -97,53 +60,16 @@ func TestResumeFromV0FixtureFile(t *testing.T) {
 	}
 }
 
-// TestResumeFromV1Fixture builds a session JSONL whose entries were minted
-// with EntryFromFantasy and verifies ResumeSession produces the same agent
-// history and viewport messages as the legacy path. ResumeSession now goes
-// through FantasyFromEntries, but the dual-write writer still populates the
-// legacy fields so a downgraded reader could see them.
+// TestResumeFromV1Fixture loads the canonical v1 fixture (entries minted via
+// EntryFromFantasy and serialized to JSONL) and verifies ResumeSession
+// produces the expected agent history and viewport messages. ResumeSession
+// goes through FantasyFromEntries, but the dual-write writer still populates
+// the legacy fields so a downgraded reader could see them — the fixture file
+// captures both shapes verbatim.
+//
+// To regenerate the fixture: `go run ./cmd/genfixtures internal/session/testdata`.
 func TestResumeFromV1Fixture(t *testing.T) {
-	entries := []session.Entry{
-		session.EntryFromFantasy(fantasy.Message{
-			Role:    fantasy.MessageRoleUser,
-			Content: []fantasy.MessagePart{fantasy.TextPart{Text: "scan the repo"}},
-		}),
-		session.EntryFromFantasy(fantasy.Message{
-			Role: fantasy.MessageRoleAssistant,
-			Content: []fantasy.MessagePart{
-				fantasy.TextPart{Text: "Looking."},
-				fantasy.ToolCallPart{
-					ToolCallID: "call_v1",
-					ToolName:   "read",
-					Input:      `{"path":"main.go"}`,
-				},
-			},
-		}),
-		session.EntryFromFantasy(fantasy.Message{
-			Role: fantasy.MessageRoleTool,
-			Content: []fantasy.MessagePart{fantasy.ToolResultPart{
-				ToolCallID: "call_v1",
-				Output:     fantasy.ToolResultOutputContentText{Text: "package main"},
-			}},
-		}),
-		session.EntryFromFantasy(fantasy.Message{
-			Role:    fantasy.MessageRoleAssistant,
-			Content: []fantasy.MessagePart{fantasy.TextPart{Text: "Got it."}},
-		}),
-	}
-
-	// Sanity: every entry should be v1 with Msg populated.
-	for i, e := range entries {
-		if e.V != session.EntrySchemaVersion || e.Msg == nil {
-			t.Fatalf("entry %d not v1: %+v", i, e)
-		}
-	}
-
-	dir := t.TempDir()
-	path := filepath.Join(dir, "v1.jsonl")
-	writeJSONL(t, path, entries)
-
-	sess, err := session.Load(path)
+	sess, err := session.Load(sessionFixturePath(t, "v1.jsonl"))
 	if err != nil {
 		t.Fatalf("load v1 fixture: %v", err)
 	}
@@ -159,10 +85,7 @@ func TestResumeFromV1Fixture(t *testing.T) {
 		}
 	}
 
-	cfg := config.DefaultConfig()
-	cfg.WorkDir = t.TempDir()
-	cfg.SessionDir = t.TempDir()
-	model := NewModel(&cfg)
+	model, _ := testModel(t)
 	model.ResumeSession(sess)
 
 	// RestoreMessages prepends a system prompt; we only assert the entry
@@ -195,49 +118,10 @@ func TestResumeFromV1Fixture(t *testing.T) {
 
 // TestResumeFromMixedV0V1Fixture exercises a session whose lines mix the
 // legacy and v1 shapes — the kind of file produced after a downgrade and
-// re-upgrade. All messages must still flow through ResumeSession.
+// re-upgrade. The fixture has two v0 lines followed by two v1 lines; all
+// four messages must still flow through ResumeSession in order.
 func TestResumeFromMixedV0V1Fixture(t *testing.T) {
-	dir := t.TempDir()
-	path := filepath.Join(dir, "mixed.jsonl")
-
-	// Two v0 lines (hand-written), then two v1 lines (via EntryFromFantasy).
-	v0Lines := []string{
-		`{"ts":"2026-04-01T12:00:00Z","id":"1","role":"user","content":"hello"}`,
-		`{"ts":"2026-04-01T12:00:01Z","id":"2","parent_id":"1","role":"assistant","content":"hi"}`,
-	}
-
-	v1Entries := []session.Entry{
-		session.EntryFromFantasy(fantasy.Message{
-			Role:    fantasy.MessageRoleUser,
-			Content: []fantasy.MessagePart{fantasy.TextPart{Text: "what's the time"}},
-		}),
-		session.EntryFromFantasy(fantasy.Message{
-			Role:    fantasy.MessageRoleAssistant,
-			Content: []fantasy.MessagePart{fantasy.TextPart{Text: "noon"}},
-		}),
-	}
-
-	f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0644)
-	if err != nil {
-		t.Fatalf("open fixture: %v", err)
-	}
-	for _, l := range v0Lines {
-		if _, err := f.WriteString(l + "\n"); err != nil {
-			t.Fatalf("write v0 line: %v", err)
-		}
-	}
-	for _, e := range v1Entries {
-		data, err := json.Marshal(e)
-		if err != nil {
-			t.Fatalf("marshal v1: %v", err)
-		}
-		if _, err := f.Write(append(data, '\n')); err != nil {
-			t.Fatalf("write v1: %v", err)
-		}
-	}
-	_ = f.Close()
-
-	sess, err := session.Load(path)
+	sess, err := session.Load(sessionFixturePath(t, "mixed_v0_v1.jsonl"))
 	if err != nil {
 		t.Fatalf("load mixed fixture: %v", err)
 	}
@@ -251,10 +135,7 @@ func TestResumeFromMixedV0V1Fixture(t *testing.T) {
 		t.Errorf("expected last two entries v1, got v=%d/%d", sess.Entries[2].V, sess.Entries[3].V)
 	}
 
-	cfg := config.DefaultConfig()
-	cfg.WorkDir = t.TempDir()
-	cfg.SessionDir = t.TempDir()
-	model := NewModel(&cfg)
+	model, _ := testModel(t)
 	model.ResumeSession(sess)
 
 	if got := len(model.messages); got != 4 {
@@ -272,9 +153,7 @@ func TestResumeFromMixedV0V1Fixture(t *testing.T) {
 // the fork file contains v1 lines verbatim (Msg / V / LegacyLossy preserved)
 // and is resumable.
 func TestForkV1Session(t *testing.T) {
-	cfg := config.DefaultConfig()
-	cfg.WorkDir = t.TempDir()
-	cfg.SessionDir = t.TempDir()
+	model, cfg := testModel(t)
 
 	sess, err := session.New(cfg.SessionDir)
 	if err != nil {
@@ -328,8 +207,8 @@ func TestForkV1Session(t *testing.T) {
 		}
 	}
 
-	// Forked session must also resume cleanly.
-	model := NewModel(&cfg)
+	// Forked session must also resume cleanly. Reuse the testModel above —
+	// it was built with the same SessionDir we just forked into.
 	model.ResumeSession(loaded)
 	if got := len(model.agent.Messages()); got < 3 {
 		t.Fatalf("expected at least 3 restored agent messages from fork, got %d", got)
@@ -375,10 +254,7 @@ func TestResumeV1ToolCallPopulatesPanelStats(t *testing.T) {
 		}),
 	}
 
-	cfg := config.DefaultConfig()
-	cfg.WorkDir = t.TempDir()
-	cfg.SessionDir = t.TempDir()
-	model := NewModel(&cfg)
+	model, cfg := testModel(t)
 	model.ResumeSession(&session.Session{Path: filepath.Join(cfg.SessionDir, "v1tool.jsonl"), Entries: entries})
 
 	// Find the tool result chat message and verify it was rendered with the
@@ -480,17 +356,13 @@ func TestResumeV1LegacyLossyEntry(t *testing.T) {
 		lossy,
 	}
 
-	cfg := config.DefaultConfig()
-	cfg.WorkDir = t.TempDir()
-	cfg.SessionDir = t.TempDir()
-
 	defer func() {
 		if r := recover(); r != nil {
 			t.Fatalf("ResumeSession panicked on legacy_lossy entry: %v", r)
 		}
 	}()
 
-	model := NewModel(&cfg)
+	model, cfg := testModel(t)
 	model.ResumeSession(&session.Session{Path: filepath.Join(cfg.SessionDir, "lossy.jsonl"), Entries: entries})
 
 	if len(model.messages) != 2 {
@@ -526,10 +398,7 @@ func TestResumeV1MultiTextFlattens(t *testing.T) {
 		t.Fatalf("multi-text message should be flagged legacy_lossy")
 	}
 
-	cfg := config.DefaultConfig()
-	cfg.WorkDir = t.TempDir()
-	cfg.SessionDir = t.TempDir()
-	model := NewModel(&cfg)
+	model, cfg := testModel(t)
 	model.ResumeSession(&session.Session{
 		Path:    filepath.Join(cfg.SessionDir, "multi.jsonl"),
 		Entries: []session.Entry{multi},
@@ -541,6 +410,71 @@ func TestResumeV1MultiTextFlattens(t *testing.T) {
 	got := model.messages[0].Content
 	if !strings.Contains(got, "first paste") || !strings.Contains(got, "second paste") {
 		t.Errorf("expected both text parts in flattened content, got %q", got)
+	}
+}
+
+// TestResumeFromCorruptedFixture loads a JSONL file that contains a mix of
+// valid and malformed lines. session.Load is documented to skip malformed
+// lines silently (see Load in internal/session/session.go), so the resumed
+// session should drop only the bad lines and ResumeSession must succeed
+// without panicking. The fixture has three valid entries and two garbage
+// lines; a regression that started failing the entire load on one bad line
+// would surface here.
+func TestResumeFromCorruptedFixture(t *testing.T) {
+	sess, err := session.Load(sessionFixturePath(t, "corrupted.jsonl"))
+	if err != nil {
+		t.Fatalf("load corrupted fixture: %v", err)
+	}
+	if got := len(sess.Entries); got != 3 {
+		t.Fatalf("expected 3 valid entries (2 garbage lines skipped), got %d", got)
+	}
+
+	model, _ := testModel(t)
+	model.ResumeSession(sess)
+
+	if got := len(model.messages); got != 3 {
+		t.Fatalf("expected 3 chat messages from valid entries, got %d", got)
+	}
+	wantOrder := []string{"first valid", "second valid", "third valid after corruption"}
+	for i, want := range wantOrder {
+		if !strings.Contains(model.messages[i].Content, want) {
+			t.Errorf("message %d: expected %q in viewport, got %q", i, want, model.messages[i].Content)
+		}
+	}
+}
+
+// TestResumeFromMultiContextFixture loads a fixture whose entries span three
+// IRC routing contexts (#ops, #engineering, alice). session.Load preserves
+// the Context field verbatim and ResumeSession flattens all six entries
+// into the agent's main history. Per-context re-routing on resume is a
+// separate feature tracked in bt-wire.* — this test just pins that the
+// Context field survives load and the flattened history is intact.
+func TestResumeFromMultiContextFixture(t *testing.T) {
+	sess, err := session.Load(sessionFixturePath(t, "multi_context.jsonl"))
+	if err != nil {
+		t.Fatalf("load multi-context fixture: %v", err)
+	}
+	if got := len(sess.Entries); got != 6 {
+		t.Fatalf("expected 6 entries, got %d", got)
+	}
+	wantContexts := []string{"#ops", "#ops", "#engineering", "#engineering", "alice", "alice"}
+	for i, want := range wantContexts {
+		if got := sess.Entries[i].Context; got != want {
+			t.Errorf("entry %d: expected context %q, got %q", i, want, got)
+		}
+	}
+
+	model, _ := testModel(t)
+	model.ResumeSession(sess)
+
+	if got := len(model.messages); got != 6 {
+		t.Fatalf("expected 6 flattened chat messages, got %d", got)
+	}
+	if !strings.Contains(model.messages[0].Content, "deploy status") {
+		t.Errorf("expected first message to be #ops user msg, got %q", model.messages[0].Content)
+	}
+	if !strings.Contains(model.messages[5].Content, "pong") {
+		t.Errorf("expected last message to be alice assistant msg, got %q", model.messages[5].Content)
 	}
 }
 

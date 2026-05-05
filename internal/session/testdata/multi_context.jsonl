@@ -1,0 +1,6 @@
+{"ts":"2026-04-01T12:00:00Z","role":"user","content":"deploy status?","context":"#ops","id":"1","v":1,"msg":{"role":"user","content":[{"type":"text","data":{"text":"deploy status?"}}],"provider_options":null}}
+{"ts":"2026-04-01T12:00:01Z","role":"assistant","content":"all green","context":"#ops","parent_id":"1","id":"2","v":1,"msg":{"role":"assistant","content":[{"type":"text","data":{"text":"all green"}}],"provider_options":null}}
+{"ts":"2026-04-01T12:00:02Z","role":"user","content":"review the diff","context":"#engineering","parent_id":"2","id":"3","v":1,"msg":{"role":"user","content":[{"type":"text","data":{"text":"review the diff"}}],"provider_options":null}}
+{"ts":"2026-04-01T12:00:03Z","role":"assistant","content":"looks fine","context":"#engineering","parent_id":"3","id":"4","v":1,"msg":{"role":"assistant","content":[{"type":"text","data":{"text":"looks fine"}}],"provider_options":null}}
+{"ts":"2026-04-01T12:00:04Z","role":"user","content":"ping","context":"alice","parent_id":"4","id":"5","v":1,"msg":{"role":"user","content":[{"type":"text","data":{"text":"ping"}}],"provider_options":null}}
+{"ts":"2026-04-01T12:00:05Z","role":"assistant","content":"pong","context":"alice","parent_id":"5","id":"6","v":1,"msg":{"role":"assistant","content":[{"type":"text","data":{"text":"pong"}}],"provider_options":null}}

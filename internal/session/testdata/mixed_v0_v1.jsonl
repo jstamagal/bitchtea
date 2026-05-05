@@ -1,0 +1,4 @@
+{"ts":"2026-04-01T12:00:00Z","id":"1","role":"user","content":"hello"}
+{"ts":"2026-04-01T12:00:01Z","id":"2","parent_id":"1","role":"assistant","content":"hi"}
+{"ts":"2026-04-01T12:00:02Z","role":"user","content":"what's the time","parent_id":"2","id":"3","v":1,"msg":{"role":"user","content":[{"type":"text","data":{"text":"what's the time"}}],"provider_options":null}}
+{"ts":"2026-04-01T12:00:03Z","role":"assistant","content":"noon","parent_id":"3","id":"4","v":1,"msg":{"role":"assistant","content":[{"type":"text","data":{"text":"noon"}}],"provider_options":null}}
