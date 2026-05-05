@@ -2,6 +2,7 @@ package agent
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -753,4 +754,50 @@ func TestResumeOverwritesPreInjectedMemory(t *testing.T) {
 		}
 	}
 	t.Error("bt-wire.10 bug: HOT.md content was NOT re-injected after RestoreMessages because injectedPaths was not reset")
+}
+
+func TestCompactBelowThresholdIsNoOp(t *testing.T) {
+	cfg := config.DefaultConfig()
+	cfg.WorkDir = t.TempDir()
+	cfg.SessionDir = t.TempDir()
+
+	agent := NewAgentWithStreamer(&cfg, &fakeStreamer{})
+
+	// Build a history exactly 5 messages long — below the 6-message threshold.
+	// Compact should return nil and not touch the messages slice.
+	for i := 0; i < 5; i++ {
+		agent.messages = append(agent.messages, fantasyTextMessage("user", fmt.Sprintf("msg-%d", i)))
+	}
+	before := len(agent.messages)
+
+	if err := agent.Compact(context.Background()); err != nil {
+		t.Fatalf("Compact below threshold: %v", err)
+	}
+	if len(agent.messages) != before {
+		t.Fatalf("Compact should not modify messages below threshold: before=%d after=%d", before, len(agent.messages))
+	}
+}
+
+func TestCompactExactlySixMessagesNoOpWhenBootstrapOverlapsEnd(t *testing.T) {
+	cfg := config.DefaultConfig()
+	cfg.WorkDir = t.TempDir()
+	cfg.SessionDir = t.TempDir()
+
+	agent := NewAgentWithStreamer(&cfg, &fakeStreamer{})
+
+	// A fresh agent has 7 bootstrap messages. With exactly 6 messages total,
+	// end = 6 - 4 = 2 and bootstrapEnd = 7, so bootstrapEnd > end → no-op.
+	// This tests the boundary: 6 is the hard threshold, but bootstrap
+	// messages still prevent compaction.
+	for len(agent.messages) < 6 {
+		agent.messages = append(agent.messages, fantasyTextMessage("user", "msg"))
+	}
+	before := len(agent.messages)
+
+	if err := agent.Compact(context.Background()); err != nil {
+		t.Fatalf("Compact at boundary: %v", err)
+	}
+	if len(agent.messages) != before {
+		t.Fatalf("Compact should be no-op when bootstrapEnd > end: before=%d after=%d", before, len(agent.messages))
+	}
 }

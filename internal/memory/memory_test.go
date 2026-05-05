@@ -394,3 +394,34 @@ func mustAppendHot(t *testing.T, sessionDir, workDir string, scope Scope, when t
 		t.Fatalf("AppendHot(%s): %v", title, err)
 	}
 }
+
+func TestSearchInScopeWhitespaceOnlyQuery(t *testing.T) {
+	sessionDir, workDir := testDirs(t)
+
+	_, err := SearchInScope(sessionDir, workDir, RootScope(), "   \t  ", 10)
+	if err == nil {
+		t.Fatal("expected error for whitespace-only query, got nil")
+	}
+	if !strings.Contains(err.Error(), "query is required") {
+		t.Fatalf("error = %q, want 'query is required'", err.Error())
+	}
+}
+
+func TestSearchInScopeLimitOne(t *testing.T) {
+	sessionDir, workDir := testDirs(t)
+	when := time.Date(2026, 5, 4, 12, 0, 0, 0, time.UTC)
+
+	// Write two separate files that both match.
+	mustAppendHot(t, sessionDir, workDir, RootScope(), when, "first", "unique needle alpha")
+	root := RootScope()
+	channel := ChannelScope("#Test", &root)
+	mustAppendHot(t, sessionDir, workDir, channel, when, "second", "unique needle beta")
+
+	results, err := SearchInScope(sessionDir, workDir, channel, "unique needle", 1)
+	if err != nil {
+		t.Fatalf("SearchInScope limit=1: %v", err)
+	}
+	if len(results) != 1 {
+		t.Fatalf("expected exactly 1 result with limit=1, got %d", len(results))
+	}
+}

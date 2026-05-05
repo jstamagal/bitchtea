@@ -518,3 +518,64 @@ func TestDisplayEntriesFiltersBootstrapEntries(t *testing.T) {
 	}
 }
 
+func TestForkWithNonexistentIDCopiesAll(t *testing.T) {
+	dir := t.TempDir()
+
+	s, err := New(dir)
+	if err != nil {
+		t.Fatalf("new session: %v", err)
+	}
+
+	s.Append(Entry{Role: "user", Content: "first"})
+	s.Append(Entry{Role: "assistant", Content: "reply"})
+
+	// Fork from an ID that doesn't exist — the copy loop never hits the
+	// break so it copies every entry, producing a full-clone fork.
+	forked, err := s.Fork("nonexistent-id")
+	if err != nil {
+		t.Fatalf("fork with nonexistent ID should not error: %v", err)
+	}
+	if len(forked.Entries) != len(s.Entries) {
+		t.Fatalf("nonexistent fork ID should copy all entries, got %d want %d", len(forked.Entries), len(s.Entries))
+	}
+}
+
+func TestTreeEmptySession(t *testing.T) {
+	dir := t.TempDir()
+
+	s, err := New(dir)
+	if err != nil {
+		t.Fatalf("new session: %v", err)
+	}
+
+	// Don't append any entries — Tree should return the empty marker.
+	got := s.Tree()
+	if got != "(empty session)" {
+		t.Fatalf("empty session Tree = %q, want %q", got, "(empty session)")
+	}
+}
+
+func TestTreeNoForks(t *testing.T) {
+	dir := t.TempDir()
+
+	s, err := New(dir)
+	if err != nil {
+		t.Fatalf("new session: %v", err)
+	}
+
+	s.Append(Entry{Role: "user", Content: "hello"})
+	s.Append(Entry{Role: "assistant", Content: "world"})
+
+	got := s.Tree()
+	if got == "" {
+		t.Fatal("expected non-empty tree for session with entries")
+	}
+	if !strings.Contains(got, "hello") {
+		t.Fatalf("tree should contain entry content, got %q", got)
+	}
+	// A linear (no-fork) tree should not have branch markers.
+	if strings.Contains(got, "fork") {
+		t.Fatalf("linear session tree should not mention forks, got %q", got)
+	}
+}
+
