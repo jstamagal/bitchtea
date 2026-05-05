@@ -2,9 +2,11 @@ package session
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 )
 
@@ -440,6 +442,63 @@ func TestEntryBootstrapRoundTrip(t *testing.T) {
 	}
 	if decoded.Content != "internal ack" {
 		t.Fatalf("expected content to survive round trip, got %q", decoded.Content)
+	}
+}
+
+// TestSession_ConcurrentAppend verifies that concurrent Append calls from
+// multiple goroutines are serialized correctly by Session's internal mutex
+// and the flock-based cross-process lock. All entries must be present in the
+// Entries slice and the on-disk file without interleaving.
+func TestSession_ConcurrentAppend(t *testing.T) {
+	dir := t.TempDir()
+	s, err := New(dir)
+	if err != nil {
+		t.Fatalf("new session: %v", err)
+	}
+
+	const writers = 20
+	var wg sync.WaitGroup
+	errs := make(chan error, writers)
+	for i := 0; i < writers; i++ {
+		i := i
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			errs <- s.Append(Entry{Role: "user", Content: fmt.Sprintf("msg-%02d", i)})
+		}()
+	}
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		if err != nil {
+			t.Fatalf("concurrent Append error: %v", err)
+		}
+	}
+
+	// Verify in-memory count.
+	if len(s.Entries) != writers {
+		t.Fatalf("expected %d entries in memory, got %d", writers, len(s.Entries))
+	}
+
+	// Verify on-disk count (replay through Load).
+	loaded, err := Load(s.Path)
+	if err != nil {
+		t.Fatalf("load session: %v", err)
+	}
+	if len(loaded.Entries) != writers {
+		t.Fatalf("expected %d entries on disk, got %d", writers, len(loaded.Entries))
+	}
+
+	// Verify every expected content is present.
+	seen := make(map[string]bool, writers)
+	for _, e := range loaded.Entries {
+		seen[e.Content] = true
+	}
+	for i := 0; i < writers; i++ {
+		want := fmt.Sprintf("msg-%02d", i)
+		if !seen[want] {
+			t.Fatalf("entry %q not found on disk", want)
+		}
 	}
 }
 
