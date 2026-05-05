@@ -159,6 +159,10 @@ func applyStartupConfig(cfg *config.Config, args []string, rcLines []string) (cl
 
 func buildStartupModel(cfg *config.Config, sess *session.Session, rcCommands []string) ui.Model {
 	m := ui.NewModel(cfg)
+	// Enable daemon-mailbox submissions for production. Tests leave this
+	// unset so they don't accidentally write to a developer's running
+	// daemon. See ui.Model.SetDaemonBaseDir for details (bt-wire.6).
+	m.SetDaemonBaseDir(config.BaseDir())
 	if sess != nil {
 		m.ResumeSession(sess)
 	}

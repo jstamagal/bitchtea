@@ -162,6 +162,22 @@ type Model struct {
 	// bubbletea hands the next Update a fresh value copy). Reset to nil on
 	// close.
 	pickerOnSelect func(*Model, string)
+
+	// daemonBaseDir gates daemon IPC submission. Empty (default) means no
+	// daemon submissions are issued from this Model — tests rely on this so
+	// they don't accidentally write to a developer's real ~/.bitchtea/daemon
+	// mailbox. Production code (main.buildStartupModel) sets this to
+	// config.BaseDir() so submitDaemonCheckpointCmd() actually fires.
+	daemonBaseDir string
+}
+
+// SetDaemonBaseDir enables daemon-mailbox submissions from this Model and
+// pins the base dir used to resolve the lock and mailbox paths. Pass
+// config.BaseDir() in production. Tests should leave this unset (the zero
+// value) so they don't pollute a real daemon's mailbox if one happens to
+// be running on the host.
+func (m *Model) SetDaemonBaseDir(base string) {
+	m.daemonBaseDir = base
 }
 
 // NewModel creates the initial model
@@ -691,6 +707,13 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.errMsg(fmt.Sprintf("checkpoint save failed: %v", err))
 		}
 
+		// Mirror the inline checkpoint to the daemon mailbox if a daemon is
+		// running. The cmd is nil when daemonBaseDir isn't set (tests, or
+		// when no session is initialised), so this is a no-op outside
+		// production. The actual flock probe + mailbox write happens off
+		// the bubbletea goroutine — see submitDaemonCheckpointCmd.
+		daemonCmd := m.submitDaemonCheckpointCmd()
+
 		// Process queued messages: batch all of them into one turn so the agent
 		// sees the full context of what was said, not one orphaned message at a time.
 		// But first check for staleness — if the queue has been sitting for longer
@@ -707,7 +730,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					Content: fmt.Sprintf("Discarded %d queued message(s) older than %v — context changed. Re-send if still relevant.", cleared, queueStaleThreshold),
 				})
 				m.refreshViewport()
-				return m, nil
+				return m, daemonCmd
 			}
 			var combined strings.Builder
 			for i, msg := range m.queued {
@@ -725,7 +748,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				Content: combined.String(),
 			})
 			m.refreshViewport()
-			return m, m.sendToAgent(combined.String())
+			return m, tea.Batch(daemonCmd, m.sendToAgent(combined.String()))
 		}
 
 		if followUp := m.agent.MaybeQueueFollowUp(); followUp != nil {
@@ -735,9 +758,29 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				Content: fmt.Sprintf("*** %s: continuing...", followUp.Label),
 			})
 			m.refreshViewport()
-			return m, m.sendFollowUpToAgent(followUp)
+			return m, tea.Batch(daemonCmd, m.sendFollowUpToAgent(followUp))
 		}
 
+		return m, daemonCmd
+
+	case daemonCheckpointSubmittedMsg:
+		// Result of submitDaemonCheckpointCmd. Dispatched on the bubbletea
+		// event-loop goroutine so it's safe to mutate Model state here.
+		if msg.skipped {
+			return m, nil
+		}
+		if msg.err != nil {
+			m.errMsg(fmt.Sprintf("daemon submit failed: %v", msg.err))
+			return m, nil
+		}
+		if msg.jobID == "" {
+			return m, nil
+		}
+		m.NotifyBackgroundActivity(BackgroundActivity{
+			Time:    time.Now(),
+			Context: msg.context,
+			Summary: fmt.Sprintf("session-checkpoint submitted to daemon (%s)", msg.jobID),
+		})
 		return m, nil
 
 	case mp3TickMsg:
@@ -1296,12 +1339,33 @@ func (m *Model) SetActiveContext(label string) {
 	m.focus.SetFocus(Channel(label))
 }
 
+// daemonCheckpointSubmittedMsg is dispatched by the goroutine launched from
+// submitDaemonCheckpointCmd. It reports the outcome of a non-blocking daemon
+// IPC submission so Update() can mutate background-activity state on the
+// bubbletea event-loop goroutine (the only goroutine allowed to touch Model
+// fields directly).
+type daemonCheckpointSubmittedMsg struct {
+	jobID   string // empty unless the daemon accepted the job
+	context string // the active IRC context label at submission time
+	err     error  // non-nil when IsLocked or Submit failed
+	skipped bool   // true when no daemon was locked, so no submission occurred
+}
+
 // submitDaemonCheckpoint submits a session-checkpoint job to the daemon
 // mailbox if the daemon is currently running. If no daemon is locked, the
 // submission is silently skipped — the TUI already wrote an inline checkpoint
 // above, so the daemon path is strictly additive.
+//
+// This synchronous helper exists for direct test invocation
+// (internal/ui/daemon_ipc_test.go). Production code (the agentDoneMsg branch
+// of Update) goes through submitDaemonCheckpointCmd so the I/O happens off
+// the bubbletea event-loop goroutine.
 func (m *Model) submitDaemonCheckpoint() {
-	paths := daemon.Layout(config.BaseDir())
+	base := m.daemonBaseDir
+	if base == "" {
+		base = config.BaseDir()
+	}
+	paths := daemon.Layout(base)
 	locked, err := daemon.IsLocked(paths.LockPath)
 	if err != nil || !locked {
 		return
@@ -1315,7 +1379,7 @@ func (m *Model) submitDaemonCheckpoint() {
 		return
 	}
 
-	mailbox := daemon.New(config.BaseDir())
+	mailbox := daemon.New(base)
 	job := daemon.Job{
 		Kind:         daemonjobs.KindSessionCheckpoint,
 		WorkDir:      m.config.WorkDir,
@@ -1334,6 +1398,58 @@ func (m *Model) submitDaemonCheckpoint() {
 		Context: m.focus.ActiveLabel(),
 		Summary: fmt.Sprintf("session-checkpoint submitted to daemon (%s)", id),
 	})
+}
+
+// submitDaemonCheckpointCmd returns a tea.Cmd that probes the daemon lock
+// and (if a daemon is running) submits a session-checkpoint job from a
+// goroutine. The result is reported back to Update via
+// daemonCheckpointSubmittedMsg, so the actual NotifyBackgroundActivity
+// state mutation happens on the event-loop goroutine where it's safe.
+//
+// Returns nil when daemon submission is disabled for this Model (the
+// daemonBaseDir field is unset — i.e. tests, or when no session has been
+// initialised). A nil tea.Cmd is a valid no-op for tea.Batch.
+//
+// CLAUDE.md non-blocking-Update rule: the only work performed synchronously
+// here is reading three Model fields and capturing them into a closure. The
+// flock probe and mailbox write happen inside the closure, which bubbletea
+// runs on a worker goroutine.
+func (m *Model) submitDaemonCheckpointCmd() tea.Cmd {
+	if m.daemonBaseDir == "" {
+		return nil
+	}
+	if m.session == nil || m.session.Path == "" {
+		return nil
+	}
+
+	base := m.daemonBaseDir
+	sessionPath := m.session.Path
+	workDir := m.config.WorkDir
+	contextLabel := m.focus.ActiveLabel()
+
+	return func() tea.Msg {
+		paths := daemon.Layout(base)
+		locked, err := daemon.IsLocked(paths.LockPath)
+		if err != nil {
+			return daemonCheckpointSubmittedMsg{context: contextLabel, err: err}
+		}
+		if !locked {
+			return daemonCheckpointSubmittedMsg{context: contextLabel, skipped: true}
+		}
+
+		mailbox := daemon.New(base)
+		id, err := mailbox.Submit(daemon.Job{
+			Kind:         daemonjobs.KindSessionCheckpoint,
+			WorkDir:      workDir,
+			SessionPath:  sessionPath,
+			SubmittedAt:  time.Now().UTC(),
+			RequestorPID: os.Getpid(),
+		})
+		if err != nil {
+			return daemonCheckpointSubmittedMsg{context: contextLabel, err: err}
+		}
+		return daemonCheckpointSubmittedMsg{jobID: id, context: contextLabel}
+	}
 }
 
 func (m *Model) NotifyBackgroundActivity(activity BackgroundActivity) {
