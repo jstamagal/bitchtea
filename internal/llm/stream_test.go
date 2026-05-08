@@ -519,3 +519,126 @@ func TestStreamChat_malformedEvent(t *testing.T) {
 	}
 	requireEvent(t, events, "done")
 }
+
+// --- samplingParamsSupported tests ---
+
+func TestSamplingParamsSupported_Anthropic(t *testing.T) {
+	if samplingParamsSupported("anthropic") {
+		t.Error("anthropic should not support sampling params (returns 400)")
+	}
+	if samplingParamsSupported("zai-anthropic") {
+		t.Error("zai-anthropic should not support sampling params (returns 400)")
+	}
+}
+
+func TestSamplingParamsSupported_Others(t *testing.T) {
+	supported := []string{"openai", "openrouter", "ollama", "custom", "vercel", "xai", ""}
+	for _, svc := range supported {
+		if !samplingParamsSupported(svc) {
+			t.Errorf("service=%q should support sampling params", svc)
+		}
+	}
+}
+
+func TestApplySamplingParams_AnthropicSkipsAll(t *testing.T) {
+	temp := 0.7
+	topP := 0.9
+	topK := 40
+	repPen := 1.2
+
+	opts := applySamplingParams("anthropic", &temp, &topP, &repPen, &topK, nil)
+	if len(opts) != 0 {
+		t.Errorf("anthropic: expected 0 opts applied, got %d", len(opts))
+	}
+}
+
+func TestApplySamplingParams_OpenAIForwardsAll(t *testing.T) {
+	temp := 0.7
+	topP := 0.9
+	topK := 40
+
+	opts := applySamplingParams("openai", &temp, &topP, nil, &topK, nil)
+	// temperature + top_p + top_k = 3 opts
+	if len(opts) != 3 {
+		t.Errorf("openai: expected 3 opts applied, got %d", len(opts))
+	}
+}
+
+func TestApplySamplingParams_NilParamsNoOpts(t *testing.T) {
+	opts := applySamplingParams("openai", nil, nil, nil, nil, nil)
+	if len(opts) != 0 {
+		t.Errorf("nil params: expected 0 opts, got %d", len(opts))
+	}
+}
+
+// --- cliproxyReasoningEffort tests ---
+
+// TestClipроxyEffortToReasoningEffort_KnownValues verifies that all documented
+// valid effort strings map to the expected openai.ReasoningEffort constants.
+// "max" is documented as promoted to "xhigh" because the OpenAI SDK has no
+// max constant; this test pins that mapping so a future change is deliberate.
+func TestCliproxyEffortToReasoningEffort_KnownValues(t *testing.T) {
+	cases := []struct {
+		input string
+		want  string // expected ReasoningEffort string value
+	}{
+		{"low", "low"},
+		{"medium", "medium"},
+		{"high", "high"},
+		{"xhigh", "xhigh"},
+		{"max", "xhigh"}, // max promoted to xhigh — no SDK constant for max
+		{"LOW", "low"},   // case-insensitive
+	}
+	for _, tc := range cases {
+		t.Run(tc.input, func(t *testing.T) {
+			got, ok := cliproxyEffortToReasoningEffort(tc.input)
+			if !ok {
+				t.Fatalf("cliproxyEffortToReasoningEffort(%q) = _, false; want ok", tc.input)
+			}
+			if string(got) != tc.want {
+				t.Fatalf("cliproxyEffortToReasoningEffort(%q) = %q; want %q", tc.input, got, tc.want)
+			}
+		})
+	}
+}
+
+func TestCliproxyEffortToReasoningEffort_Unknown(t *testing.T) {
+	_, ok := cliproxyEffortToReasoningEffort("ultramax")
+	if ok {
+		t.Error("unknown effort: ultramax; should return ok=false")
+	}
+	_, ok = cliproxyEffortToReasoningEffort("")
+	if ok {
+		t.Error("empty string should return ok=false")
+	}
+}
+
+// TestApplyCliproxyReasoningEffort_AddsOptionForCliproxyAPI asserts that
+// applyCliproxyReasoningEffort appends exactly one AgentOption when
+// service=="cliproxyapi" and effort is a known value.
+func TestApplyCliproxyReasoningEffort_AddsOptionForCliproxyAPI(t *testing.T) {
+	opts := applyCliproxyReasoningEffort("cliproxyapi", "high", nil)
+	if len(opts) != 1 {
+		t.Fatalf("expected 1 AgentOption, got %d", len(opts))
+	}
+}
+
+// TestApplyCliproxyReasoningEffort_DefaultsToXHighWhenEmpty verifies that an
+// empty effort string becomes "xhigh" for cliproxyapi (Opus 4.7 sweet spot).
+func TestApplyCliproxyReasoningEffort_DefaultsToXHighWhenEmpty(t *testing.T) {
+	opts := applyCliproxyReasoningEffort("cliproxyapi", "", nil)
+	if len(opts) != 1 {
+		t.Fatalf("expected 1 AgentOption (default xhigh), got %d", len(opts))
+	}
+}
+
+// TestApplyCliproxyReasoningEffort_NoOpForOtherServices asserts that services
+// other than "cliproxyapi" are not given the reasoning_effort option.
+func TestApplyCliproxyReasoningEffort_NoOpForOtherServices(t *testing.T) {
+	for _, svc := range []string{"openai", "anthropic", "ollama", "openrouter", ""} {
+		opts := applyCliproxyReasoningEffort(svc, "high", nil)
+		if len(opts) != 0 {
+			t.Errorf("service=%q: expected 0 opts, got %d", svc, len(opts))
+		}
+	}
+}

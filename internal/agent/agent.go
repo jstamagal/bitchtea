@@ -129,11 +129,20 @@ func NewAgentWithStreamer(cfg *config.Config, streamer llm.ChatStreamer) *Agent 
 	client := llm.NewClient(cfg.APIKey, cfg.BaseURL, cfg.Model, cfg.Provider)
 	client.SetService(cfg.Service)
 	client.SetSamplingParams(cfg.Temperature, cfg.TopP, cfg.TopK, cfg.RepetitionPenalty)
+	// Wire effort so streamOnce can forward it as Anthropic output_config.effort
+	// (service=="anthropic") or as OpenAI reasoning_effort (service=="cliproxyapi").
+	// TODO(Agent D): verify after merge that validEfforts in rc.go covers xhigh/max.
+	client.SetEffort(cfg.Effort)
 	if streamer == nil {
 		streamer = client
 	}
 
 	toolRegistry := tools.NewRegistry(cfg.WorkDir, cfg.SessionDir)
+	// Pattern 4: apply tool_timeout from config when non-zero; otherwise the
+	// registry keeps its built-in default of 300 s.
+	if cfg.ToolTimeout > 0 {
+		toolRegistry.SetToolTimeout(cfg.ToolTimeout)
+	}
 	systemPrompt := buildSystemPrompt(cfg)
 
 	a := &Agent{
@@ -149,36 +158,32 @@ func NewAgentWithStreamer(cfg *config.Config, streamer llm.ChatStreamer) *Agent 
 		CostTracker:   llm.NewCostTracker(),
 	}
 
-	// Inject context files (AGENTS.md etc.)
-	contextFiles := DiscoverContextFiles(cfg.WorkDir)
-	if contextFiles != "" {
-		a.messages = append(a.messages,
-			newUserMessage("Here are the project context files:\n\n"+contextFiles),
-			newAssistantMessage("Got it. I've read the project context and will follow those conventions."),
-		)
-	}
+	// --bare: skip persona/context-file/memory injection entirely.
+	if !cfg.Bare {
+		// Inject context files (BITCHTEA.md / AGENT.md / AGENTS.md etc.)
+		contextFiles := DiscoverContextFiles(cfg.WorkDir)
+		if contextFiles != "" {
+			a.messages = append(a.messages,
+				newUserMessage("Here are the project context files:\n\n"+contextFiles),
+				newAssistantMessage("Got it. I've read the project context and will follow those conventions."),
+			)
+		}
 
-	// Inject root MEMORY.md at bootstrap. Scoped HOT.md is injected lazily
-	// via SetScope when the first turn begins in a non-root context.
-	memory := LoadMemory(cfg.WorkDir)
-	if memory != "" {
-		a.messages = append(a.messages,
-			newUserMessage("Here is the session memory from previous work:\n\n"+memory),
-			newAssistantMessage("Got it."),
-		)
-		// Track the root hot path so SetScope(root) does not re-inject the
-		// same content as "Context memory for root" — the bootstrap message
-		// already covers it.
-		rootHotPath := ScopedHotMemoryPath(cfg.SessionDir, cfg.WorkDir, RootMemoryScope())
-		a.injectedPaths[rootHotPath] = true
-	}
+		// Inject root MEMORY.md at bootstrap.
+		memory := LoadMemory(cfg.WorkDir)
+		if memory != "" {
+			a.messages = append(a.messages,
+				newUserMessage("Here is the session memory from previous work:\n\n"+memory),
+				newAssistantMessage("Got it."),
+			)
+			rootHotPath := ScopedHotMemoryPath(cfg.SessionDir, cfg.WorkDir, RootMemoryScope())
+			a.injectedPaths[rootHotPath] = true
+		}
 
-	// Persona anchor: the last thing the model sees before the user's first
-	// real message. This synthetic exchange re-anchors voice/style so the
-	// persona isn't drowned out by the neutral bootstrap context above.
-	// Customize the persona prompt and its rehearsal reply below.
-	personaAnchor := buildPersonaAnchor()
-	a.messages = append(a.messages, personaAnchor...)
+		// Persona anchor.
+		personaAnchor := buildPersonaAnchor()
+		a.messages = append(a.messages, personaAnchor...)
+	}
 
 	a.bootstrapMsgCount = len(a.messages)
 	a.pushBootstrapToClient()
@@ -294,6 +299,10 @@ func (a *Agent) drainPromptQueueSnapshot() []string {
 func (a *Agent) sendMessage(ctx context.Context, userMsg string, kind followUpKind, events chan<- Event) {
 	defer close(events)
 	a.activeFollowUpKind = kind
+
+	// Pattern 2 (read-before-edit guard): clear the per-turn files-read set at
+	// the start of each new user turn so the guard covers exactly one turn.
+	a.tools.ResetTurnState()
 
 	expanded := ExpandFileRefs(userMsg, a.config.WorkDir)
 	a.messages = append(a.messages, newUserMessage(injectPerMessagePrefix(expanded)))
@@ -451,24 +460,27 @@ func (a *Agent) sendMessage(ctx context.Context, userMsg string, kind followUpKi
 func buildSystemPrompt(cfg *config.Config) string {
 	var sb strings.Builder
 
-	persona := personaPrompt
-	if cfg.PersonaFile != "" {
-		expanded := cfg.PersonaFile
-		if len(expanded) > 1 && expanded[:2] == "~/" {
-			if home, err := os.UserHomeDir(); err == nil {
-				expanded = home + expanded[1:]
+	// --bare: skip persona block; persona_file is also skipped.
+	if !cfg.Bare {
+		persona := personaPrompt
+		if cfg.PersonaFile != "" {
+			expanded := cfg.PersonaFile
+			if len(expanded) > 1 && expanded[:2] == "~/" {
+				if home, err := os.UserHomeDir(); err == nil {
+					expanded = home + expanded[1:]
+				}
+			}
+			if data, err := os.ReadFile(expanded); err == nil {
+				persona = string(data)
+			} else {
+				fmt.Fprintf(os.Stderr, "bitchtea: persona_file %q unreadable (%v); using default persona\n", cfg.PersonaFile, err)
 			}
 		}
-		if data, err := os.ReadFile(expanded); err == nil {
-			persona = string(data)
-		} else {
-			fmt.Fprintf(os.Stderr, "bitchtea: persona_file %q unreadable (%v); using default persona\n", cfg.PersonaFile, err)
-		}
-	}
 
-	sb.WriteString("<persona>\n")
-	sb.WriteString(persona)
-	sb.WriteString("\n</persona>\n\n")
+		sb.WriteString("<persona>\n")
+		sb.WriteString(persona)
+		sb.WriteString("\n</persona>\n\n")
+	}
 
 	writeMemoryPrompt(&sb)
 	writeToolRules(&sb)
@@ -1237,43 +1249,40 @@ func scopeFromLabel(label string) MemoryScope {
 }
 
 // Reset clears the conversation history back to its bootstrap state — system
-// prompt, discovered context files (AGENTS.md/CLAUDE.md), root MEMORY.md, and
-// the persona anchor — and resets session-local stats so a fresh conversation
-// can begin without restarting the program. The active memory scope is
-// preserved; scoped HOT.md will be re-injected lazily on the next SetScope.
+// prompt, discovered context files (BITCHTEA.md/AGENT.md/AGENTS.md), root
+// MEMORY.md, and the persona anchor — and resets session-local stats. When
+// cfg.Bare is true, persona/context/memory injection is skipped.
 func (a *Agent) Reset() {
 	systemPrompt := buildSystemPrompt(a.config)
 	a.messages = []fantasy.Message{newSystemMessage(systemPrompt)}
 
-	contextFiles := DiscoverContextFiles(a.config.WorkDir)
-	if contextFiles != "" {
-		a.messages = append(a.messages,
-			newUserMessage("Here are the project context files:\n\n"+contextFiles),
-			newAssistantMessage("Got it. I've read the project context and will follow those conventions."),
-		)
+	a.injectedPaths = make(map[string]bool)
+
+	if !a.config.Bare {
+		contextFiles := DiscoverContextFiles(a.config.WorkDir)
+		if contextFiles != "" {
+			a.messages = append(a.messages,
+				newUserMessage("Here are the project context files:\n\n"+contextFiles),
+				newAssistantMessage("Got it. I've read the project context and will follow those conventions."),
+			)
+		}
+
+		memory := LoadMemory(a.config.WorkDir)
+		if memory != "" {
+			a.messages = append(a.messages,
+				newUserMessage("Here is the session memory from previous work:\n\n"+memory),
+				newAssistantMessage("Got it."),
+			)
+			rootHotPath := ScopedHotMemoryPath(a.config.SessionDir, a.config.WorkDir, RootMemoryScope())
+			a.injectedPaths[rootHotPath] = true
+		}
+
+		a.messages = append(a.messages, buildPersonaAnchor()...)
 	}
 
-	memory := LoadMemory(a.config.WorkDir)
-	if memory != "" {
-		a.messages = append(a.messages,
-			newUserMessage("Here is the session memory from previous work:\n\n"+memory),
-			newAssistantMessage("Got it."),
-		)
-	}
-
-	a.messages = append(a.messages, buildPersonaAnchor()...)
 	a.bootstrapMsgCount = len(a.messages)
 	a.pushBootstrapToClient()
 
-	a.injectedPaths = make(map[string]bool)
-
-	// Track the root hot path so SetScope(root) does not re-inject the
-	// same content as "Context memory for root" — the bootstrap message
-	// already covers it.
-	if memory != "" {
-		rootHotPath := ScopedHotMemoryPath(a.config.SessionDir, a.config.WorkDir, RootMemoryScope())
-		a.injectedPaths[rootHotPath] = true
-	}
 	a.TurnCount = 0
 	a.ToolCalls = make(map[string]int)
 	a.CostTracker = llm.NewCostTracker()
