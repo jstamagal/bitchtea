@@ -251,6 +251,46 @@ func TestBootstrapPreparedIndex(t *testing.T) {
 			bootstrap: 99,
 			want:      -1,
 		},
+		{
+			// Defensive math for MED #8 (bead bt-q96): if the agent's
+			// bootstrap window has multiple system messages (achievable
+			// via RestoreMessages on a saved transcript that carried
+			// multiples), splitForFantasy concatenates them into one and
+			// createPrompt re-emits exactly one. The downstream messages
+			// in opts.Messages start (systemCount - 1) slots earlier than
+			// the naive `bootstrapMsgCount - 1` would predict.
+			name: "two system messages + persona pair (defensive)",
+			msgs: []Message{
+				{Role: "system", Content: "sp1"},
+				{Role: "system", Content: "sp2"},
+				{Role: "user", Content: "anchor"},
+				{Role: "assistant", Content: "rehearse"},
+				{Role: "user", Content: "live"},
+			},
+			bootstrap: 4,
+			// agent bootstrap window: [sys, sys, user, assistant] (4 msgs)
+			// opts.Messages: [sys, user, assistant, live] (3 + tail)
+			// last bootstrap in opts: index 2 (the assistant)
+			// naive = bootstrap - 1 = 3; subtract (2-1) = 1; result = 2
+			want: 2,
+		},
+		{
+			name: "three system messages + persona pair (defensive)",
+			msgs: []Message{
+				{Role: "system", Content: "sp1"},
+				{Role: "system", Content: "sp2"},
+				{Role: "system", Content: "sp3"},
+				{Role: "user", Content: "anchor"},
+				{Role: "assistant", Content: "rehearse"},
+				{Role: "user", Content: "live"},
+			},
+			bootstrap: 5,
+			// agent bootstrap window: [sys, sys, sys, user, assistant] (5)
+			// opts.Messages: [sys, user, assistant, live] (3 + tail)
+			// last bootstrap in opts: index 2
+			// naive = 4; subtract (3-1) = 2; result = 2
+			want: 2,
+		},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

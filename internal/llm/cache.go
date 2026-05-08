@@ -64,27 +64,36 @@ func applyAnthropicCacheMarkers(prepared *fantasy.PrepareStepResult, service str
 //
 // where `prior` is what splitForFantasy returned (system messages stripped,
 // tail user message peeled off into Prompt) and `system?` is reconstructed
-// from systemPrompt. The bootstrap window in the agent's slice maps onto a
-// contiguous range that starts at index 0 of opts.Messages, with the
-// system-message count preserved (one system goes out via systemPrompt and
-// one comes back in via createPrompt). So the index of the last bootstrap
-// message inside opts.Messages is simply bootstrapMsgCount - 1 — provided
-// the bootstrap actually contains at least one message.
+// from systemPrompt. splitForFantasy concatenates ALL system messages from
+// the agent's slice into one string for WithSystemPrompt; createPrompt then
+// re-emits EXACTLY ONE system message back into opts.Messages regardless of
+// how many existed in the original. So if the bootstrap window in
+// a.messages contains N system messages (N ≥ 1), opts.Messages has only 1,
+// and the downstream user/assistant messages start (N - 1) slots earlier
+// than a naive `bootstrapMsgCount - 1` would predict.
+//
+// The fix: count system messages in msgs[:bootstrapMsgCount] and subtract
+// (systemCount - 1) from the naive index. For the common single-system-
+// message case this is a no-op (count is 1, subtract 0). The defensive
+// math kicks in only when RestoreMessages carries a saved transcript with
+// multiple adjacent system messages, which is rare but possible.
 //
 // Returns -1 when there is no usable bootstrap boundary so the caller can
 // short-circuit fresh / restored sessions where bootstrapMsgCount is 0.
-//
-// Note: this helper assumes the agent's bootstrap layout is "one system
-// message at index 0, then user/assistant pairs". That is the invariant
-// established by NewAgentWithStreamer / Reset; if the bootstrap shape ever
-// gains multiple system messages, the recompute logic here needs to track
-// that splitForFantasy concatenates them all and createPrompt re-emits
-// exactly one.
 func bootstrapPreparedIndex(msgs []Message, bootstrapMsgCount int) int {
 	if bootstrapMsgCount <= 0 || bootstrapMsgCount > len(msgs) {
 		return -1
 	}
+	systemCount := 0
+	for i := 0; i < bootstrapMsgCount; i++ {
+		if msgs[i].Role == "system" {
+			systemCount++
+		}
+	}
 	idx := bootstrapMsgCount - 1
+	if systemCount > 1 {
+		idx -= (systemCount - 1)
+	}
 	if idx < 0 {
 		return -1
 	}
