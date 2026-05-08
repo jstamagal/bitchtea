@@ -341,7 +341,7 @@ func (a *Agent) sendMessage(ctx context.Context, userMsg string, kind followUpKi
 	a.tools.ResetTurnState()
 
 	expanded := ExpandFileRefs(userMsg, a.config.WorkDir)
-	a.messages = append(a.messages, newUserMessage(injectPerMessagePrefix(expanded)))
+	a.appendMessagesLocked(newUserMessage(injectPerMessagePrefix(expanded)))
 	a.TurnCount++
 
 	estimatedInputTokens := a.EstimateTokens()
@@ -363,7 +363,12 @@ func (a *Agent) sendMessage(ctx context.Context, userMsg string, kind followUpKi
 	// Client.StreamChat still takes []llm.Message; the in-memory canonical
 	// form is fantasy.Message. The adapter is loss-aware (see the docstring
 	// on FantasySliceToLLM) and round-trips text + tool calls + tool results.
-	go a.streamer.StreamChat(ctx, llm.FantasySliceToLLM(a.messages), a.tools, streamEvents)
+	//
+	// Snapshot the messages slice under the mutex BEFORE handing it to the
+	// streamer goroutine. Without the snapshot, the streamer reads a.messages
+	// while the drainer (also a goroutine) writes to it — go test -race fires.
+	msgsForStream := a.snapshotMessages()
+	go a.streamer.StreamChat(ctx, llm.FantasySliceToLLM(msgsForStream), a.tools, streamEvents)
 
 	// Use select to watch both streamEvents and ctx.Done(), so we exit
 	// immediately when the context is cancelled (e.g., by ctrl+c) rather
@@ -782,13 +787,35 @@ func (a *Agent) Config() *config.Config {
 	return a.config
 }
 
+// snapshotMessages returns a copy of a.messages under the lock so callers
+// can iterate the slice without racing against concurrent mutations.
+
+// appendMessagesLocked appends msgs to a.messages under the lock. Used by
+// sendMessage so message appends don't race against snapshotMessages.
+func (a *Agent) appendMessagesLocked(msgs ...fantasy.Message) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.messages = append(a.messages, msgs...)
+}
+
+func (a *Agent) snapshotMessages() []fantasy.Message {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	snap := make([]fantasy.Message, len(a.messages))
+	copy(snap, a.messages)
+	return snap
+}
+
 // EstimateTokens returns a rough token count (chars / 4). Counts the text
 // projection of each fantasy.Message so the estimate stays comparable to the
 // pre-Phase-3 behavior — multi-part assistants and tool results contribute
 // the same characters they would have when collapsed into llm.Message.Content.
 func (a *Agent) EstimateTokens() int {
+	// Snapshot so we don't iterate a.messages while a concurrent drain or
+	// done-handler splice mutates it.
+	msgs := a.snapshotMessages()
 	total := 0
-	for _, m := range a.messages {
+	for _, m := range msgs {
 		total += len(messageText(m))
 	}
 	return total / 4
