@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"sync"
 
 	"charm.land/fantasy"
 
@@ -66,7 +67,42 @@ func (t *bitchteaTool) SetProviderOptions(_ fantasy.ProviderOptions) {}
 // terminal_* family and preview_image still need careful per-tool ports
 // (PTY/image handling, separate tickets). Do NOT add new tools through the
 // fallback path; add a typed wrapper and wire it into typedToolFor instead.
+//
+// Memoized per Registry pointer (LOW #15 / bt-zhm). Registry.Definitions()
+// is immutable for the program lifetime, so the assembled wrapper slice is
+// also stable — every per-turn rebuild was wasted typed-wrapper allocation
+// + JSON-schema sanitization. The per-turn ToolContextManager is layered
+// on top of this cached slice via wrapToolsWithContext, which still
+// allocates fresh per turn (small, ~one pointer-pair struct per tool).
+//
+// Cache uses a single map keyed by Registry pointer guarded by
+// translateCacheMu. In bitchtea's typical flow there's one Registry per
+// Agent and Agents are long-lived, so the memory cost is bounded. If a
+// future change starts spinning up many short-lived Registries, swap to a
+// sync.Map with explicit eviction or move the cache onto Registry itself.
+var (
+	translateCacheMu sync.Mutex
+	translateCache   = map[*tools.Registry][]fantasy.AgentTool{}
+)
+
+// invalidateTranslateCache drops the memoized AgentTool slice for reg.
+// Called when the Registry's underlying definitions change. Currently
+// unused (Registry definitions are immutable post-construction); exposed
+// for future use if Registry gains mutation methods.
+func invalidateTranslateCache(reg *tools.Registry) {
+	translateCacheMu.Lock()
+	defer translateCacheMu.Unlock()
+	delete(translateCache, reg)
+}
+
 func translateTools(reg *tools.Registry) []fantasy.AgentTool {
+	translateCacheMu.Lock()
+	if cached, ok := translateCache[reg]; ok {
+		translateCacheMu.Unlock()
+		return cached
+	}
+	translateCacheMu.Unlock()
+
 	defs := reg.Definitions()
 	out := make([]fantasy.AgentTool, 0, len(defs))
 	for _, d := range defs {
@@ -92,6 +128,10 @@ func translateTools(reg *tools.Registry) []fantasy.AgentTool {
 			reg: reg,
 		})
 	}
+
+	translateCacheMu.Lock()
+	translateCache[reg] = out
+	translateCacheMu.Unlock()
 	return out
 }
 

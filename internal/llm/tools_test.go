@@ -725,3 +725,52 @@ func assertRebuiltToolTranscript(t *testing.T, messages []Message) {
 		t.Fatalf("rebuilt transcript missing tool result: %+v", messages)
 	}
 }
+
+// --- translateTools memoization (LOW #15 / bt-zhm) -------------------------
+
+// TestTranslateToolsMemoizesPerRegistry asserts that two consecutive calls
+// with the same Registry pointer return the same backing slice (memoization
+// hit). Prior to LOW #15 every call rebuilt the wrapper slice from scratch.
+func TestTranslateToolsMemoizesPerRegistry(t *testing.T) {
+	reg := tools.NewRegistry(t.TempDir(), t.TempDir())
+	first := translateTools(reg)
+	second := translateTools(reg)
+	if len(first) == 0 {
+		t.Fatal("expected non-empty translated tools slice")
+	}
+	if &first[0] != &second[0] {
+		t.Fatal("expected memoized slice (same backing array), got fresh slice")
+	}
+}
+
+// TestTranslateToolsRebuildsForDifferentRegistry asserts that distinct
+// Registry pointers don't share cache entries — each gets its own slice.
+func TestTranslateToolsRebuildsForDifferentRegistry(t *testing.T) {
+	regA := tools.NewRegistry(t.TempDir(), t.TempDir())
+	regB := tools.NewRegistry(t.TempDir(), t.TempDir())
+	a := translateTools(regA)
+	b := translateTools(regB)
+	if len(a) == 0 || len(b) == 0 {
+		t.Fatal("expected non-empty translated tool slices for both registries")
+	}
+	if &a[0] == &b[0] {
+		t.Fatal("expected distinct slices for distinct Registry pointers")
+	}
+}
+
+// TestInvalidateTranslateCacheForcesRebuild verifies the invalidation hook
+// drops the memoized entry so the next call rebuilds. Currently unused in
+// production (Registry definitions are immutable) but exposed for future
+// mutation paths.
+func TestInvalidateTranslateCacheForcesRebuild(t *testing.T) {
+	reg := tools.NewRegistry(t.TempDir(), t.TempDir())
+	first := translateTools(reg)
+	invalidateTranslateCache(reg)
+	second := translateTools(reg)
+	if len(first) == 0 || len(second) == 0 {
+		t.Fatal("expected non-empty slices")
+	}
+	if &first[0] == &second[0] {
+		t.Fatal("expected fresh slice after invalidate, got memoized")
+	}
+}
