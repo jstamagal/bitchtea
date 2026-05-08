@@ -1,14 +1,16 @@
 package tools
 
-// Failure-mode tests asserting exact error wraps and sentinels for the tool
+// Failure-mode tests asserting the shape of error results for the tool
 // registry. See bd issue bt-test.16 — these tests pin the *shape* of error
 // messages produced by execRead/execWrite/execEdit so accidental refactors
 // that drop a wrap or change a prefix get caught at test time.
+//
+// Pattern 1 (structured error result): Execute no longer returns Go errors for
+// tool-level failures; instead it returns a <tool_call_error> XML result. These
+// tests assert on the result string shape rather than on the Go error value.
 
 import (
 	"context"
-	"errors"
-	"io/fs"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -16,10 +18,30 @@ import (
 	"testing"
 )
 
+// assertToolError is a helper that asserts Execute returned a structured
+// <tool_call_error> result (not a Go error) whose <cause> contains wantCause.
+func assertToolError(t *testing.T, result string, err error, wantCause string) {
+	t.Helper()
+	if err != nil {
+		t.Fatalf("Execute returned a Go error (want structured result): %v", err)
+	}
+	if !strings.Contains(result, "<tool_call_error>") {
+		t.Fatalf("result missing <tool_call_error> wrapper, got: %q", result)
+	}
+	if !strings.Contains(result, "<cause>") || !strings.Contains(result, "</cause>") {
+		t.Fatalf("result missing <cause> tags, got: %q", result)
+	}
+	if !strings.Contains(result, "<reflection>") {
+		t.Fatalf("result missing <reflection> tag, got: %q", result)
+	}
+	if wantCause != "" && !strings.Contains(result, wantCause) {
+		t.Fatalf("result <cause> does not contain %q, got: %q", wantCause, result)
+	}
+}
+
 // TestErrorMessage_Read_OfDirectory verifies that reading a path that is a
-// directory surfaces a wrapped fs.PathError preserving the user-supplied path
-// and the underlying syscall reason. The agent loop relies on this prefix to
-// route the error back to the model intelligibly.
+// directory surfaces a structured error result whose cause contains the
+// "read is-a-dir:" prefix.
 func TestErrorMessage_Read_OfDirectory(t *testing.T) {
 	dir := t.TempDir()
 	subdir := filepath.Join(dir, "is-a-dir")
@@ -28,30 +50,13 @@ func TestErrorMessage_Read_OfDirectory(t *testing.T) {
 	}
 
 	reg := NewRegistry(dir, t.TempDir())
-	_, err := reg.Execute(context.Background(), "read", `{"path":"is-a-dir"}`)
-	if err == nil {
-		t.Fatal("expected error reading a directory, got nil")
-	}
-
-	// The wrap layer in execRead prepends "read <relpath>: ".
-	if !strings.HasPrefix(err.Error(), "read is-a-dir:") {
-		t.Fatalf("error should be prefixed with 'read is-a-dir:', got %q", err.Error())
-	}
-
-	// The underlying error from os.ReadFile must remain reachable through
-	// the wrap chain — callers use errors.As to pull out the path.
-	var pathErr *fs.PathError
-	if !errors.As(err, &pathErr) {
-		t.Fatalf("expected wrapped *fs.PathError, got %T: %v", err, err)
-	}
-	if pathErr.Path != subdir {
-		t.Fatalf("PathError.Path = %q, want %q", pathErr.Path, subdir)
-	}
+	result, err := reg.Execute(context.Background(), "read", `{"path":"is-a-dir"}`)
+	assertToolError(t, result, err, "read is-a-dir:")
 }
 
-// TestErrorMessage_Write_ReadOnlyDir verifies that writing into a directory
-// that the process cannot create children in produces an error wrapping
-// fs.ErrPermission with a "write <relpath>:" prefix.
+// TestErrorMessage_Write_ReadOnlyDir verifies that writing into a read-only
+// directory surfaces a structured error result whose cause contains the
+// "write <relpath>:" prefix.
 func TestErrorMessage_Write_ReadOnlyDir(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("permission semantics differ on windows")
@@ -64,8 +69,6 @@ func TestErrorMessage_Write_ReadOnlyDir(t *testing.T) {
 	if err := os.Mkdir(roDir, 0o755); err != nil {
 		t.Fatalf("mkdir ro: %v", err)
 	}
-	// Strip write+exec from the parent directory so creating a new file
-	// inside it fails with EACCES.
 	if err := os.Chmod(roDir, 0o555); err != nil {
 		t.Fatalf("chmod ro: %v", err)
 	}
@@ -73,23 +76,13 @@ func TestErrorMessage_Write_ReadOnlyDir(t *testing.T) {
 
 	reg := NewRegistry(dir, t.TempDir())
 	rel := filepath.Join("ro", "out.txt")
-	_, err := reg.Execute(context.Background(), "write", `{"path":"`+rel+`","content":"hi"}`)
-	if err == nil {
-		t.Fatal("expected error writing into read-only dir, got nil")
-	}
-
-	if !strings.HasPrefix(err.Error(), "write "+rel+":") {
-		t.Fatalf("error should be prefixed with 'write %s:', got %q", rel, err.Error())
-	}
-	if !errors.Is(err, fs.ErrPermission) {
-		t.Fatalf("expected error to wrap fs.ErrPermission, got %v", err)
-	}
+	// New-file write into a read-only dir — no pre-read needed (it's a new file).
+	result, err := reg.Execute(context.Background(), "write", `{"path":"`+rel+`","content":"hi"}`)
+	assertToolError(t, result, err, "write "+rel+":")
 }
 
 // TestErrorMessage_Edit_OldTextEmpty pins the exact human-facing message used
-// by the edit tool to redirect the model toward the write tool. The wording
-// is part of the agent contract — changing it without updating tests is a
-// regression risk.
+// by the edit tool to redirect the model toward the write tool.
 func TestErrorMessage_Edit_OldTextEmpty(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "f.txt")
@@ -98,21 +91,17 @@ func TestErrorMessage_Edit_OldTextEmpty(t *testing.T) {
 	}
 
 	reg := NewRegistry(dir, t.TempDir())
-	_, err := reg.Execute(context.Background(), "edit", `{"path":"f.txt","edits":[{"oldText":"","newText":"x"}]}`)
-	if err == nil {
-		t.Fatal("expected error for empty oldText, got nil")
+	// Pattern 2: read before edit.
+	if _, err := reg.Execute(context.Background(), "read", `{"path":"f.txt"}`); err != nil {
+		t.Fatalf("read: %v", err)
 	}
-	got := err.Error()
-	want := "edit: oldText must not be empty (use the write tool to create a new file or replace its contents)"
-	if got != want {
-		t.Fatalf("error message mismatch:\n got: %q\nwant: %q", got, want)
-	}
+	result, err := reg.Execute(context.Background(), "edit", `{"path":"f.txt","edits":[{"oldText":"","newText":"x"}]}`)
+	assertToolError(t, result, err, "edit: oldText must not be empty (use the write tool to create a new file or replace its contents)")
 }
 
 // TestErrorMessage_Edit_OnEmptyFile verifies that attempting to edit an empty
-// file with a non-empty oldText surfaces a "not found" message that includes
-// the relative path. The empty-file case must not be silently treated as a
-// match on the empty string.
+// file with a non-empty oldText surfaces a structured error result whose cause
+// contains the "not found" prefix with the relative path.
 func TestErrorMessage_Edit_OnEmptyFile(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "empty.txt")
@@ -121,11 +110,10 @@ func TestErrorMessage_Edit_OnEmptyFile(t *testing.T) {
 	}
 
 	reg := NewRegistry(dir, t.TempDir())
-	_, err := reg.Execute(context.Background(), "edit", `{"path":"empty.txt","edits":[{"oldText":"foo","newText":"bar"}]}`)
-	if err == nil {
-		t.Fatal("expected error for missing oldText in empty file, got nil")
+	// Pattern 2: read before edit.
+	if _, err := reg.Execute(context.Background(), "read", `{"path":"empty.txt"}`); err != nil {
+		t.Fatalf("read: %v", err)
 	}
-	if !strings.HasPrefix(err.Error(), "oldText not found in empty.txt:") {
-		t.Fatalf("expected prefix 'oldText not found in empty.txt:', got %q", err.Error())
-	}
+	result, err := reg.Execute(context.Background(), "edit", `{"path":"empty.txt","edits":[{"oldText":"foo","newText":"bar"}]}`)
+	assertToolError(t, result, err, "oldText not found in empty.txt:")
 }

@@ -9,6 +9,7 @@ import (
 	"os/user"
 	"runtime"
 	"strings"
+	"sync"
 	"time"
 
 	"charm.land/fantasy"
@@ -44,6 +45,20 @@ type Agent struct {
 	streamer llm.ChatStreamer
 	tools    *tools.Registry
 	config   *config.Config
+
+	// mu guards the mutable per-conversation state — message slices, queued
+	// prompts, injected-path bookkeeping, the active scope, and the
+	// per-context save watermark. drainAndMirrorQueuedPrompts runs from
+	// PrepareStep on fantasy's goroutine while the main goroutine reads/
+	// writes these fields in the done handler and via MessageCount/Messages
+	// /etc. go test -race caught the unsynchronized access; this mutex is
+	// the fix (HIGH #5).
+	//
+	// CRITICAL: do NOT hold mu across long-running calls — streamer.StreamChat,
+	// LoadMemory/SaveMemory file I/O, channel sends to event channels, or
+	// any a.client.* call that might block. Pattern is "copy what you need
+	// under the lock, release, then do the long work".
+	mu       sync.Mutex
 	messages []fantasy.Message
 
 	// Per-context message histories. Each context gets its own conversation

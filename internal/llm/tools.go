@@ -3,11 +3,22 @@ package llm
 import (
 	"context"
 	"fmt"
+	"strings"
 
 	"charm.land/fantasy"
 
 	"github.com/jstamagal/bitchtea/internal/tools"
 )
+
+// isStructuredToolError reports whether out is a Pattern 1 structured error
+// result from tools.Registry.Execute. When Execute returns a tool-level error
+// it now wraps it in <tool_call_error>...</tool_call_error> XML instead of
+// returning a Go error. Callers that previously checked err != nil must also
+// check this so they can re-surface the result as IsError=true to the fantasy
+// layer.
+func isStructuredToolError(out string) bool {
+	return strings.HasPrefix(out, "<tool_call_error>")
+}
 
 // bitchteaTool wraps an entry from internal/tools.Registry as a fantasy.AgentTool.
 // One instance per tool definition; Run dispatches into Registry.Execute by name.
@@ -27,6 +38,12 @@ func (t *bitchteaTool) Run(ctx context.Context, call fantasy.ToolCall) (fantasy.
 	out, err := t.reg.Execute(ctx, call.Name, call.Input)
 	if err != nil {
 		return fantasy.NewTextErrorResponse(fmt.Sprintf("Error: %v", err)), nil
+	}
+	// Pattern 1: structured error results come back as content strings.
+	// Preserve IsError=true so the fantasy stream marks the tool call as
+	// failed and the model receives the full <tool_call_error> XML.
+	if isStructuredToolError(out) {
+		return fantasy.NewTextErrorResponse(out), nil
 	}
 	return fantasy.NewTextResponse(out), nil
 }

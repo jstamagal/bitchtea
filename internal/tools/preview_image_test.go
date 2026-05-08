@@ -29,12 +29,15 @@ func TestPreviewImage_missingFile(t *testing.T) {
 	dir := t.TempDir()
 	reg := NewRegistry(dir, t.TempDir())
 
-	_, err := reg.Execute(context.Background(), "preview_image", `{"path":"missing.png"}`)
-	if err == nil {
-		t.Fatal("expected missing file error")
+	result, err := reg.Execute(context.Background(), "preview_image", `{"path":"missing.png"}`)
+	if err != nil {
+		t.Fatalf("Execute returned Go error (want structured result): %v", err)
 	}
-	if !strings.Contains(err.Error(), "open image missing.png") {
-		t.Fatalf("unexpected error: %v", err)
+	if !strings.Contains(result, "<tool_call_error>") {
+		t.Fatalf("expected structured error result, got: %q", result)
+	}
+	if !strings.Contains(result, "open image missing.png") {
+		t.Fatalf("unexpected cause in error result: %q", result)
 	}
 }
 
@@ -45,12 +48,15 @@ func TestPreviewImage_unsupportedFormat(t *testing.T) {
 	}
 	reg := NewRegistry(dir, t.TempDir())
 
-	_, err := reg.Execute(context.Background(), "preview_image", `{"path":"not-image.txt"}`)
-	if err == nil {
-		t.Fatal("expected unsupported format error")
+	result, err := reg.Execute(context.Background(), "preview_image", `{"path":"not-image.txt"}`)
+	if err != nil {
+		t.Fatalf("Execute returned Go error (want structured result): %v", err)
 	}
-	if !strings.Contains(err.Error(), "decode image not-image.txt") {
-		t.Fatalf("unexpected error: %v", err)
+	if !strings.Contains(result, "<tool_call_error>") {
+		t.Fatalf("expected structured error result, got: %q", result)
+	}
+	if !strings.Contains(result, "decode image not-image.txt") {
+		t.Fatalf("unexpected cause in error result: %q", result)
 	}
 }
 

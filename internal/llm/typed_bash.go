@@ -74,11 +74,14 @@ func bashTool(reg *tools.Registry) fantasy.AgentTool {
 
 			out, err := reg.Execute(ctx, name, string(raw))
 			if err != nil {
-				// execBash returns a Go error for cancel/timeout/start-failure
-				// paths; non-zero inner exit is NOT an error (it embeds an
-				// "Exit code: N" suffix in out). Surface every Go error as a
-				// tool error so the fantasy stream stays alive.
+				// Pre-dispatch errors (context cancel, unknown tool) still
+				// propagate as Go errors. Surface as tool error.
 				return fantasy.NewTextErrorResponse(fmt.Sprintf("Error: %v", err)), nil
+			}
+			// Pattern 1: cancel/timeout come back as <tool_call_error> XML now.
+			// Non-zero inner exit still embeds "Exit code: N" without this tag.
+			if isStructuredToolError(out) {
+				return fantasy.NewTextErrorResponse(out), nil
 			}
 			return fantasy.NewTextResponse(out), nil
 		},

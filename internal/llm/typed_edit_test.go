@@ -72,6 +72,10 @@ func TestEditTool_SuccessfulEditMutatesFile(t *testing.T) {
 		t.Fatalf("seed file: %v", err)
 	}
 
+	// Pattern 2: read before edit.
+	if _, readErr := reg.Execute(context.Background(), "read", `{"path":"`+fileName+`"}`); readErr != nil {
+		t.Fatalf("pre-read: %v", readErr)
+	}
 	resp, err := runTypedTool(t, context.Background(), editTool(reg), editArgs{
 		Path: fileName,
 		Edits: []editArgsItem{
@@ -102,6 +106,10 @@ func TestEditTool_EmptyOldTextReturnsToolError(t *testing.T) {
 		t.Fatalf("seed file: %v", err)
 	}
 
+	// Pattern 2: read before edit so the guard doesn't shadow the real error.
+	if _, readErr := reg.Execute(context.Background(), "read", `{"path":"`+fileName+`"}`); readErr != nil {
+		t.Fatalf("pre-read: %v", readErr)
+	}
 	resp, err := runTypedTool(t, context.Background(), editTool(reg), editArgs{
 		Path: fileName,
 		Edits: []editArgsItem{
@@ -124,6 +132,10 @@ func TestEditTool_NonUniqueMatchReturnsToolError(t *testing.T) {
 		t.Fatalf("seed file: %v", err)
 	}
 
+	// Pattern 2: read before edit so the guard doesn't shadow the real error.
+	if _, readErr := reg.Execute(context.Background(), "read", `{"path":"`+fileName+`"}`); readErr != nil {
+		t.Fatalf("pre-read: %v", readErr)
+	}
 	resp, err := runTypedTool(t, context.Background(), editTool(reg), editArgs{
 		Path: fileName,
 		Edits: []editArgsItem{

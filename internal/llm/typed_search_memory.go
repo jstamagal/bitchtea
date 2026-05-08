@@ -71,6 +71,9 @@ func searchMemoryTool(reg *tools.Registry) fantasy.AgentTool {
 			if err != nil {
 				return fantasy.NewTextErrorResponse(fmt.Sprintf("Error: %v", err)), nil
 			}
+			if isStructuredToolError(out) {
+				return fantasy.NewTextErrorResponse(out), nil
+			}
 			return fantasy.NewTextResponse(out), nil
 		},
 	)

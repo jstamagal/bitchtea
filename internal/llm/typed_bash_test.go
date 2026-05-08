@@ -183,8 +183,8 @@ func TestBashTool_OutputTruncatedAtRuneBoundaryIsValidUTF8(t *testing.T) {
 		t.Fatalf("truncated bash output is not valid UTF-8 (bt-71q regression)")
 	}
 	// Sanity: must actually have been truncated, otherwise we didn't exercise
-	// the code path. Truncation appends "... (truncated)" in execBash.
-	if !strings.Contains(resp.Content, "(truncated)") {
-		t.Fatalf("expected truncation marker; output too small to exercise path (len=%d)", len(resp.Content))
+	// the code path. Pattern 3 uses "[TRUNCATED" marker instead of "(truncated)".
+	if !strings.Contains(resp.Content, "[TRUNCATED") {
+		t.Fatalf("expected TRUNCATED marker; output too small to exercise path (len=%d)", len(resp.Content))
 	}
 }

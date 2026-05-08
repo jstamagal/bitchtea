@@ -98,6 +98,10 @@ func TestWriteTool_SuccessfulWriteOverwritesFile(t *testing.T) {
 		t.Fatalf("seed file: %v", err)
 	}
 
+	// Pattern 2: read before overwriting an existing file.
+	if _, readErr := reg.Execute(context.Background(), "read", `{"path":"`+fileName+`"}`); readErr != nil {
+		t.Fatalf("pre-read: %v", readErr)
+	}
 	resp, err := runTypedTool(t, context.Background(), writeTool(reg), writeArgs{
 		Path:    fileName,
 		Content: after,

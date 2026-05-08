@@ -10,32 +10,99 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 	"unicode/utf8"
 
 	memorypkg "github.com/jstamagal/bitchtea/internal/memory"
 )
 
-// Registry holds all available tools and their definitions
+// ============================================================================
+// Pattern 1 — Structured error result with inline reflection prompt
+// ============================================================================
+
+// reflectionPrompt is appended to every structured tool error so the model
+// knows exactly what to do next instead of spinning its wheels.
+const reflectionPrompt = "Reflect on the error above: (1) identify exactly what went wrong with the tool call, (2) explain why that mistake happened, (3) make the corrected tool call. Do NOT skip this reflection."
+
+// wrapToolError wraps a tool execution error in the Forgecode-style structured
+// XML envelope. The model receives cause + self-correction prompt instead of a
+// bare error string, which measurably improves recovery rates.
+func wrapToolError(err error) string {
+	return "<tool_call_error>\n<cause>" + err.Error() + "</cause>\n<reflection>" + reflectionPrompt + "</reflection>\n</tool_call_error>"
+}
+
+// ============================================================================
+// Registry
+// ============================================================================
+
+// Registry holds all available tools and their definitions.
 type Registry struct {
 	WorkDir    string
 	SessionDir string
 	Scope      memorypkg.Scope
 	terminals  *terminalManager
+
+	// Pattern 2 — read-before-edit guard
+	// filesRead tracks absolute paths that were read in the current turn.
+	// Populated by execRead; consulted at the top of execEdit and execWrite
+	// (overwrite-existing path). Reset each turn via ResetTurnState.
+	frMu      sync.Mutex
+	filesRead map[string]struct{}
+
+	// Pattern 4 — per-tool timeout
+	// ToolTimeout is the default wall-clock limit applied to every tool call
+	// that doesn't manage its own timeout (bash manages its own). Defaults to
+	// 300 s; adjustable via /set tool_timeout <seconds>.
+	ToolTimeout time.Duration
 }
 
-// NewRegistry creates a tool registry
+// NewRegistry creates a tool registry.
 func NewRegistry(workDir, sessionDir string) *Registry {
 	return &Registry{
-		WorkDir:    workDir,
-		SessionDir: sessionDir,
-		terminals:  newTerminalManager(workDir),
+		WorkDir:     workDir,
+		SessionDir:  sessionDir,
+		terminals:   newTerminalManager(workDir),
+		filesRead:   make(map[string]struct{}),
+		ToolTimeout: 300 * time.Second,
 	}
 }
 
 // SetScope updates the memory scope used for search_memory queries.
 func (r *Registry) SetScope(scope memorypkg.Scope) {
 	r.Scope = scope
+}
+
+// ResetTurnState clears per-turn state (currently: the read-before-edit guard).
+// The agent loop calls this at the start of each new user turn (sendMessage).
+func (r *Registry) ResetTurnState() {
+	r.frMu.Lock()
+	r.filesRead = make(map[string]struct{})
+	r.frMu.Unlock()
+}
+
+// SetToolTimeout updates the per-tool timeout. Values <= 0 are ignored.
+// Safe to call concurrently (the timeout is read under no lock since it's set
+// only during initialization before any concurrent tool calls begin).
+func (r *Registry) SetToolTimeout(seconds int) {
+	if seconds > 0 {
+		r.ToolTimeout = time.Duration(seconds) * time.Second
+	}
+}
+
+// markFileRead records that the given absolute path was read in this turn.
+func (r *Registry) markFileRead(absPath string) {
+	r.frMu.Lock()
+	r.filesRead[absPath] = struct{}{}
+	r.frMu.Unlock()
+}
+
+// wasFileRead reports whether the given absolute path was read in this turn.
+func (r *Registry) wasFileRead(absPath string) bool {
+	r.frMu.Lock()
+	_, ok := r.filesRead[absPath]
+	r.frMu.Unlock()
+	return ok
 }
 
 // Definitions returns OpenAI-compatible tool definitions
@@ -406,7 +473,17 @@ func (r *Registry) Definitions() []ToolDef {
 	}
 }
 
-// Execute runs a tool and returns the result
+// Execute runs a tool and returns the result.
+//
+// Pattern 1 (structured errors): when a tool returns an error, Execute converts
+// it to a <tool_call_error> XML result string rather than propagating it as a
+// Go error. The model sees both the cause and a self-correction reflection
+// prompt. The only Go errors that still propagate are pre-dispatch problems
+// (context cancellation, unknown tool name) that the caller must handle.
+//
+// Pattern 4 (per-tool timeout): every tool that doesn't manage its own timeout
+// (bash manages its own) is wrapped in context.WithTimeout(r.ToolTimeout).
+// Future agent-delegation tools should be added to the bypass list here.
 func (r *Registry) Execute(ctx context.Context, name string, argsJSON string) (string, error) {
 	// Early cancellation check so tools that don't use context internally
 	// (read, write, edit, terminal_send, etc.) still respond to CancelTool
@@ -415,38 +492,76 @@ func (r *Registry) Execute(ctx context.Context, name string, argsJSON string) (s
 		return "", fmt.Errorf("tool cancelled: %w", err)
 	}
 
+	// Pattern 4: apply per-tool timeout to all tools except bash (which
+	// manages its own timeout via the `timeout` arg). Future agent-delegation
+	// tools that spawn long sub-agents should also bypass this wrapper.
+	toolCtx := ctx
+	var toolCancel context.CancelFunc
+	switch name {
+	case "bash":
+		// bash manages its own deadline internally; wrapping would race.
+	default:
+		toolCtx, toolCancel = context.WithTimeout(ctx, r.ToolTimeout)
+		defer toolCancel()
+	}
+
+	var result string
+	var err error
+
 	switch name {
 	case "read":
-		return r.execRead(argsJSON)
+		result, err = r.execRead(argsJSON)
 	case "write":
-		return r.execWrite(argsJSON)
+		result, err = r.execWrite(argsJSON)
 	case "edit":
-		return r.execEdit(argsJSON)
+		result, err = r.execEdit(argsJSON)
 	case "search_memory":
-		return r.execSearchMemory(argsJSON)
+		result, err = r.execSearchMemory(argsJSON)
 	case "write_memory":
-		return r.execWriteMemory(argsJSON)
+		result, err = r.execWriteMemory(argsJSON)
 	case "bash":
-		return r.execBash(ctx, argsJSON)
+		result, err = r.execBash(ctx, argsJSON) // bash uses its own ctx
 	case "terminal_start":
-		return r.terminals.Start(ctx, argsJSON)
+		result, err = r.terminals.Start(toolCtx, argsJSON)
 	case "terminal_send":
-		return r.terminals.Send(argsJSON)
+		result, err = r.terminals.Send(argsJSON)
 	case "terminal_keys":
-		return r.terminals.Keys(argsJSON)
+		result, err = r.terminals.Keys(argsJSON)
 	case "terminal_snapshot":
-		return r.terminals.Snapshot(argsJSON)
+		result, err = r.terminals.Snapshot(argsJSON)
 	case "terminal_wait":
-		return r.terminals.Wait(argsJSON)
+		result, err = r.terminals.Wait(argsJSON)
 	case "terminal_resize":
-		return r.terminals.Resize(argsJSON)
+		result, err = r.terminals.Resize(argsJSON)
 	case "terminal_close":
-		return r.terminals.Close(argsJSON)
+		result, err = r.terminals.Close(argsJSON)
 	case "preview_image":
-		return r.execPreviewImage(argsJSON)
+		result, err = r.execPreviewImage(argsJSON)
 	default:
 		return "", fmt.Errorf("unknown tool: %s", name)
 	}
+
+	// Check timeout expiry after the tool returns.
+	if err == nil && toolCancel != nil {
+		if toolCtx.Err() != nil {
+			err = fmt.Errorf("tool %s exceeded %s timeout — consider breaking into smaller operations", name, r.ToolTimeout)
+		}
+	}
+	if err == nil && result == "" && toolCancel != nil && toolCtx.Err() != nil {
+		err = fmt.Errorf("tool %s exceeded %s timeout — consider breaking into smaller operations", name, r.ToolTimeout)
+	}
+
+	// Pattern 4: convert timeout error if tool returned an error AND context
+	// deadline was exceeded.
+	if err != nil && toolCancel != nil && errors.Is(toolCtx.Err(), context.DeadlineExceeded) {
+		err = fmt.Errorf("tool %s exceeded %s timeout — consider breaking into smaller operations", name, r.ToolTimeout)
+	}
+
+	// Pattern 1: convert all tool-level errors to structured XML results.
+	if err != nil {
+		return wrapToolError(err), nil
+	}
+	return result, nil
 }
 
 func (r *Registry) resolvePath(p string) string {
@@ -472,6 +587,9 @@ func (r *Registry) execRead(argsJSON string) (string, error) {
 		return "", fmt.Errorf("read %s: %w", args.Path, err)
 	}
 
+	// Pattern 2: mark file read so execEdit/execWrite can guard on it.
+	r.markFileRead(path)
+
 	content := string(data)
 
 	// Apply offset/limit if specified
@@ -491,10 +609,18 @@ func (r *Registry) execRead(argsJSON string) (string, error) {
 		content = strings.Join(lines[start:end], "\n")
 	}
 
-	// Truncate if too large
+	// Pattern 3: head+tail truncation with overflow temp file pointer.
 	const maxSize = 50 * 1024
 	if len(content) > maxSize {
-		content = truncateUTF8(content, maxSize) + "\n... (truncated)"
+		truncated, overflowPath, oErr := truncateWithOverflow(content, maxSize)
+		if oErr != nil {
+			// Fall back to simple truncation on temp-file error.
+			content = truncateUTF8(content, maxSize) + "\n... (truncated)"
+		} else if overflowPath != "" {
+			content = truncated + "\n[TRUNCATED — full output at " + overflowPath + "; use read tool to view specific line ranges]"
+		} else {
+			content = truncated
+		}
 	}
 
 	return content, nil
@@ -510,6 +636,15 @@ func (r *Registry) execWrite(argsJSON string) (string, error) {
 	}
 
 	path := r.resolvePath(args.Path)
+
+	// Pattern 2: read-before-edit guard for EXISTING files.
+	// New-file writes are always allowed; the guard only fires when the file
+	// already exists and was not read in the current turn.
+	if _, statErr := os.Stat(path); statErr == nil {
+		if !r.wasFileRead(path) {
+			return "", fmt.Errorf("must read %s in this turn before overwriting it", args.Path)
+		}
+	}
 
 	// Create parent directories
 	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
@@ -536,6 +671,12 @@ func (r *Registry) execEdit(argsJSON string) (string, error) {
 	}
 
 	path := r.resolvePath(args.Path)
+
+	// Pattern 2: read-before-edit guard.
+	if !r.wasFileRead(path) {
+		return "", fmt.Errorf("must read %s in this turn before editing it", args.Path)
+	}
+
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return "", fmt.Errorf("read %s: %w", args.Path, err)
@@ -665,10 +806,17 @@ func (r *Registry) execBash(ctx context.Context, argsJSON string) (string, error
 	err := cmd.Run()
 	output := out.String()
 
-	// Truncate
+	// Pattern 3: head+tail truncation with overflow temp file pointer.
 	const maxSize = 50 * 1024
 	if len(output) > maxSize {
-		output = truncateUTF8(output, maxSize) + "\n... (truncated)"
+		truncated, overflowPath, oErr := truncateWithOverflow(output, maxSize)
+		if oErr != nil {
+			output = truncateUTF8(output, maxSize) + "\n... (truncated)"
+		} else if overflowPath != "" {
+			output = truncated + "\n[TRUNCATED — full output at " + overflowPath + "; use read tool to view specific line ranges]"
+		} else {
+			output = truncated
+		}
 	}
 
 	if err != nil {
@@ -707,4 +855,57 @@ func truncateUTF8(s string, maxBytes int) string {
 		cut--
 	}
 	return s[:cut]
+}
+
+// truncateWithOverflow implements Pattern 3 (head+tail truncation with overflow
+// temp file pointer). When content fits under maxBytes the original is returned
+// unchanged. When it overflows:
+//   - keeps first maxBytes/2 bytes (UTF-8 safe) as head
+//   - keeps last maxBytes/2 bytes (UTF-8 safe) as tail
+//   - writes the FULL original to a temp file
+//   - returns head + separator + tail, the temp path, and nil error
+//
+// Temp files are NOT auto-cleaned (model may read them later in the session).
+// TODO: add session-end cleanup sweep for bitchtea_*_overflow.txt files.
+func truncateWithOverflow(content string, maxBytes int) (truncated string, overflowPath string, err error) {
+	if len(content) <= maxBytes {
+		return content, "", nil
+	}
+
+	half := maxBytes / 2
+
+	// UTF-8-safe head: walk back to a rune boundary.
+	headEnd := half
+	for headEnd > 0 && !utf8.RuneStart(content[headEnd]) {
+		headEnd--
+	}
+	head := content[:headEnd]
+
+	// UTF-8-safe tail: walk forward from (len-half) to a rune start.
+	tailStart := len(content) - half
+	if tailStart < 0 {
+		tailStart = 0
+	}
+	for tailStart < len(content) && !utf8.RuneStart(content[tailStart]) {
+		tailStart++
+	}
+	tail := content[tailStart:]
+
+	// Write the full original to a temp file.
+	f, ferr := os.CreateTemp("", "bitchtea_*_overflow.txt")
+	if ferr != nil {
+		return "", "", ferr
+	}
+	if _, werr := f.WriteString(content); werr != nil {
+		f.Close()
+		os.Remove(f.Name())
+		return "", "", werr
+	}
+	if cerr := f.Close(); cerr != nil {
+		os.Remove(f.Name())
+		return "", "", cerr
+	}
+
+	sep := "\n... [" + strconv.Itoa(len(content)) + " bytes total; middle omitted] ...\n"
+	return head + sep + tail, f.Name(), nil
 }
