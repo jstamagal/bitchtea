@@ -187,6 +187,21 @@ func TestApplyAnthropicCacheMarkers_ZaiAnthropicExcluded(t *testing.T) {
 	}
 }
 
+// TestApplyAnthropicCacheMarkers_CLIProxyAPINoMarker asserts that cliproxyapi
+// never receives cache_control markers from bitchtea. The CLIProxyAPI proxy
+// auto-injects markers on the upstream request itself; if bitchtea also injects
+// them, the proxy detects countCacheControls > 0 and skips its smart placement.
+// This test is the regression guard for that contract — if it ever fails, a
+// refactor broke the "only anthropic gets markers" invariant.
+func TestApplyAnthropicCacheMarkers_CLIProxyAPINoMarker(t *testing.T) {
+	captured := runCaptureTurn(t, "cliproxyapi", 5)
+	for i, msg := range captured {
+		if hasAnthropicCacheControl(msg) {
+			t.Fatalf("cliproxyapi must never receive cache_control from bitchtea; found on message %d (role=%s)", i, msg.Role)
+		}
+	}
+}
+
 // TestApplyAnthropicCacheMarkers_NoBootstrapNoMarker covers the resume /
 // fresh-restore path where bootstrapMsgCount has been reset to 0 — the
 // helper must short-circuit and produce a marker-free request.

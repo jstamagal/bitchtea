@@ -26,6 +26,17 @@ import (
 // at the top is the entire provider check. Callers should still pass the
 // real service value so adding new gated services is a one-line change.
 func applyAnthropicCacheMarkers(prepared *fantasy.PrepareStepResult, service string, bootstrapInPrior int) {
+	// NOTE: service="cliproxyapi" intentionally does NOT receive cache_control
+	// markers from bitchtea. The CLIProxyAPI proxy (router-for-me/CLIProxyAPI)
+	// auto-injects ephemeral markers on tools[]/system[]/last-user-message
+	// upstream and runs its own 4-breakpoint enforcement. If bitchtea sends ANY
+	// cache_control marker, the proxy detects countCacheControls > 0 and skips
+	// its smart placement entirely — which is strictly worse than letting the
+	// proxy handle it. Leave the gate as-is: only "anthropic" gets markers here.
+	//
+	// Do NOT extend this function to cover "cliproxyapi". If you are reading
+	// this while wondering whether cliproxyapi should get cache markers, the
+	// answer is: no, never, let the proxy do it.
 	if service != "anthropic" {
 		return
 	}
