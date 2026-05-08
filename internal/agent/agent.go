@@ -433,22 +433,31 @@ func (a *Agent) sendMessage(ctx context.Context, userMsg string, kind followUpKi
 				if safeText := streamSanitizer.Flush(); safeText != "" {
 					events <- Event{Type: "text", Text: safeText}
 				}
+				// Build the splice locally (no lock) — ev.Messages is a
+				// stack-local copy from streamOnce and sanitization is pure,
+				// so the loop body touches no shared state — then take the
+				// lock once via appendMessagesLocked. Keeps PrepareStep's
+				// drainer from waiting behind us for the duration of the loop.
+				appended := make([]fantasy.Message, 0, len(ev.Messages))
 				appendedAssistant := false
 				// ev.Messages comes back from the streamer as legacy []llm.Message
-				// (fantasy → llm projection inside streamOnce). Lift each one back
-				// into fantasy parts before splicing so the canonical history
-				// stays fantasy-native.
+				// (fantasy → llm projection inside streamOnce). Lift each one
+				// back into fantasy parts before splicing so the canonical
+				// history stays fantasy-native.
 				for _, m := range ev.Messages {
 					if m.Role == "assistant" {
 						m.Content = sanitizeAssistantText(m.Content)
 						appendedAssistant = true
 					}
-					a.messages = append(a.messages, llm.LLMToFantasy(m))
+					appended = append(appended, llm.LLMToFantasy(m))
 				}
 				if !appendedAssistant && textAccum.Len() > 0 {
-					a.messages = append(a.messages,
+					appended = append(appended,
 						newAssistantMessage(sanitizeAssistantText(textAccum.String())),
 					)
+				}
+				if len(appended) > 0 {
+					a.appendMessagesLocked(appended...)
 				}
 			}
 
@@ -789,6 +798,13 @@ func (a *Agent) Config() *config.Config {
 
 // snapshotMessages returns a copy of a.messages under the lock so callers
 // can iterate the slice without racing against concurrent mutations.
+func (a *Agent) snapshotMessages() []fantasy.Message {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	snap := make([]fantasy.Message, len(a.messages))
+	copy(snap, a.messages)
+	return snap
+}
 
 // appendMessagesLocked appends msgs to a.messages under the lock. Used by
 // sendMessage so message appends don't race against snapshotMessages.
@@ -796,14 +812,6 @@ func (a *Agent) appendMessagesLocked(msgs ...fantasy.Message) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	a.messages = append(a.messages, msgs...)
-}
-
-func (a *Agent) snapshotMessages() []fantasy.Message {
-	a.mu.Lock()
-	defer a.mu.Unlock()
-	snap := make([]fantasy.Message, len(a.messages))
-	copy(snap, a.messages)
-	return snap
 }
 
 // EstimateTokens returns a rough token count (chars / 4). Counts the text
