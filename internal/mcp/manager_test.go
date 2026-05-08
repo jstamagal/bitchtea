@@ -33,12 +33,14 @@ type fakeServer struct {
 	startErr  error
 	startHang bool          // if set, Start blocks until ctx is done
 	stopErr   error
+	listErr   error // if set, ListTools returns this error
 	callFn    func(name string, args json.RawMessage) (Result, error)
 
 	mu          sync.Mutex
 	startCalls  int32
 	stopCalls   int32
 	callCount   int32
+	listCalls   int32 // counts ListTools invocations — used by cache tests
 	startedAt   time.Time
 }
 
@@ -65,6 +67,10 @@ func (f *fakeServer) Stop(_ context.Context) error {
 }
 
 func (f *fakeServer) ListTools(_ context.Context) ([]Tool, error) {
+	atomic.AddInt32(&f.listCalls, 1)
+	if f.listErr != nil {
+		return nil, f.listErr
+	}
 	return f.tools, nil
 }
 
@@ -640,4 +646,126 @@ func equalSlice(a, b []string) bool {
 		}
 	}
 	return true
+}
+
+// --- ListAllTools cache (MED #6 / bt-45z) -----------------------------------
+//
+// The cache is a per-Manager memoization of ListAllTools' result, valid for
+// ToolsCacheTTL. Tests pin: cache hit avoids re-listing servers; TTL expiry
+// triggers a rebuild; partial-failure responses are NOT cached so a flaky
+// server doesn't poison the cache; InvalidateToolsCache forces a rebuild;
+// ToolsCacheTTL=0 disables caching.
+
+func TestListAllTools_CachesWithinTTL(t *testing.T) {
+	srv := &fakeServer{name: "s1", tools: []Tool{{Name: "t1"}}}
+	mgr, _ := managerWithFakes(t, nil, nil, srv)
+	mgr.ToolsCacheTTL = 60 * time.Second
+	if err := mgr.Start(context.Background()); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	t.Cleanup(func() { _ = mgr.Stop(context.Background()) })
+
+	for i := 0; i < 5; i++ {
+		got, err := mgr.ListAllTools(context.Background())
+		if err != nil {
+			t.Fatalf("call %d: %v", i, err)
+		}
+		if len(got) != 1 || got[0].Name != "mcp__s1__t1" {
+			t.Fatalf("call %d: unexpected tools %+v", i, got)
+		}
+	}
+	if got := atomic.LoadInt32(&srv.listCalls); got != 1 {
+		t.Fatalf("expected 1 ListTools call (cached), got %d", got)
+	}
+}
+
+func TestListAllTools_RebuildAfterTTLExpires(t *testing.T) {
+	srv := &fakeServer{name: "s1", tools: []Tool{{Name: "t1"}}}
+	mgr, _ := managerWithFakes(t, nil, nil, srv)
+	mgr.ToolsCacheTTL = 50 * time.Millisecond
+	if err := mgr.Start(context.Background()); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	t.Cleanup(func() { _ = mgr.Stop(context.Background()) })
+
+	if _, err := mgr.ListAllTools(context.Background()); err != nil {
+		t.Fatalf("first call: %v", err)
+	}
+	time.Sleep(60 * time.Millisecond) // outside TTL
+	if _, err := mgr.ListAllTools(context.Background()); err != nil {
+		t.Fatalf("post-expiry call: %v", err)
+	}
+	if got := atomic.LoadInt32(&srv.listCalls); got != 2 {
+		t.Fatalf("expected 2 ListTools calls (rebuild after TTL), got %d", got)
+	}
+}
+
+func TestListAllTools_DoesNotCacheErrors(t *testing.T) {
+	srv := &fakeServer{name: "s1", listErr: fmt.Errorf("upstream gone")}
+	mgr, _ := managerWithFakes(t, nil, nil, srv)
+	mgr.ToolsCacheTTL = 60 * time.Second
+	if err := mgr.Start(context.Background()); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	t.Cleanup(func() { _ = mgr.Stop(context.Background()) })
+
+	for i := 0; i < 3; i++ {
+		_, err := mgr.ListAllTools(context.Background())
+		if err == nil {
+			t.Fatalf("call %d: expected error", i)
+		}
+	}
+	// Each call must hit the server because the error path doesn't cache —
+	// otherwise a flaky server would lock out future success for the TTL.
+	if got := atomic.LoadInt32(&srv.listCalls); got != 3 {
+		t.Fatalf("expected 3 ListTools calls (errors not cached), got %d", got)
+	}
+}
+
+func TestInvalidateToolsCache_ForcesRebuild(t *testing.T) {
+	srv := &fakeServer{name: "s1", tools: []Tool{{Name: "t1"}}}
+	mgr, _ := managerWithFakes(t, nil, nil, srv)
+	mgr.ToolsCacheTTL = 60 * time.Second
+	if err := mgr.Start(context.Background()); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	t.Cleanup(func() { _ = mgr.Stop(context.Background()) })
+
+	if _, err := mgr.ListAllTools(context.Background()); err != nil {
+		t.Fatalf("first: %v", err)
+	}
+	if _, err := mgr.ListAllTools(context.Background()); err != nil {
+		t.Fatalf("second (cached): %v", err)
+	}
+	if got := atomic.LoadInt32(&srv.listCalls); got != 1 {
+		t.Fatalf("setup expected 1 call, got %d", got)
+	}
+
+	mgr.InvalidateToolsCache()
+
+	if _, err := mgr.ListAllTools(context.Background()); err != nil {
+		t.Fatalf("post-invalidate: %v", err)
+	}
+	if got := atomic.LoadInt32(&srv.listCalls); got != 2 {
+		t.Fatalf("expected 2 ListTools calls (rebuild after invalidate), got %d", got)
+	}
+}
+
+func TestListAllTools_TTLZeroDisablesCaching(t *testing.T) {
+	srv := &fakeServer{name: "s1", tools: []Tool{{Name: "t1"}}}
+	mgr, _ := managerWithFakes(t, nil, nil, srv)
+	mgr.ToolsCacheTTL = 0 // explicit disable
+	if err := mgr.Start(context.Background()); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	t.Cleanup(func() { _ = mgr.Stop(context.Background()) })
+
+	for i := 0; i < 4; i++ {
+		if _, err := mgr.ListAllTools(context.Background()); err != nil {
+			t.Fatalf("call %d: %v", i, err)
+		}
+	}
+	if got := atomic.LoadInt32(&srv.listCalls); got != 4 {
+		t.Fatalf("expected 4 ListTools calls (caching disabled), got %d", got)
+	}
 }

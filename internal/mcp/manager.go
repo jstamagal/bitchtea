@@ -23,6 +23,14 @@ const (
 	// Resources larger than this are rejected with an error. The bound exists
 	// so a misbehaving MCP server cannot OOM the agent.
 	DefaultMaxResourceBytes = 1 << 20 // 1 MiB
+
+	// DefaultToolsCacheTTL caps how long ListAllTools' cached result stays
+	// valid. Pre-cache, every agent turn (sometimes several times per turn
+	// via PrepareStep) issued a fresh tools/list JSON-RPC to every running
+	// MCP server — extra latency and (for remote servers) extra round-trip
+	// cost for catalogs that almost never change mid-session. Closes audit
+	// finding MED #6 (bead bt-45z). Set to zero to disable caching.
+	DefaultToolsCacheTTL = 60 * time.Second
 )
 
 // NamespacedTool pairs a server-relative Tool with the prefixed name the
@@ -73,6 +81,10 @@ type Manager struct {
 	StopTimeout time.Duration
 	// MaxResourceBytes caps total size of a single resource read.
 	MaxResourceBytes int
+	// ToolsCacheTTL controls how long ListAllTools cached results stay
+	// valid. Zero disables caching (every call rebuilds). Default
+	// DefaultToolsCacheTTL.
+	ToolsCacheTTL time.Duration
 
 	// newServer is overridable by tests so they can swap in fakeServer
 	// for the otherwise-config-driven NewServer.
@@ -80,6 +92,14 @@ type Manager struct {
 
 	mu      sync.RWMutex
 	entries map[string]*entry
+
+	// Tools cache. Guarded by toolsMu. Separated from m.mu so a turn-time
+	// ListAllTools doesn't fight the lifecycle path (Start / Stop) which
+	// holds m.mu for longer windows.
+	toolsMu       sync.Mutex
+	cachedTools   []NamespacedTool
+	cachedAt      time.Time
+	cachedListErr error
 }
 
 // NewManager constructs a Manager from a parsed Config. nil auth or audit
@@ -101,6 +121,7 @@ func NewManager(cfg Config, auth Authorizer, audit AuditHook) *Manager {
 		ManagerStartTimeout:   DefaultManagerStartTimeout,
 		StopTimeout:           DefaultStopTimeout,
 		MaxResourceBytes:      DefaultMaxResourceBytes,
+		ToolsCacheTTL:         DefaultToolsCacheTTL,
 		newServer:             NewServer,
 		entries:               map[string]*entry{},
 	}
@@ -270,7 +291,21 @@ func (m *Manager) Unhealthy() map[string]string {
 // but do NOT prevent other servers' tools from being returned —
 // best-effort aggregation matches the contract's "schema error drops
 // that one tool" stance.
+//
+// Results are cached for ToolsCacheTTL (default 60s) so repeated turn-
+// time calls don't issue fresh tools/list JSON-RPCs to every server.
+// Set ToolsCacheTTL = 0 to disable caching. Call InvalidateToolsCache
+// to force a rebuild on the next call (use this when notifications/
+// tools/list_changed arrives, or after manual server restart).
+//
+// Errors from individual servers are NOT cached — partial results are
+// cached only when no errors occurred. This means a server with a flaky
+// list endpoint won't poison the cache; the next call retries.
 func (m *Manager) ListAllTools(ctx context.Context) ([]NamespacedTool, error) {
+	if cached, ok := m.tryReadCache(); ok {
+		return cached, nil
+	}
+
 	servers := m.Servers()
 	var (
 		out  []NamespacedTool
@@ -297,7 +332,58 @@ func (m *Manager) ListAllTools(ctx context.Context) ([]NamespacedTool, error) {
 			})
 		}
 	}
-	return out, errors.Join(errs...)
+
+	joined := errors.Join(errs...)
+	if joined == nil {
+		// Only cache clean results — a partial-failure response would
+		// otherwise be served for ToolsCacheTTL even if the failing
+		// server recovered immediately.
+		m.storeCache(out)
+	}
+	return out, joined
+}
+
+// tryReadCache returns the cached tool list if non-nil and within the TTL
+// window. Disabled when ToolsCacheTTL is zero.
+func (m *Manager) tryReadCache() ([]NamespacedTool, bool) {
+	if m.ToolsCacheTTL <= 0 {
+		return nil, false
+	}
+	m.toolsMu.Lock()
+	defer m.toolsMu.Unlock()
+	if m.cachedTools == nil {
+		return nil, false
+	}
+	if time.Since(m.cachedAt) > m.ToolsCacheTTL {
+		return nil, false
+	}
+	// Return a copy so callers can mutate the slice header without
+	// corrupting the cached snapshot.
+	out := make([]NamespacedTool, len(m.cachedTools))
+	copy(out, m.cachedTools)
+	return out, true
+}
+
+// storeCache replaces the cached tool list and resets the timestamp.
+func (m *Manager) storeCache(tools []NamespacedTool) {
+	m.toolsMu.Lock()
+	defer m.toolsMu.Unlock()
+	// Defensive copy so callers' subsequent mutations don't leak in.
+	stored := make([]NamespacedTool, len(tools))
+	copy(stored, tools)
+	m.cachedTools = stored
+	m.cachedAt = time.Now()
+}
+
+// InvalidateToolsCache forces the next ListAllTools call to rebuild from
+// the underlying servers. Safe to call from any goroutine. Useful after
+// receiving notifications/tools/list_changed or after a manual server
+// restart.
+func (m *Manager) InvalidateToolsCache() {
+	m.toolsMu.Lock()
+	defer m.toolsMu.Unlock()
+	m.cachedTools = nil
+	m.cachedAt = time.Time{}
 }
 
 // CallTool dispatches a namespaced tool call: parses the mcp__<server>__<tool>
