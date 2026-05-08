@@ -806,12 +806,17 @@ func (a *Agent) snapshotMessages() []fantasy.Message {
 	return snap
 }
 
-// appendMessagesLocked appends msgs to a.messages under the lock. Used by
-// sendMessage so message appends don't race against snapshotMessages.
+// appendMessagesLocked appends msgs to a.messages and resyncs the active
+// contextMsgs slice header under the lock. Used by sendMessage and the
+// queue mirror so message appends don't race against snapshotMessages and
+// don't leave the per-context map pointing at a stale array.
 func (a *Agent) appendMessagesLocked(msgs ...fantasy.Message) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	a.messages = append(a.messages, msgs...)
+	if a.contextMsgs != nil && a.currentContext != "" {
+		a.contextMsgs[a.currentContext] = a.messages
+	}
 }
 
 // EstimateTokens returns a rough token count (chars / 4). Counts the text
