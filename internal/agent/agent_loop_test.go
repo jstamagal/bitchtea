@@ -392,17 +392,21 @@ func TestNewAgentTracksBootstrapMessageCount(t *testing.T) {
 	}
 }
 
-func TestBuildSystemPromptMentionsSearchMemory(t *testing.T) {
+// TestBuildSystemPromptMentionsMemoryWorkflow asserts the memory_workflow
+// section is present and carries the policy fragments the agent relies on.
+// The previous version of this test asserted on the old "MEMORY WORKFLOW"
+// Unicode-divider header and on inline tool names ("search_memory",
+// "write_memory") that used to appear in the dropped tool enumeration —
+// both are now wrong by design (XML tags + tool schemas via the API).
+func TestBuildSystemPromptMentionsMemoryWorkflow(t *testing.T) {
 	cfg := config.DefaultConfig()
 	cfg.WorkDir = t.TempDir()
 
-	reg := tools.NewRegistry(cfg.WorkDir, t.TempDir())
-	prompt := buildSystemPrompt(&cfg, reg.Definitions())
+	prompt := buildSystemPrompt(&cfg)
 	for _, want := range []string{
-		"search_memory",
-		"write_memory",
+		"<memory_workflow>",
+		"</memory_workflow>",
 		"prior decision",
-		"MEMORY WORKFLOW",
 		"scope='root'",
 		"daily=true",
 		"Consolidate",
@@ -413,32 +417,76 @@ func TestBuildSystemPromptMentionsSearchMemory(t *testing.T) {
 	}
 }
 
-func TestSystemPromptIncludesLiveToolDefinitions(t *testing.T) {
+// TestSystemPromptHasToolRulesAndStructure replaces the old
+// TestSystemPromptIncludesLiveToolDefinitions. The inline tool list is
+// gone by design — the provider attaches tool schemas through the
+// function-calling API, so emitting them as text just doubled tokens and
+// risked drift. This test now asserts the new contract: XML structural
+// markers, tool-use RULES (not the schema list), persona-first ordering
+// for cache anchoring, and that the persona text appears exactly once
+// in the system prompt (the synthetic anchor exchange is tested separately).
+func TestSystemPromptHasToolRulesAndStructure(t *testing.T) {
 	cfg := config.DefaultConfig()
 	cfg.WorkDir = t.TempDir()
 	cfg.SessionDir = t.TempDir()
 
-	reg := tools.NewRegistry(cfg.WorkDir, cfg.SessionDir)
-	prompt := buildSystemPrompt(&cfg, reg.Definitions())
+	prompt := buildSystemPrompt(&cfg)
 
-	for _, def := range reg.Definitions() {
-		if !strings.Contains(prompt, "- "+def.Function.Name+"(") {
-			t.Fatalf("system prompt missing tool %q:\n%s", def.Function.Name, prompt)
-		}
-	}
 	for _, want := range []string{
-		"Tool schemas are attached to the provider request",
-		"terminal_start, terminal_keys, terminal_wait",
-		"Quit safely with keys",
-		"preview_image(",
+		"<persona>",
+		"</persona>",
+		"<memory_workflow>",
+		"<tool_rules>",
+		"</tool_rules>",
+		"<environment>",
+		"</environment>",
 	} {
 		if !strings.Contains(prompt, want) {
-			t.Fatalf("system prompt missing %q:\n%s", want, prompt)
+			t.Fatalf("system prompt missing structural marker %q", want)
+		}
+	}
+
+	for _, want := range []string{
+		"Tool schemas are attached to the request",
+		"terminal_start",
+		"Parallelize independent operations",
+		"Do NOT call a tool when you already know",
+	} {
+		if !strings.Contains(prompt, want) {
+			t.Fatalf("system prompt missing tool rule fragment %q", want)
+		}
+	}
+
+	if got := strings.Count(prompt, "TWAT TRIPLETS"); got != 1 {
+		t.Fatalf("expected exactly one persona marker in system prompt (anchor exchange tested elsewhere), got %d", got)
+	}
+
+	personaIdx := strings.Index(prompt, "<persona>")
+	memoryIdx := strings.Index(prompt, "<memory_workflow>")
+	toolIdx := strings.Index(prompt, "<tool_rules>")
+	envIdx := strings.Index(prompt, "<environment>")
+	if !(personaIdx >= 0 && personaIdx < memoryIdx && memoryIdx < toolIdx && toolIdx < envIdx) {
+		t.Fatalf("expected order persona < memory < tool < environment, got persona=%d memory=%d tool=%d env=%d", personaIdx, memoryIdx, toolIdx, envIdx)
+	}
+
+	// Timestamp churned the cache — assert it's gone. If anyone re-introduces
+	// time.Now() in the system prompt, this guards against the regression.
+	for _, banned := range []string{"Time:", "Time: "} {
+		if strings.Contains(prompt, banned) {
+			t.Fatalf("system prompt should not contain %q (cache-killer); reintroduce only via per-turn injection", banned)
 		}
 	}
 }
 
-func TestRestoreMessagesRefreshesSystemPromptToolDefinitions(t *testing.T) {
+// TestRestoreMessagesRefreshesSystemPrompt verifies that RestoreMessages
+// rebuilds the system prompt from current state instead of preserving the
+// stale system message that came in via the restored slice. The previous
+// version of this test asserted on inline tool definitions ("terminal_start(",
+// "preview_image(") — those are gone by design (schemas are attached via
+// the provider API, not enumerated in the prompt). The refresh contract
+// is now verified via the structural markers + the live cfg.WorkDir
+// appearing in the regenerated environment block.
+func TestRestoreMessagesRefreshesSystemPrompt(t *testing.T) {
 	cfg := config.DefaultConfig()
 	cfg.WorkDir = t.TempDir()
 	cfg.SessionDir = t.TempDir()
@@ -453,8 +501,13 @@ func TestRestoreMessagesRefreshesSystemPromptToolDefinitions(t *testing.T) {
 	if strings.Contains(prompt, "old stale prompt") {
 		t.Fatalf("expected restore to refresh stale system prompt, got %q", prompt)
 	}
-	if !strings.Contains(prompt, "terminal_start(") || !strings.Contains(prompt, "preview_image(") {
-		t.Fatalf("restored system prompt missing live tools:\n%s", prompt)
+	for _, want := range []string{"<persona>", "<tool_rules>", "<environment>"} {
+		if !strings.Contains(prompt, want) {
+			t.Fatalf("restored system prompt missing structural marker %q:\n%s", want, prompt)
+		}
+	}
+	if !strings.Contains(prompt, cfg.WorkDir) {
+		t.Fatalf("restored system prompt missing current cfg.WorkDir %q (env block not regenerated):\n%s", cfg.WorkDir, prompt)
 	}
 }
 

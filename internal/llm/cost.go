@@ -57,12 +57,19 @@ func (c *CostTracker) AddTokenUsage(u TokenUsage) {
 	c.CacheReadTokens += u.CacheReadTokens
 }
 
-// TotalTokens returns the sum of input + output. Cache tokens are not added in
-// — they are a subset of the input bucket already counted by providers.
+// TotalTokens returns the sum of all billed token buckets.
+//
+// InputTokens, CacheCreationTokens, and CacheReadTokens are DISJOINT counts
+// as reported by Anthropic (the provider that exposes cache fields at all):
+// InputTokens covers only uncached input; cache_creation and cache_read are
+// their own buckets billed at different rates. The previous version of this
+// function treated cache fields as a subset of InputTokens and undercounted
+// total work done. OpenAI doesn't populate cache fields, so for that path
+// InputTokens carries everything and the cache buckets are zero — same sum.
 func (c *CostTracker) TotalTokens() int {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	return c.InputTokens + c.OutputTokens
+	return c.InputTokens + c.OutputTokens + c.CacheCreationTokens + c.CacheReadTokens
 }
 
 // EstimateCost returns the dollar cost for the accumulated tokens using the
@@ -90,14 +97,22 @@ func (c *CostTracker) EstimateCostFor(model, service string) float64 {
 	cacheCreate, cacheRead := c.CacheCreationTokens, c.CacheReadTokens
 	c.mu.Unlock()
 
-	regularInput := in - cacheCreate - cacheRead
-	if regularInput < 0 {
-		regularInput = in
-	}
-	cost := per1M(regularInput, m.CostPer1MIn) +
+	// Catwalk pricing field semantics for Anthropic-style providers:
+	//   CostPer1MIn        — uncached input
+	//   CostPer1MOut       — output
+	//   CostPer1MInCached  — cache WRITE  (Anthropic: ~1.25× input)
+	//   CostPer1MOutCached — cache READ   (Anthropic: ~0.10× input)
+	//
+	// All four token buckets are additive — InputTokens is NOT a superset of
+	// the cache buckets. The pre-fix version subtracted cache from input
+	// (undercharging real input) AND used the cache-write rate for cache reads
+	// (overcharging reads by ~12.5×). Both bugs cancel for non-Anthropic
+	// providers (which report zero cache tokens), so the regression here is
+	// Anthropic-specific.
+	cost := per1M(in, m.CostPer1MIn) +
 		per1M(out, m.CostPer1MOut) +
 		per1M(cacheCreate, fallback(m.CostPer1MInCached, m.CostPer1MIn)) +
-		per1M(cacheRead, fallback(m.CostPer1MInCached, m.CostPer1MIn))
+		per1M(cacheRead, fallback(m.CostPer1MOutCached, m.CostPer1MIn*0.10))
 	return cost
 }
 

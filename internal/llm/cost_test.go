@@ -25,8 +25,12 @@ func TestCostTrackerAddTokenUsage(t *testing.T) {
 	if tracker.CacheReadTokens != 3 {
 		t.Fatalf("expected 3 cache-read tokens, got %d", tracker.CacheReadTokens)
 	}
-	if tracker.TotalTokens() != 184 {
-		t.Fatalf("expected 184 total tokens, got %d", tracker.TotalTokens())
+	// TotalTokens now sums all four buckets (input + output + cache creation +
+	// cache read) since they're disjoint as reported by Anthropic. Pre-fix
+	// this returned 184 (130+54) on the assumption cache_read was a subset of
+	// input — that was wrong.
+	if tracker.TotalTokens() != 187 {
+		t.Fatalf("expected 187 total tokens (130 input + 54 output + 3 cache_read), got %d", tracker.TotalTokens())
 	}
 }
 

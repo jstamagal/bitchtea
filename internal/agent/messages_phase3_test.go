@@ -62,11 +62,14 @@ func TestPhase3BootstrapMessagesAreFantasyShape(t *testing.T) {
 	}
 
 	// Persona anchor: the last two bootstrap messages must be
-	// user(personaPrompt) → assistant(personaRehearsal).
+	// user(personaAnchorReminder) → assistant(personaRehearsal). The reminder
+	// points at the <persona> block in the system prompt instead of repeating
+	// the entire personaPrompt — same anchor purpose, drops several KB of
+	// duplicated bootstrap text per session.
 	last := msgs[len(msgs)-1]
 	prev := msgs[len(msgs)-2]
-	if prev.Role != fantasy.MessageRoleUser || msgText(prev) != personaPrompt {
-		t.Fatalf("expected penultimate bootstrap message to be the persona-prompt user turn")
+	if prev.Role != fantasy.MessageRoleUser || msgText(prev) != personaAnchorReminder {
+		t.Fatalf("expected penultimate bootstrap message to be the persona-anchor reminder")
 	}
 	if last.Role != fantasy.MessageRoleAssistant || msgText(last) != personaRehearsal {
 		t.Fatalf("expected final bootstrap message to be the persona-rehearsal assistant turn")
@@ -103,8 +106,8 @@ func TestPhase3RestoreFromFantasySlice(t *testing.T) {
 	if msgText(got[0]) == "stale prompt that must be replaced" {
 		t.Fatal("RestoreMessages must refresh the system prompt; stale text survived")
 	}
-	if !strings.Contains(msgText(got[0]), "TOOLS ARE LIVE FUNCTION CALLS") {
-		t.Fatal("restored system prompt missing live tool guidance")
+	if !strings.Contains(msgText(got[0]), "<tool_rules>") {
+		t.Fatal("restored system prompt missing <tool_rules> section")
 	}
 
 	// User text part survives.
@@ -125,9 +128,13 @@ func TestPhase3RestoreFromFantasySlice(t *testing.T) {
 		t.Fatalf("tool result not preserved: %+v", got[3])
 	}
 
-	// Bootstrap window is cleared on restore (whole transcript is replay).
-	if a.BootstrapMessageCount() != 0 {
-		t.Fatalf("expected bootstrap count 0 after restore, got %d", a.BootstrapMessageCount())
+	// After RestoreMessages, bootstrapMsgCount is 1 (covering the freshly
+	// rebuilt system message at index 0) so prompt-cache marker placement
+	// keeps working across resumed sessions. The previous value of 0
+	// permanently disabled applyAnthropicCacheMarkers because
+	// bootstrapPreparedIndex returned -1 for every subsequent turn.
+	if a.BootstrapMessageCount() != 1 {
+		t.Fatalf("expected bootstrap count 1 after restore (system message), got %d", a.BootstrapMessageCount())
 	}
 }
 

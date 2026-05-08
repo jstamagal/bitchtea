@@ -83,7 +83,7 @@ func (a *Agent) InjectNoteInContext(key ContextKey, note string) {
 // other contexts.
 func (a *Agent) RestoreContextMessages(key ContextKey, messages []fantasy.Message) {
 	msgs := append([]fantasy.Message(nil), messages...)
-	systemPrompt := buildSystemPrompt(a.config, a.tools.Definitions())
+	systemPrompt := buildSystemPrompt(a.config)
 	if len(msgs) == 0 || msgs[0].Role != fantasy.MessageRoleSystem {
 		msgs = append([]fantasy.Message{newSystemMessage(systemPrompt)}, msgs...)
 	} else {

@@ -9,19 +9,26 @@ import (
 	memorypkg "github.com/jstamagal/bitchtea/internal/memory"
 )
 
-// DiscoverContextFiles walks up from workDir looking for AGENTS.md, CLAUDE.md,
-// and similar context files. Returns their contents concatenated.
+// DiscoverContextFiles walks up from workDir looking for context md files.
+// Within each directory the first match in [AGENTS.md, CLAUDE.md, .agents.md,
+// .claude.md] wins — AGENTS.md is the canonical runtime-context format and
+// supersedes the legacy CLAUDE.md when both exist in the same directory.
+// Loading both was double-injection of overlapping content; this preference
+// order matches the emerging AGENTS.md standard while preserving CLAUDE.md
+// as a fallback for repos that haven't migrated yet. The walk-up still
+// composes context from parent directories normally.
 func DiscoverContextFiles(workDir string) string {
-	filenames := []string{"AGENTS.md", "CLAUDE.md", ".agents.md", ".claude.md"}
+	preference := []string{"AGENTS.md", "CLAUDE.md", ".agents.md", ".claude.md"}
 	var found []string
 
 	dir := workDir
 	for {
-		for _, name := range filenames {
+		for _, name := range preference {
 			path := filepath.Join(dir, name)
 			data, err := os.ReadFile(path)
 			if err == nil {
 				found = append(found, "# Context from "+path+"\n\n"+string(data))
+				break // one context file per directory — preference order picks the canonical one
 			}
 		}
 
