@@ -172,6 +172,38 @@ type builtinProfileSpec struct {
 }
 
 var builtinProfiles = map[string]builtinProfileSpec{
+	// cliproxyapi is LO's local CLIProxyAPI daemon (router-for-me/CLIProxyAPI,
+	// https://github.com/router-for-me/CLIProxyAPI) running at
+	// http://127.0.0.1:8317/v1.
+	//
+	// Wire-format: OpenAI Chat Completions (provider="openai"). The proxy routes
+	// upstream to Claude, Codex, Gemini, etc. depending on its own config.
+	//
+	// Cache markers: the proxy auto-injects ephemeral cache_control markers on
+	// tools[], system[], and the last user message; it runs its own 4-breakpoint
+	// enforcement. bitchtea MUST NOT send any cache_control markers — if it does,
+	// the proxy detects countCacheControls > 0 and skips smart placement entirely.
+	// The gate in applyAnthropicCacheMarkers (cache.go) already no-ops for any
+	// service that is not "anthropic", so this is handled by the default path.
+	//
+	// Effort / reasoning: the proxy translates the top-level OpenAI field
+	// `reasoning_effort` into Claude's adaptive-thinking config upstream. Send
+	// effort as openaicompat.ProviderOptions.ReasoningEffort — see stream.go.
+	//
+	// Model alias: the proxy exposes "claude-opus-4-7" as an alias. Verify via
+	// GET /v1/models on the live daemon if the alias ever stops resolving; the
+	// proxy's config.yaml maps it to the upstream Anthropic model ID.
+	//
+	// APIKeyEnv: CLIPROXYAPI_KEY is the preferred env var for a dedicated key;
+	// OPENAI_API_KEY is accepted as a fallback (the proxy may require either or
+	// may accept an empty/placeholder value depending on its auth config).
+	"cliproxyapi": {
+		Provider:  "openai",
+		Service:   "cliproxyapi",
+		BaseURL:   "http://127.0.0.1:8317/v1",
+		Model:     "claude-opus-4-7",
+		APIKeyEnv: []string{"CLIPROXYAPI_KEY", "OPENAI_API_KEY"},
+	},
 	"ollama": {
 		Provider: "openai",
 		Service:  "ollama",

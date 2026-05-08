@@ -116,7 +116,7 @@ func TestProfileSaveLoadDelete(t *testing.T) {
 
 	// List
 	names := ListProfiles()
-	if len(names) != 16 {
+	if len(names) != 17 {
 		t.Fatalf("expected built-ins plus saved profile, got %v", names)
 	}
 	found := false
@@ -151,7 +151,7 @@ func TestProfileSaveLoadDelete(t *testing.T) {
 		t.Fatalf("delete: %v", err)
 	}
 	names = ListProfiles()
-	if len(names) != 15 {
+	if len(names) != 16 {
 		t.Fatalf("expected only built-in profiles after delete, got %v", names)
 	}
 }
@@ -200,7 +200,7 @@ func TestListProfilesIncludesBuiltins(t *testing.T) {
 	}
 
 	names := ListProfiles()
-	for _, want := range []string{"aihubmix", "avian", "copilot", "cortecs", "custom", "huggingface", "ionet", "nebius", "ollama", "openrouter", "synthetic", "venice", "vercel", "xai", "zai-anthropic", "zai-openai"} {
+	for _, want := range []string{"aihubmix", "avian", "cliproxyapi", "copilot", "cortecs", "custom", "huggingface", "ionet", "nebius", "ollama", "openrouter", "synthetic", "venice", "vercel", "xai", "zai-anthropic", "zai-openai"} {
 		found := false
 		for _, got := range names {
 			if got == want {
@@ -296,6 +296,7 @@ func TestBuiltinProfilesServiceIdentity(t *testing.T) {
 	// Clear API-key env vars so builtinProfile() doesn't populate APIKey
 	// from the host environment.
 	for _, env := range []string{
+		"CLIPROXYAPI_KEY",
 		"OPENROUTER_API_KEY", "AIHUBMIX_API_KEY", "AVIAN_API_KEY",
 		"GITHUB_TOKEN", "COPILOT_API_KEY", "CORTECS_API_KEY",
 		"HUGGINGFACE_API_KEY", "IONET_API_KEY", "NEBIUS_API_KEY",
@@ -310,6 +311,7 @@ func TestBuiltinProfilesServiceIdentity(t *testing.T) {
 		wantProvider    string
 		wantService     string
 	}{
+		{"cliproxyapi", "openai", "cliproxyapi"},
 		{"ollama", "openai", "ollama"},
 		{"openrouter", "openai", "openrouter"},
 		{"aihubmix", "openai", "aihubmix"},
