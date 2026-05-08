@@ -354,14 +354,14 @@ func truncateForLog(s string, max int) string {
 	return s[:max] + "..."
 }
 
-// runCreateConfigDefaults writes a fully-populated ~/.bitchtearc with one
+// runCreateConfigDefaults writes a fully-populated ~/.bitchtea/bitchtearc with one
 // "# set <key> <value>" line per recognised SET key, using current config
 // values as defaults. Lines are commented out so the file is a reference
 // template — the user uncomments and edits to activate.
 func runCreateConfigDefaults(cfg *config.Config, force bool) error {
 	rcPath := config.RCPath()
 	if _, err := os.Stat(rcPath); err == nil && !force {
-		fmt.Printf("~/.bitchtearc already exists. Overwrite? [y/N]: ")
+		fmt.Printf("~/.bitchtea/bitchtearc already exists. Overwrite? [y/N]: ")
 		var answer string
 		fmt.Scanln(&answer)
 		if strings.ToLower(strings.TrimSpace(answer)) != "y" {

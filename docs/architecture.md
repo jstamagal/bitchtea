@@ -58,7 +58,7 @@ These tests assert that a `panic()` is not triggered, ignoring whether the resul
 
 ### 3.1. `main.go`: The Boot Sequence
 1.  **Daemon Trap:** Intercepts `os.Args[1] == "daemon"` to bypass the TUI entirely.
-2.  **Configuration:** Invokes `config.MigrateDataPaths()` and sets up default configs via `~/.bitchtearc`.
+2.  **Configuration:** Invokes `config.MigrateDataPaths()` and sets up default configs via `~/.bitchtea/bitchtearc`.
 3.  **Catalog Refresh:** Kicks off `maybeStartCatalogRefresh()` asynchronously if `BITCHTEA_CATWALK_AUTOUPDATE` is set.
 4.  **Headless vs. UI:**
     *   **Headless (`--headless`):** Boots an `agent.Agent` and routes `runHeadlessLoop()`. Output is explicitly piped to `stdout`/`stderr`.

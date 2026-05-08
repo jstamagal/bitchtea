@@ -594,7 +594,7 @@ func writeEnvironment(sb *strings.Builder, cfg *config.Config) {
 // model at this block right before the first real user message.
 //
 // This default is intentionally safe for a public GitHub repo — no private
-// content. To use a custom persona, set 'persona_file' in ~/.bitchtearc or
+// content. To use a custom persona, set 'persona_file' in ~/.bitchtea/bitchtearc or
 // via '/set persona_file /path/to/persona.md'. The file contents replace this
 // constant at runtime; the constant is the fallback when no file is configured
 // or the file cannot be read.

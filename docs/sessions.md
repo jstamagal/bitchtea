@@ -708,7 +708,7 @@ watermarks (`agent.contextSavedIdx`).
 Focus state is restored independently from `.bitchtea_focus.json` inside
 `NewModel` (step ⑥), which runs **before** `ResumeSession`. The focus
 sidecar holds the ordered list of open contexts and which is active. RC
-commands (`~/.bitchtearc`) run last (step ⑧), after both `NewModel` and
+commands (`~/.bitchtea/bitchtearc`) run last (step ⑧), after both `NewModel` and
 `ResumeSession`, so `/set` directives can override config values before
 the first turn starts.
 

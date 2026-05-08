@@ -131,7 +131,7 @@ and the service is not `ollama`, bitchtea prints an error and exits.
 
 **File:** `main.go:132-158` (`applyStartupConfig`)
 
-1. `config.ParseRC()` reads `~/.bitchtearc`.
+1. `config.ParseRC()` reads `~/.bitchtea/bitchtearc`.
 2. `ApplyRCSetCommands` processes embedded `set` lines (including `set profile <name>`).
 3. CLI flags are parsed. `--profile <name>` (`config.go:190-195`) calls
    `config.ResolveProfile(name)` then `config.ApplyProfile(cfg, p)`.

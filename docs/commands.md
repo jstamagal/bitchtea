@@ -44,7 +44,7 @@ Concrete example: the `openrouter` built-in is `provider=openai service=openrout
 
 **Clobber rules**: Setting `provider` or `baseurl` silently rewrites `service = "custom"` because once you redirect the transport or change the wire format, the previous service identity can no longer be trusted. Setting `provider`, `model`, `baseurl`, or `apikey` clears the loaded profile name (`cfg.Profile = ""`) so the topbar reflects the manual override. The remaining keys (`service`, `nick`, `sound`, `auto-next`, `auto-idea`) are metadata edits that leave the profile tag intact.
 
-> All `/set` values live only in process memory. They are persisted to disk only through two mechanisms: (1) saving a profile via `/profile save <name>`, or (2) writing `set <key> <value>` lines into `~/.bitchtearc` (loaded at startup by `config.ParseRC` + `ApplyRCSetCommands`). There is no auto-save.
+> All `/set` values live only in process memory. They are persisted to disk only through two mechanisms: (1) saving a profile via `/profile save <name>`, or (2) writing `set <key> <value>` lines into `~/.bitchtea/bitchtearc` (loaded at startup by `config.ParseRC` + `ApplyRCSetCommands`). There is no auto-save.
 
 ## 💾 SESSION & MEMORY
 

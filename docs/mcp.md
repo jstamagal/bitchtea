@@ -308,7 +308,7 @@ Originally documented in `archive/phase-6-mcp-contract.md` (archived).
 
 **Per-workspace, never global.** The useful set of MCP servers is a property
 of *this checkout*, not the user — a frontend repo wants different servers
-than a sysadmin scripting dir. Global profiles and `~/.bitchtearc` are
+than a sysadmin scripting dir. Global profiles and `~/.bitchtea/bitchtearc` are
 intentionally not enable sites; the only enable site is the workspace
 `mcp.json`. This also means a hostile workspace cannot turn on MCP behind
 the user's back across all of their repos.
