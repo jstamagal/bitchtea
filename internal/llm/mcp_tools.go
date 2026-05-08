@@ -52,10 +52,14 @@ func (t *mcpAgentTool) Run(ctx context.Context, call fantasy.ToolCall) (fantasy.
 	if err != nil {
 		return fantasy.NewTextErrorResponse(fmt.Sprintf("Error: %v", err)), nil
 	}
+	// LLM-boundary cap (LOW #12 / bt-dxi): MCP servers return whatever they
+	// return; cap before handing to fantasy so a runaway server can't blast
+	// the model context.
+	content := capLLMResult(res.Content)
 	if res.IsError {
-		return fantasy.NewTextErrorResponse(res.Content), nil
+		return fantasy.NewTextErrorResponse(content), nil
 	}
-	return fantasy.NewTextResponse(res.Content), nil
+	return fantasy.NewTextResponse(content), nil
 }
 
 func (t *mcpAgentTool) ProviderOptions() fantasy.ProviderOptions     { return nil }

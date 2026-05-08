@@ -39,6 +39,10 @@ func (t *bitchteaTool) Run(ctx context.Context, call fantasy.ToolCall) (fantasy.
 	if err != nil {
 		return fantasy.NewTextErrorResponse(fmt.Sprintf("Error: %v", err)), nil
 	}
+	// LLM-boundary cap (LOW #12 / bt-dxi): bash/read have internal
+	// truncation via truncateWithOverflow, but terminal_*, search_memory,
+	// write_memory, preview_image, edit, write don't. Final safety net here.
+	out = capLLMResult(out)
 	// Pattern 1: structured error results come back as content strings.
 	// Preserve IsError=true so the fantasy stream marks the tool call as
 	// failed and the model receives the full <tool_call_error> XML.
