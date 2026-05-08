@@ -873,9 +873,18 @@ func (a *Agent) Compact(ctx context.Context) error {
 		sb.WriteString(fmt.Sprintf("[%s]: %s\n", m.Role, truncateStr(messageText(m), 500)))
 	}
 
-	summaryMsgs := []llm.Message{
-		{Role: "user", Content: sb.String()},
+	// MED #11 (bead bt-7w6): include the active system prompt so the
+	// summarizer model has the same voice/style/rule context the agent
+	// has in normal turns. Without this the summary defaults to a
+	// generic out-of-character tone that pollutes the persona-anchored
+	// prefix when re-injected as "[Previous conversation summary]:" on
+	// resume. Empty system prompt (fresh agent, restored shape) skips
+	// the system entry — same as the legacy single-user-msg behavior.
+	summaryMsgs := []llm.Message{}
+	if sys := a.SystemPrompt(); sys != "" {
+		summaryMsgs = append(summaryMsgs, llm.Message{Role: "system", Content: sys})
 	}
+	summaryMsgs = append(summaryMsgs, llm.Message{Role: "user", Content: sb.String()})
 
 	events := make(chan llm.StreamEvent, 100)
 	go a.streamer.StreamChat(ctx, summaryMsgs, nil, events)
@@ -924,8 +933,18 @@ func (a *Agent) flushCompactedMessagesToDailyMemory(ctx context.Context, message
 		sb.WriteString(fmt.Sprintf("[%s]: %s\n", m.Role, truncateStr(messageText(m), 700)))
 	}
 
+	// MED #11 (bead bt-7w6): same rationale as Compact — give the
+	// memory-extractor model the active system prompt so the bullets it
+	// produces match the agent's voice/conventions. Skip if no system
+	// prompt is set (fresh agent, restored shape).
+	memMsgs := []llm.Message{}
+	if sys := a.SystemPrompt(); sys != "" {
+		memMsgs = append(memMsgs, llm.Message{Role: "system", Content: sys})
+	}
+	memMsgs = append(memMsgs, llm.Message{Role: "user", Content: sb.String()})
+
 	streamEvents := make(chan llm.StreamEvent, 100)
-	go a.streamer.StreamChat(ctx, []llm.Message{{Role: "user", Content: sb.String()}}, nil, streamEvents)
+	go a.streamer.StreamChat(ctx, memMsgs, nil, streamEvents)
 
 	var summary strings.Builder
 	for ev := range streamEvents {
