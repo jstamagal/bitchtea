@@ -64,6 +64,20 @@ type Config struct {
 
 	// Bare mode: skip persona, skip context files, skip persona_file.
 	Bare bool
+
+	// Effort is the Anthropic-native "output_config.effort" hint forwarded
+	// to fantasy when Service == "anthropic". Adaptive thinking is auto-
+	// attached by the fantasy anthropic provider whenever Effort is set
+	// (see charm.land/fantasy/providers/anthropic/anthropic.go ~line 324).
+	// Valid values: "low", "medium", "high", "max". Empty string means
+	// "leave unset" (provider default). "high" is the default for Opus 4.7
+	// intelligence-sensitive work.
+	Effort string
+
+	// ToolTimeout is the per-tool wall-clock limit in seconds applied to every
+	// tool that doesn't manage its own timeout (bash manages its own). Sourced
+	// from /set tool_timeout <seconds> or the .bitchtearc rc file. Default 300.
+	ToolTimeout int
 }
 
 // DefaultConfig returns a config with sane defaults
@@ -97,6 +111,9 @@ func DefaultConfig() Config {
 
 		ToolVerbosity: "normal",
 		Banner:        true,
+
+		Effort:      "high",
+		ToolTimeout: 300,
 	}
 }
 

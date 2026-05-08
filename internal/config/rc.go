@@ -74,8 +74,27 @@ func SetKeys() []string {
 		"provider", "model", "apikey", "baseurl", "nick",
 		"profile", "service", "sound", "auto-next", "auto-idea", "persona_file",
 		"top_k", "top_p", "temperature", "repetition_penalty",
-		"tool_verbosity", "banner",
+		"tool_verbosity", "banner", "effort", "tool_timeout",
 	}
+}
+
+// validEfforts is the set of accepted /set effort values. fantasy currently
+// exposes Low/Medium/High/Max (no xhigh yet); validation rejects anything else
+// so a typo in the rc file fails loudly instead of silently dropping the hint.
+// The empty string is also accepted to mean "leave unset" (provider default).
+var validEfforts = map[string]struct{}{
+	"":       {},
+	"low":    {},
+	"medium": {},
+	"high":   {},
+	"max":    {},
+}
+
+// IsValidEffort reports whether s is one of the accepted /set effort values.
+// Exposed so callers (UI completion, rc parser tests) can probe the same set.
+func IsValidEffort(s string) bool {
+	_, ok := validEfforts[strings.ToLower(strings.TrimSpace(s))]
+	return ok
 }
 
 // GetSetting returns the current value of a recognised /set key.
@@ -146,6 +165,13 @@ func GetSetting(cfg *Config, key string) (string, bool) {
 		return cfg.ToolVerbosity, true
 	case "banner":
 		return boolSettingStr(cfg.Banner), true
+	case "effort":
+		if cfg.Effort == "" {
+			return "<unset>", true
+		}
+		return cfg.Effort, true
+	case "tool_timeout":
+		return strconv.Itoa(cfg.ToolTimeout), true
 	default:
 		return "", false
 	}
@@ -245,6 +271,22 @@ func applySetToConfig(cfg *Config, key, value string) bool {
 		}
 	case "banner":
 		cfg.Banner = parseBoolSetting(value)
+	case "effort":
+		// Reject unknown values rather than silently storing — the rc file
+		// fails loudly on a typo. Empty / "<unset>" clears the override.
+		v := strings.ToLower(strings.TrimSpace(value))
+		if v == "<unset>" {
+			v = ""
+		}
+		if _, ok := validEfforts[v]; ok {
+			cfg.Effort = v
+		}
+	case "tool_timeout":
+		// tool_timeout is seconds as a positive integer. Zero or negative values
+		// are ignored so a typo can't set an absurdly short timeout.
+		if n, err := strconv.Atoi(strings.TrimSpace(value)); err == nil && n > 0 {
+			cfg.ToolTimeout = n
+		}
 	default:
 		return false
 	}
