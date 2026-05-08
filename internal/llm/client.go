@@ -63,6 +63,28 @@ type Client struct {
 	// to drain queued user prompts mid-turn. Set by the agent via
 	// SetPromptDrain before the first StreamChat call.
 	promptDrain func() []string
+
+	// Sampling params — pointer types so nil means "use provider default".
+	// Forward to fantasy.AgentOption only when the service supports them.
+	// See applySamplingParams in stream.go for per-service gating.
+	Temperature       *float64
+	TopP              *float64
+	TopK              *int
+	RepetitionPenalty *float64
+
+	// effort is the Anthropic-native output_config.effort hint forwarded to
+	// fantasy when Service == "anthropic". Empty string leaves it unset.
+	// Setting Effort auto-attaches adaptive thinking inside the fantasy
+	// anthropic provider (anthropic.go ~line 324), so this is the entire
+	// enable for adaptive reasoning at the wire level.
+	//
+	// Note: LO typically routes Opus 4.7 through CLIAPIPROXY (an
+	// OpenAI-compatible proxy) so cfg.Service == "openai" — the Anthropic
+	// branch in streamOnce will not fire for him, and no effort hint will
+	// be attached. This native wiring still belongs here for Anthropic-
+	// direct callers; a separate investigation is researching whether the
+	// proxy can benefit from a parallel forwarding path.
+	effort string
 }
 
 // NewClient builds a Client. The provider/model are not constructed until the
@@ -124,6 +146,19 @@ func (c *Client) SetBootstrapMsgCount(n int) {
 	c.BootstrapMsgCount = n
 }
 
+
+// SetSamplingParams writes all four sampling knobs atomically under the mutex.
+// Pass nil pointers to clear (unset) individual params. Does NOT invalidate the
+// cached provider — sampling params are consumed inside streamOnce.
+func (c *Client) SetSamplingParams(temp, topP *float64, topK *int, repPen *float64) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.Temperature = temp
+	c.TopP = topP
+	c.TopK = topK
+	c.RepetitionPenalty = repPen
+}
+
 // InjectLanguageModelForTesting replaces the cached LanguageModel with a
 // caller-supplied one. This is the public seam used by cross-package smoke
 // tests (e.g. internal/agent) that need a fake fantasy.LanguageModel without
@@ -145,6 +180,16 @@ func (c *Client) SetPromptDrain(fn func() []string) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.promptDrain = fn
+}
+
+// SetEffort updates the Anthropic effort hint forwarded on subsequent turns.
+// Empty string clears the hint. Cheap to call — there is no provider
+// invalidation because effort is consumed inside streamOnce, not during
+// provider construction.
+func (c *Client) SetEffort(effort string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.effort = effort
 }
 
 // SetMCPManager installs (or clears) the MCP manager whose tools will be
