@@ -264,25 +264,43 @@ func (a *Agent) ActiveToolIDs() []string {
 
 // QueuePrompt adds a user message to the prompt queue for mid-turn drain
 // via PrepareStep. Each item is timestamped so staleness can be checked
-// when draining.
+// when draining. Holds a.mu so promptQueue mutation is race-free with the
+// drainer running on fantasy's goroutine.
 func (a *Agent) QueuePrompt(text string) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
 	a.promptQueue = append(a.promptQueue, promptQueueItem{
 		text:     text,
 		queuedAt: time.Now(),
 	})
 }
 
-// QueueLen returns the number of queued prompts.
-func (a *Agent) QueueLen() int { return len(a.promptQueue) }
+// QueueLen returns the number of queued prompts (mutex-guarded).
+func (a *Agent) QueueLen() int {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return len(a.promptQueue)
+}
 
-// ClearQueue drops all queued prompts.
-func (a *Agent) ClearQueue() { a.promptQueue = nil }
+// ClearQueue drops all queued prompts (mutex-guarded).
+func (a *Agent) ClearQueue() {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.promptQueue = nil
+}
 
 // drainAndMirrorQueuedPrompts atomically drains the prompt queue and
 // mirrors each item into a.messages as a user message so session save and
 // compaction see it. Returns the drained texts for PrepareStep to append
 // to prepared.Messages.
+//
+// Runs on fantasy's goroutine via the SetPromptDrain hook, so it MUST take
+// a.mu before touching promptQueue or messages — the main goroutine writes
+// the same fields in the done handler. The contextMsgs slice header is also
+// resynced under the lock so a subsequent SetContext doesn't lose the new tail.
 func (a *Agent) drainAndMirrorQueuedPrompts() []string {
+	a.mu.Lock()
+	defer a.mu.Unlock()
 	if len(a.promptQueue) == 0 {
 		return nil
 	}
@@ -292,6 +310,9 @@ func (a *Agent) drainAndMirrorQueuedPrompts() []string {
 		a.messages = append(a.messages, newUserMessage(
 			fmt.Sprintf("[queued prompt %d]: %s", i+1, item.text),
 		))
+	}
+	if a.contextMsgs != nil && a.currentContext != "" {
+		a.contextMsgs[a.currentContext] = a.messages
 	}
 	a.promptQueue = nil
 	return texts
@@ -688,8 +709,10 @@ func injectPerMessagePrefix(msg string) string {
 	return PerMessagePrefix + "\n" + msg
 }
 
-// MessageCount returns the number of messages in the conversation
+// MessageCount returns the number of messages in the conversation (mutex-guarded).
 func (a *Agent) MessageCount() int {
+	a.mu.Lock()
+	defer a.mu.Unlock()
 	return len(a.messages)
 }
 
@@ -1124,19 +1147,23 @@ func scopeLabel(scope MemoryScope) string {
 	}
 }
 
-// SystemPrompt returns the active system prompt text.
+// SystemPrompt returns the active system prompt text (mutex-guarded).
 func (a *Agent) SystemPrompt() string {
+	a.mu.Lock()
+	defer a.mu.Unlock()
 	if len(a.messages) > 0 && a.messages[0].Role == fantasy.MessageRoleSystem {
 		return messageText(a.messages[0])
 	}
 	return ""
 }
 
-// Messages returns the current message history (for session saving). The
-// canonical in-memory shape is fantasy.Message — callers that still need
-// the legacy llm.Message form should pass through llm.FantasySliceToLLM.
+// Messages returns a snapshot of the current message history (for session
+// saving). The canonical in-memory shape is fantasy.Message — callers that
+// still need the legacy llm.Message form should pass through
+// llm.FantasySliceToLLM. Returns a copy so the caller can iterate without
+// racing against in-flight stream goroutines mutating a.messages.
 func (a *Agent) Messages() []fantasy.Message {
-	return a.messages
+	return a.snapshotMessages()
 }
 
 // BootstrapMessageCount returns how many startup-injected messages should be
