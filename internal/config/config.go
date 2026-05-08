@@ -43,6 +43,27 @@ type Config struct {
 	WorkDir    string
 	SessionDir string
 	LogDir     string
+
+	// Persona
+	PersonaFile string // Path to an external persona file; overrides the compiled-in default when set.
+
+	// Sampling params — pointer types so nil means "unset / use provider default".
+	// Per-service gating in internal/llm/stream.go skips forwarding for providers
+	// that return 400 on non-default values (Anthropic-direct).
+	TopK               *int
+	TopP               *float64
+	Temperature        *float64
+	RepetitionPenalty  *float64 // alias: repetition_penalty
+
+	// Tool verbosity controls how much detail the tool panel shows.
+	// Values: "terse", "normal" (default), "verbose"
+	ToolVerbosity string
+
+	// Banner controls whether the splash art / *** banner is shown on startup.
+	Banner bool
+
+	// Bare mode: skip persona, skip context files, skip persona_file.
+	Bare bool
 }
 
 // DefaultConfig returns a config with sane defaults
@@ -73,6 +94,9 @@ func DefaultConfig() Config {
 		WorkDir:    wd,
 		SessionDir: filepath.Join(home, ".bitchtea", "sessions"),
 		LogDir:     filepath.Join(home, ".bitchtea", "logs"),
+
+		ToolVerbosity: "normal",
+		Banner:        true,
 	}
 }
 

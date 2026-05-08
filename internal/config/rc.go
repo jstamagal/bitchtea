@@ -2,8 +2,10 @@ package config
 
 import (
 	"bufio"
+	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 )
 
@@ -70,7 +72,9 @@ func ApplySet(cfg *Config, key, value string) bool {
 func SetKeys() []string {
 	return []string{
 		"provider", "model", "apikey", "baseurl", "nick",
-		"profile", "sound", "auto-next", "auto-idea",
+		"profile", "service", "sound", "auto-next", "auto-idea", "persona_file",
+		"top_k", "top_p", "temperature", "repetition_penalty",
+		"tool_verbosity", "banner",
 	}
 }
 
@@ -99,12 +103,49 @@ func GetSetting(cfg *Config, key string) (string, bool) {
 			return "<none>", true
 		}
 		return cfg.Profile, true
+	case "service":
+		if cfg.Service == "" {
+			return "<unset>", true
+		}
+		return cfg.Service, true
 	case "sound":
 		return boolSettingStr(cfg.NotificationSound), true
 	case "auto-next":
 		return boolSettingStr(cfg.AutoNextSteps), true
 	case "auto-idea":
 		return boolSettingStr(cfg.AutoNextIdea), true
+	case "persona_file":
+		if cfg.PersonaFile == "" {
+			return "<unset>", true
+		}
+		return cfg.PersonaFile, true
+	case "top_k":
+		if cfg.TopK == nil {
+			return "<unset>", true
+		}
+		return strconv.Itoa(*cfg.TopK), true
+	case "top_p":
+		if cfg.TopP == nil {
+			return "<unset>", true
+		}
+		return fmt.Sprintf("%g", *cfg.TopP), true
+	case "temperature":
+		if cfg.Temperature == nil {
+			return "<unset>", true
+		}
+		return fmt.Sprintf("%g", *cfg.Temperature), true
+	case "repetition_penalty":
+		if cfg.RepetitionPenalty == nil {
+			return "<unset>", true
+		}
+		return fmt.Sprintf("%g", *cfg.RepetitionPenalty), true
+	case "tool_verbosity":
+		if cfg.ToolVerbosity == "" {
+			return "normal", true
+		}
+		return cfg.ToolVerbosity, true
+	case "banner":
+		return boolSettingStr(cfg.Banner), true
 	default:
 		return "", false
 	}
@@ -163,6 +204,47 @@ func applySetToConfig(cfg *Config, key, value string) bool {
 		cfg.AutoNextSteps = parseBoolSetting(value)
 	case "auto-idea":
 		cfg.AutoNextIdea = parseBoolSetting(value)
+	case "persona_file":
+		if value != "" {
+			cfg.PersonaFile = value
+		}
+	case "service":
+		if value != "" {
+			cfg.Service = value
+			// /set service is a metadata relabel — does NOT clear Profile.
+		}
+	case "top_k":
+		if value == "" || value == "<unset>" {
+			cfg.TopK = nil
+		} else if n, err := strconv.Atoi(value); err == nil {
+			cfg.TopK = &n
+		}
+	case "top_p":
+		if value == "" || value == "<unset>" {
+			cfg.TopP = nil
+		} else if f, err := strconv.ParseFloat(value, 64); err == nil {
+			cfg.TopP = &f
+		}
+	case "temperature":
+		if value == "" || value == "<unset>" {
+			cfg.Temperature = nil
+		} else if f, err := strconv.ParseFloat(value, 64); err == nil {
+			cfg.Temperature = &f
+		}
+	// rep_pen is the short alias; repetition_penalty is canonical.
+	case "rep_pen", "repetition_penalty":
+		if value == "" || value == "<unset>" {
+			cfg.RepetitionPenalty = nil
+		} else if f, err := strconv.ParseFloat(value, 64); err == nil {
+			cfg.RepetitionPenalty = &f
+		}
+	case "tool_verbosity":
+		switch value {
+		case "terse", "normal", "verbose":
+			cfg.ToolVerbosity = value
+		}
+	case "banner":
+		cfg.Banner = parseBoolSetting(value)
 	default:
 		return false
 	}

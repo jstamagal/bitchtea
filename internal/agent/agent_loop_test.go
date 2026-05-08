@@ -457,8 +457,8 @@ func TestSystemPromptHasToolRulesAndStructure(t *testing.T) {
 		}
 	}
 
-	if got := strings.Count(prompt, "TWAT TRIPLETS"); got != 1 {
-		t.Fatalf("expected exactly one persona marker in system prompt (anchor exchange tested elsewhere), got %d", got)
+	if got := strings.Count(prompt, "terminal-native coding assistant"); got != 1 {
+		t.Fatalf("expected exactly one default persona marker in system prompt (anchor exchange tested elsewhere), got %d", got)
 	}
 
 	personaIdx := strings.Index(prompt, "<persona>")
@@ -940,5 +940,50 @@ func TestCompactExactlySixMessagesNoOpWhenBootstrapOverlapsEnd(t *testing.T) {
 	}
 	if len(agent.messages) != before {
 		t.Fatalf("Compact should be no-op when bootstrapEnd > end: before=%d after=%d", before, len(agent.messages))
+	}
+}
+
+// TestPersonaFileOverridesDefault verifies that cfg.PersonaFile, when set to a
+// readable file, replaces the compiled-in personaPrompt constant in the system
+// prompt. The default marker must be absent; the custom content must be present.
+func TestPersonaFileOverridesDefault(t *testing.T) {
+	customPersona := "CUSTOM_PERSONA_CONTENT: this is a test persona file"
+
+	personaPath := filepath.Join(t.TempDir(), "persona.md")
+	if err := os.WriteFile(personaPath, []byte(customPersona), 0644); err != nil {
+		t.Fatalf("write persona file: %v", err)
+	}
+
+	cfg := config.DefaultConfig()
+	cfg.WorkDir = t.TempDir()
+	cfg.SessionDir = t.TempDir()
+	cfg.PersonaFile = personaPath
+
+	prompt := buildSystemPrompt(&cfg)
+
+	if !strings.Contains(prompt, customPersona) {
+		t.Fatalf("expected custom persona content in system prompt, not found")
+	}
+	if strings.Contains(prompt, "terminal-native coding assistant") {
+		t.Fatalf("expected default persona to be absent when PersonaFile is set")
+	}
+}
+
+// TestPersonaFileMissingFallsBackToDefault verifies that when cfg.PersonaFile
+// points to a nonexistent path, buildSystemPrompt silently falls back to the
+// compiled-in personaPrompt constant and does not crash.
+func TestPersonaFileMissingFallsBackToDefault(t *testing.T) {
+	cfg := config.DefaultConfig()
+	cfg.WorkDir = t.TempDir()
+	cfg.SessionDir = t.TempDir()
+	cfg.PersonaFile = filepath.Join(t.TempDir(), "does-not-exist.md")
+
+	prompt := buildSystemPrompt(&cfg)
+
+	if !strings.Contains(prompt, "terminal-native coding assistant") {
+		t.Fatalf("expected default persona in system prompt when PersonaFile is missing")
+	}
+	if !strings.Contains(prompt, "<persona>") {
+		t.Fatalf("expected persona XML block present even on fallback")
 	}
 }
