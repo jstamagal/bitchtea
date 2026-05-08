@@ -2,8 +2,12 @@ package llm
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"io"
 	"log"
+	"net"
+	"regexp"
 	"strings"
 	"time"
 
@@ -349,37 +353,77 @@ func (c *Client) streamOnce(ctx context.Context, msgs []Message, reg *tools.Regi
 	return nil
 }
 
+// retryableHTTPCodeRe matches transient HTTP status codes only as whole
+// numbers — substring matching produced false positives like "5029" → 502
+// in random identifier-bearing error strings.
+var retryableHTTPCodeRe = regexp.MustCompile(`\b(429|502|503|504)\b`)
+
+// retryableSingleWordRe matches single-word retry hints with word boundaries.
+// Substring matching for "timeout" / "eof" caught things like
+// "timeoutHandler" or identifiers ending in "...beof..." — neither of which
+// indicate a retryable transport-layer failure.
+var retryableSingleWordRe = regexp.MustCompile(`\b(timeout|timed out|eof)\b`)
+
+// retryablePhrases are multi-word indicators where substring matching is
+// safe — these phrases are distinctive enough not to false-match.
+var retryablePhrases = []string{
+	"rate limit", "rate_limit", "too many requests",
+	"server overloaded", "server error", "internal server error",
+	"service unavailable",
+	"connection refused", "connection reset", "broken pipe",
+	"tls handshake timeout", "tls: handshake",
+	"no such host", "dial tcp", "i/o timeout",
+	"temporary failure", "try again",
+}
+
 // isRetryable returns true when the error is likely transient and a retry
 // after backoff has a reasonable chance of succeeding.
+//
+// Resolution order:
+//  1. Explicit non-retryable sentinel: context.Canceled (user/upstream
+//     cancellation — retrying defeats the cancel intent).
+//  2. Explicit retryable sentinels: context.DeadlineExceeded, io.EOF,
+//     io.ErrUnexpectedEOF.
+//  3. Typed network errors (*net.OpError, *net.DNSError) — generally
+//     transient transport failures.
+//  4. Word-boundary regex for HTTP status codes (429/502/503/504) and for
+//     "timeout"/"eof" — replaces the previous substring matching that
+//     produced false positives.
+//  5. Substring match for multi-word retryable phrases — distinctive
+//     enough to be safe.
 func isRetryable(err error) bool {
 	if err == nil {
 		return false
 	}
-	msg := strings.ToLower(err.Error())
-
-	// Provider-level transient errors.
-	retryable := []string{
-		"rate limit", "rate_limit", "too many requests",
-		"429", "503", "502", "504",
-		"server overloaded", "server error",
-		"internal server error",
-		"service unavailable",
-		"connection refused",
-		"connection reset",
-		"broken pipe",
-		"tls handshake timeout", "tls: handshake",
-		"deadline exceeded",
-		"timed out", "timeout",
-		"eof",
-		"unexpected eof",
-		"no such host",
-		"dial tcp",
-		"i/o timeout",
-		"temporary failure",
-		"try again",
+	if errors.Is(err, context.Canceled) {
+		return false
 	}
-	for _, keyword := range retryable {
-		if strings.Contains(msg, keyword) {
+	if errors.Is(err, context.DeadlineExceeded) ||
+		errors.Is(err, io.EOF) ||
+		errors.Is(err, io.ErrUnexpectedEOF) {
+		return true
+	}
+	var opErr *net.OpError
+	if errors.As(err, &opErr) {
+		return true
+	}
+	var dnsErr *net.DNSError
+	if errors.As(err, &dnsErr) {
+		// IsNotFound = NXDOMAIN, won't help by retrying.
+		// IsTemporary = transient resolver issue, retry.
+		// IsTimeout = obvious retry candidate.
+		return dnsErr.IsTemporary || dnsErr.IsTimeout
+	}
+
+	msg := strings.ToLower(err.Error())
+	if retryableHTTPCodeRe.MatchString(msg) {
+		return true
+	}
+	if retryableSingleWordRe.MatchString(msg) {
+		return true
+	}
+	for _, phrase := range retryablePhrases {
+		if strings.Contains(msg, phrase) {
 			return true
 		}
 	}

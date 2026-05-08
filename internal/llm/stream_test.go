@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
+	"net"
 	"os"
 	"sync"
 	"testing"
@@ -639,6 +641,164 @@ func TestApplyCliproxyReasoningEffort_NoOpForOtherServices(t *testing.T) {
 		opts := applyCliproxyReasoningEffort(svc, "high", nil)
 		if len(opts) != 0 {
 			t.Errorf("service=%q: expected 0 opts, got %d", svc, len(opts))
+		}
+	}
+}
+
+// --- isRetryable ------------------------------------------------------------
+//
+// The classifier was upgraded from substring matching against a flat keyword
+// list to a tiered approach: explicit sentinel checks (errors.Is), typed
+// network errors (errors.As), word-boundary regex for HTTP codes and
+// timeout/eof, then substring matching for distinctive multi-word phrases.
+// These tests pin the new contract and the false-positives the old version
+// produced.
+
+func TestIsRetryable_NilIsFalse(t *testing.T) {
+	if isRetryable(nil) {
+		t.Fatal("isRetryable(nil) must be false")
+	}
+}
+
+func TestIsRetryable_ContextCanceledIsFalse(t *testing.T) {
+	// User cancellation must NOT trigger retries — that would defeat the
+	// cancel intent.
+	if isRetryable(context.Canceled) {
+		t.Fatal("context.Canceled must not be retryable")
+	}
+	wrapped := fmt.Errorf("upstream call: %w", context.Canceled)
+	if isRetryable(wrapped) {
+		t.Fatal("wrapped context.Canceled must not be retryable")
+	}
+}
+
+func TestIsRetryable_SentinelErrorsAreRetryable(t *testing.T) {
+	cases := []error{
+		context.DeadlineExceeded,
+		io.EOF,
+		io.ErrUnexpectedEOF,
+	}
+	for _, e := range cases {
+		if !isRetryable(e) {
+			t.Errorf("expected %v to be retryable", e)
+		}
+		if !isRetryable(fmt.Errorf("wrapped: %w", e)) {
+			t.Errorf("expected wrapped %v to be retryable", e)
+		}
+	}
+}
+
+func TestIsRetryable_NetOpErrorIsRetryable(t *testing.T) {
+	opErr := &net.OpError{Op: "dial", Net: "tcp", Err: errors.New("connection refused")}
+	if !isRetryable(opErr) {
+		t.Fatal("expected *net.OpError to be retryable")
+	}
+	if !isRetryable(fmt.Errorf("upstream: %w", opErr)) {
+		t.Fatal("expected wrapped *net.OpError to be retryable")
+	}
+}
+
+func TestIsRetryable_DNSErrorTemporaryYes_NotFoundNo(t *testing.T) {
+	// Temporary DNS failure: retry.
+	tmp := &net.DNSError{Err: "server misbehaving", Name: "api.example.com", IsTemporary: true}
+	if !isRetryable(tmp) {
+		t.Fatal("temporary DNS error must be retryable")
+	}
+	// NXDOMAIN: not retryable — the name doesn't exist.
+	nxdomain := &net.DNSError{Err: "no such host", Name: "noexist.example.com", IsNotFound: true}
+	if isRetryable(nxdomain) {
+		t.Fatal("NXDOMAIN must NOT be retryable")
+	}
+}
+
+func TestIsRetryable_HTTPCodes(t *testing.T) {
+	// True positives — exact code as a word.
+	for _, msg := range []string{
+		"upstream returned 429",
+		"got HTTP 502 Bad Gateway",
+		"503 service unavailable",
+		"server returned status 504",
+	} {
+		if !isRetryable(errors.New(msg)) {
+			t.Errorf("expected %q to be retryable", msg)
+		}
+	}
+	// False positives the old substring matcher would catch — must NOT
+	// match now.
+	for _, msg := range []string{
+		"5029 widgets failed",
+		"x4290 overflow detected",
+		"counter at 502345",
+	} {
+		if isRetryable(errors.New(msg)) {
+			t.Errorf("regression: %q must NOT be classified retryable", msg)
+		}
+	}
+}
+
+func TestIsRetryable_TimeoutAndEOFWordBoundary(t *testing.T) {
+	// True positives — actual word.
+	for _, msg := range []string{
+		"i/o timeout",
+		"request timeout exceeded",
+		"timed out reading body",
+		"unexpected eof",
+		"got eof from server",
+	} {
+		if !isRetryable(errors.New(msg)) {
+			t.Errorf("expected %q to be retryable", msg)
+		}
+	}
+	// False positives the old substring matcher would catch — must NOT
+	// match now.
+	for _, msg := range []string{
+		"timeoutHandler invoked",
+		"set timeoutMs=5000",
+		"calling timeoutMiddleware",
+		"function fooEofBar undefined",
+		"variable named beofcake declared",
+	} {
+		if isRetryable(errors.New(msg)) {
+			t.Errorf("regression: %q must NOT be classified retryable", msg)
+		}
+	}
+}
+
+func TestIsRetryable_DistinctivePhrases(t *testing.T) {
+	for _, msg := range []string{
+		"rate limit exceeded",
+		"too many requests, slow down",
+		"server overloaded, try later",
+		"internal server error",
+		"service unavailable right now",
+		"connection refused by peer",
+		"connection reset by peer",
+		"broken pipe",
+		"tls handshake timeout",
+		"tls: handshake failure",
+		"no such host: api.example.com",
+		"dial tcp 127.0.0.1:443: refused",
+		"i/o timeout",
+		"temporary failure in resolver",
+		"server says try again",
+	} {
+		if !isRetryable(errors.New(msg)) {
+			t.Errorf("expected phrase %q to be retryable", msg)
+		}
+	}
+}
+
+func TestIsRetryable_RandomErrorIsNotRetryable(t *testing.T) {
+	for _, msg := range []string{
+		"json: invalid character at position 12",
+		"missing required field",
+		"unauthorized",
+		"forbidden",
+		"validation failed: name too long",
+		"",
+	} {
+		if isRetryable(errors.New(msg)) {
+			t.Errorf("non-transient error %q must NOT be retryable", msg)
 		}
 	}
 }
