@@ -294,6 +294,14 @@ func (a *Agent) ClearQueue() {
 // compaction see it. Returns the drained texts for PrepareStep to append
 // to prepared.Messages.
 //
+// Mirrored copy in a.messages MUST be byte-identical to what PrepareStep
+// sends on the wire. Earlier code wrapped the mirror with a "[queued
+// prompt N]: " prefix while the wire got the bare text — on a subsequent
+// turn that mismatch broke prefix-cache continuity (Anthropic prefix
+// caching is byte-exact) and produced confusing replay/audit history.
+// The N counter also reset every turn, so the same drained text got a
+// different prefix across turns. Drop the prefix on both sides.
+//
 // Runs on fantasy's goroutine via the SetPromptDrain hook, so it MUST take
 // a.mu before touching promptQueue or messages — the main goroutine writes
 // the same fields in the done handler. The contextMsgs slice header is also
@@ -307,9 +315,7 @@ func (a *Agent) drainAndMirrorQueuedPrompts() []string {
 	texts := make([]string, len(a.promptQueue))
 	for i, item := range a.promptQueue {
 		texts[i] = item.text
-		a.messages = append(a.messages, newUserMessage(
-			fmt.Sprintf("[queued prompt %d]: %s", i+1, item.text),
-		))
+		a.messages = append(a.messages, newUserMessage(item.text))
 	}
 	if a.contextMsgs != nil && a.currentContext != "" {
 		a.contextMsgs[a.currentContext] = a.messages
