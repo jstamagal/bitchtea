@@ -11,21 +11,61 @@ import (
 )
 
 func TestDiscoverContextFiles(t *testing.T) {
-	// Create a directory tree with context files
+	// Create a directory tree with context files using the new preference order:
+	// BITCHTEA.md > AGENT.md > AGENTS.md > .agent.md > .agents.md
+	// CLAUDE.md is no longer in the preference list.
 	root := t.TempDir()
 	child := filepath.Join(root, "sub", "project")
 	os.MkdirAll(child, 0755)
 
 	os.WriteFile(filepath.Join(root, "AGENTS.md"), []byte("root agent rules"), 0644)
-	os.WriteFile(filepath.Join(child, "CLAUDE.md"), []byte("project claude rules"), 0644)
+	os.WriteFile(filepath.Join(child, "BITCHTEA.md"), []byte("project bitchtea rules"), 0644)
 
 	result := DiscoverContextFiles(child)
 
-	if !strings.Contains(result, "project claude rules") {
-		t.Error("missing child CLAUDE.md content")
+	if !strings.Contains(result, "project bitchtea rules") {
+		t.Error("missing child BITCHTEA.md content")
 	}
 	if !strings.Contains(result, "root agent rules") {
 		t.Error("missing root AGENTS.md content")
+	}
+}
+
+func TestDiscoverContextFilesPreferenceOrder(t *testing.T) {
+	// When both BITCHTEA.md and AGENTS.md exist in the same dir,
+	// BITCHTEA.md should win.
+	dir := t.TempDir()
+	os.WriteFile(filepath.Join(dir, "BITCHTEA.md"), []byte("bitchtea wins"), 0644)
+	os.WriteFile(filepath.Join(dir, "AGENTS.md"), []byte("agents loses"), 0644)
+
+	result := DiscoverContextFiles(dir)
+	if !strings.Contains(result, "bitchtea wins") {
+		t.Error("BITCHTEA.md should beat AGENTS.md")
+	}
+	if strings.Contains(result, "agents loses") {
+		t.Error("AGENTS.md should not be loaded when BITCHTEA.md exists in same dir")
+	}
+}
+
+func TestDiscoverContextFilesNoCLAUDE(t *testing.T) {
+	// CLAUDE.md is no longer loaded — only put it in the dir and confirm it's ignored.
+	dir := t.TempDir()
+	os.WriteFile(filepath.Join(dir, "CLAUDE.md"), []byte("claude should be ignored"), 0644)
+
+	result := DiscoverContextFiles(dir)
+	if strings.Contains(result, "claude should be ignored") {
+		t.Error("CLAUDE.md should not be loaded (not in preference list)")
+	}
+}
+
+func TestDiscoverContextFilesAgentMDFallback(t *testing.T) {
+	// AGENT.md (singular) is the second preference.
+	dir := t.TempDir()
+	os.WriteFile(filepath.Join(dir, "AGENT.md"), []byte("single agent context"), 0644)
+
+	result := DiscoverContextFiles(dir)
+	if !strings.Contains(result, "single agent context") {
+		t.Error("AGENT.md should be loaded as second preference")
 	}
 }
 

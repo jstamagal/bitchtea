@@ -228,7 +228,13 @@ func NewModel(cfg *config.Config) Model {
 		agentState:      agent.StateIdle,
 		input:           ta,
 		spinner:         sp,
-		toolPanel:       NewToolPanel(),
+		toolPanel: func() *ToolPanel {
+			tp := NewToolPanel()
+			if cfg.ToolVerbosity != "" {
+				tp.Verbosity = cfg.ToolVerbosity
+			}
+			return tp
+		}(),
 		mp3:             newMP3Controller(),
 		messages:        []ChatMessage{},
 		history:         []string{},
@@ -425,9 +431,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.config.Profile != "" {
 			providerName = m.config.Profile
 		}
-		m.addMessage(ChatMessage{Time: time.Now(), Type: MsgRaw, Content: SplashArt()})
-		m.addMessage(ChatMessage{Time: time.Now(), Type: MsgRaw, Content: SplashTagline})
-		m.addMessage(ChatMessage{Time: time.Now(), Type: MsgRaw, Content: fmt.Sprintf(ConnectMsg, providerName, m.config.Model, m.config.WorkDir)})
+		// Banner toggle: suppress splash art / *** lines when cfg.Banner is false.
+		if m.config.Banner {
+			m.addMessage(ChatMessage{Time: time.Now(), Type: MsgRaw, Content: SplashArt()})
+			m.addMessage(ChatMessage{Time: time.Now(), Type: MsgRaw, Content: SplashTagline})
+			m.addMessage(ChatMessage{Time: time.Now(), Type: MsgRaw, Content: fmt.Sprintf(ConnectMsg, providerName, m.config.Model, m.config.WorkDir)})
+		}
 
 		// Show loaded context files
 		ctxFiles := agent.DiscoverContextFiles(m.config.WorkDir)
@@ -887,7 +896,11 @@ func (m *Model) handleAgentEvent(ev agent.Event) (tea.Model, tea.Cmd) {
 			Content: fmt.Sprintf("calling %s...", ev.ToolName),
 		})
 		if m.toolPanel != nil {
-			m.toolPanel.StartTool(ev.ToolName)
+			// Sync verbosity from live config so /set tool_verbosity takes effect without restart.
+			if m.config != nil && m.config.ToolVerbosity != "" {
+				m.toolPanel.Verbosity = m.config.ToolVerbosity
+			}
+			m.toolPanel.StartTool(ev.ToolName, ev.ToolArgs)
 		}
 		m.refreshViewport()
 

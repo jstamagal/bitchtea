@@ -10,15 +10,13 @@ import (
 )
 
 // DiscoverContextFiles walks up from workDir looking for context md files.
-// Within each directory the first match in [AGENTS.md, CLAUDE.md, .agents.md,
-// .claude.md] wins — AGENTS.md is the canonical runtime-context format and
-// supersedes the legacy CLAUDE.md when both exist in the same directory.
-// Loading both was double-injection of overlapping content; this preference
-// order matches the emerging AGENTS.md standard while preserving CLAUDE.md
-// as a fallback for repos that haven't migrated yet. The walk-up still
-// composes context from parent directories normally.
+// Within each directory the first match in [BITCHTEA.md, AGENT.md, AGENTS.md,
+// .agent.md, .agents.md] wins — BITCHTEA.md is the bitchtea-native convention,
+// AGENT.md is the single-agent standard, AGENTS.md covers multi-agent format.
+// CLAUDE.md and .claude.md are intentionally excluded: bitchtea doesn't load
+// Claude-specific project files. The walk-up composes context from parent dirs.
 func DiscoverContextFiles(workDir string) string {
-	preference := []string{"AGENTS.md", "CLAUDE.md", ".agents.md", ".claude.md"}
+	preference := []string{"BITCHTEA.md", "AGENT.md", "AGENTS.md", ".agent.md", ".agents.md"}
 	var found []string
 
 	dir := workDir

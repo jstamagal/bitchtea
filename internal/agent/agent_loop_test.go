@@ -987,3 +987,55 @@ func TestPersonaFileMissingFallsBackToDefault(t *testing.T) {
 		t.Fatalf("expected persona XML block present even on fallback")
 	}
 }
+
+// TestBareModeSuppressesPersona verifies that when cfg.Bare == true,
+// buildSystemPrompt emits no <persona> block and does not load persona_file.
+func TestBareModeSuppressesPersona(t *testing.T) {
+	cfg := config.DefaultConfig()
+	cfg.WorkDir = t.TempDir()
+	cfg.SessionDir = t.TempDir()
+	cfg.Bare = true
+
+	prompt := buildSystemPrompt(&cfg)
+
+	if strings.Contains(prompt, "<persona>") {
+		t.Error("bare mode should suppress the <persona> XML block")
+	}
+	// Memory and tool rules should still be present.
+	if !strings.Contains(prompt, "<memory_workflow>") {
+		t.Error("bare mode should still include memory_workflow block")
+	}
+}
+
+// TestBareModeSuppressesContextInjection verifies that when cfg.Bare == true,
+// NewAgentWithStreamer does not inject context files or persona anchor messages.
+func TestBareModeSuppressesContextInjection(t *testing.T) {
+	dir := t.TempDir()
+	// Write a BITCHTEA.md so DiscoverContextFiles would normally pick it up.
+	if err := os.WriteFile(filepath.Join(dir, "BITCHTEA.md"), []byte("project context"), 0644); err != nil {
+		t.Fatalf("write BITCHTEA.md: %v", err)
+	}
+
+	cfg := config.DefaultConfig()
+	cfg.WorkDir = dir
+	cfg.SessionDir = t.TempDir()
+	cfg.Bare = true
+
+	streamer := &fakeStreamer{}
+	a := NewAgentWithStreamer(&cfg, streamer)
+
+	// With Bare=true, the only message in bootstrap should be the system
+	// message (index 0). No context file injection, no persona anchor.
+	if a.bootstrapMsgCount > 1 {
+		t.Errorf("bare mode: expected bootstrapMsgCount=1 (system msg only), got %d", a.bootstrapMsgCount)
+	}
+	for _, msg := range a.messages {
+		text := messageText(msg)
+		if strings.Contains(text, "project context") {
+			t.Error("bare mode should not inject BITCHTEA.md context")
+		}
+		if strings.Contains(text, "personaRehearsal") || strings.Contains(text, "Drop the task") {
+			t.Error("bare mode should not inject persona anchor")
+		}
+	}
+}

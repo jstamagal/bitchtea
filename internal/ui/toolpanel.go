@@ -14,6 +14,7 @@ const ToolPanelWidth = 28
 // ToolStatus tracks the state of a single tool call
 type ToolStatus struct {
 	Name      string
+	Args      string // tool arguments (for verbose mode)
 	Status    string // "running", "done", "error"
 	StartTime time.Time
 	Duration  time.Duration
@@ -22,11 +23,12 @@ type ToolStatus struct {
 
 // ToolPanel manages the collapsible tool sidebar
 type ToolPanel struct {
-	Visible bool
-	Tools   []ToolStatus
-	Stats   map[string]int
-	Tokens  int
-	Elapsed time.Duration
+	Visible   bool
+	Tools     []ToolStatus
+	Stats     map[string]int
+	Tokens    int
+	Elapsed   time.Duration
+	Verbosity string // "terse", "normal" (default), "verbose"
 }
 
 // NewToolPanel creates a new tool panel
@@ -37,18 +39,27 @@ func NewToolPanel() *ToolPanel {
 	}
 }
 
-// StartTool marks a tool as running
-func (p *ToolPanel) StartTool(name string) {
-	p.Tools = append(p.Tools, ToolStatus{
+// StartTool marks a tool as running. args is stored for verbose display.
+func (p *ToolPanel) StartTool(name string, args ...string) {
+	ts := ToolStatus{
 		Name:      name,
 		Status:    "running",
 		StartTime: time.Now(),
-	})
+	}
+	if len(args) > 0 {
+		ts.Args = args[0]
+	}
+	p.Tools = append(p.Tools, ts)
 	p.Stats[name]++
 }
 
-// FinishTool marks the last tool with the given name as done
+// FinishTool marks the last tool with the given name as done.
+// Result storage length depends on Verbosity: verbose=500, normal=60, terse=0.
 func (p *ToolPanel) FinishTool(name string, result string, isError bool) {
+	verbosity := p.Verbosity
+	if verbosity == "" {
+		verbosity = "normal"
+	}
 	for i := len(p.Tools) - 1; i >= 0; i-- {
 		if p.Tools[i].Name == name && p.Tools[i].Status == "running" {
 			p.Tools[i].Duration = time.Since(p.Tools[i].StartTime)
@@ -57,10 +68,20 @@ func (p *ToolPanel) FinishTool(name string, result string, isError bool) {
 			} else {
 				p.Tools[i].Status = "done"
 			}
-			if len(result) > 60 {
-				result = result[:60] + "..."
+			switch verbosity {
+			case "terse":
+				// terse: no result text stored at all
+			case "verbose":
+				if len(result) > 500 {
+					result = result[:500] + "..."
+				}
+				p.Tools[i].Result = result
+			default: // "normal"
+				if len(result) > 60 {
+					result = result[:60] + "..."
+				}
+				p.Tools[i].Result = result
 			}
-			p.Tools[i].Result = result
 			break
 		}
 	}
@@ -125,6 +146,11 @@ func (p *ToolPanel) Render(height int) string {
 			start = 0
 		}
 
+		verbosity := p.Verbosity
+		if verbosity == "" {
+			verbosity = "normal"
+		}
+
 		for _, ts := range p.Tools[start:] {
 			var icon string
 			var style lipgloss.Style
@@ -140,12 +166,30 @@ func (p *ToolPanel) Render(height int) string {
 				style = lipgloss.NewStyle().Foreground(Theme.Red)
 			}
 
-			durStr := ""
-			if ts.Duration > 0 {
-				durStr = fmt.Sprintf(" %s", ts.Duration.Truncate(time.Millisecond))
+			switch verbosity {
+			case "terse":
+				// terse: just icon + name, no duration, no result
+				lines = append(lines, style.Render(fmt.Sprintf("  %s %s", icon, ts.Name)))
+			case "verbose":
+				// verbose: icon + name + duration + args + result
+				durStr := ""
+				if ts.Duration > 0 {
+					durStr = fmt.Sprintf(" %s", ts.Duration.Truncate(time.Millisecond))
+				}
+				lines = append(lines, style.Render(fmt.Sprintf("  %s %s%s", icon, ts.Name, durStr)))
+				if ts.Args != "" {
+					lines = append(lines, fmt.Sprintf("    args: %s", ts.Args))
+				}
+				if ts.Result != "" {
+					lines = append(lines, fmt.Sprintf("    result: %s", ts.Result))
+				}
+			default: // "normal"
+				durStr := ""
+				if ts.Duration > 0 {
+					durStr = fmt.Sprintf(" %s", ts.Duration.Truncate(time.Millisecond))
+				}
+				lines = append(lines, style.Render(fmt.Sprintf("  %s %s%s", icon, ts.Name, durStr)))
 			}
-
-			lines = append(lines, style.Render(fmt.Sprintf("  %s %s%s", icon, ts.Name, durStr)))
 		}
 	}
 
