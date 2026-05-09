@@ -63,6 +63,79 @@ func TestLoadSession(t *testing.T) {
 	}
 }
 
+// TestSession_concurrentAppend verifies that concurrent Session.Append calls
+// from multiple goroutines are serialized (mutex + flock) and produce exactly
+// the expected number of valid JSONL entries, both in-memory and on-disk.
+// Must pass under -race -count=20.
+func TestSession_concurrentAppend(t *testing.T) {
+	dir := t.TempDir()
+	s, err := New(dir)
+	if err != nil {
+		t.Fatalf("new session: %v", err)
+	}
+
+	const nGoroutines = 10
+	const entriesPer = 5
+
+	var wg sync.WaitGroup
+	wg.Add(nGoroutines)
+	for g := 0; g < nGoroutines; g++ {
+		go func(gid int) {
+			defer wg.Done()
+			for i := 0; i < entriesPer; i++ {
+				entry := Entry{
+					Role:    "user",
+					Content: fmt.Sprintf("goroutine-%d-entry-%d", gid, i),
+				}
+				if err := s.Append(entry); err != nil {
+					t.Errorf("Append(g=%d, i=%d): %v", gid, i, err)
+				}
+			}
+		}(g)
+	}
+	wg.Wait()
+
+	total := nGoroutines * entriesPer
+
+	// Verify in-memory count.
+	if len(s.Entries) != total {
+		t.Fatalf("in-memory entries: got %d, want %d", len(s.Entries), total)
+	}
+
+	// Verify on-disk count and that every line is valid JSON.
+	data, err := os.ReadFile(s.Path)
+	if err != nil {
+		t.Fatalf("read session file: %v", err)
+	}
+	lines := splitLines(data)
+	if len(lines) != total {
+		t.Fatalf("on-disk lines: got %d, want %d", len(lines), total)
+	}
+	for i, line := range lines {
+		var entry Entry
+		if err := json.Unmarshal(line, &entry); err != nil {
+			t.Fatalf("line %d: invalid JSON: %v\n%s", i, err, line)
+		}
+	}
+
+	// Verify every expected content string is present.
+	for g := 0; g < nGoroutines; g++ {
+		for i := 0; i < entriesPer; i++ {
+			needle := fmt.Sprintf("goroutine-%d-entry-%d", g, i)
+			found := false
+			for _, e := range s.Entries {
+				if e.Content == needle {
+					found = true
+					break
+				}
+			}
+			if !found {
+				t.Fatalf("missing entry %q in in-memory entries", needle)
+			}
+		}
+	}
+}
+
 func TestListSessions(t *testing.T) {
 	dir := t.TempDir()
 

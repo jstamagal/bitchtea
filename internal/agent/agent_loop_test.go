@@ -1039,3 +1039,73 @@ func TestBareModeSuppressesContextInjection(t *testing.T) {
 		}
 	}
 }
+
+// TestAgent_concurrentSendMessageRejected verifies that a second concurrent
+// SendMessage call is rejected immediately with an error event while the first
+// turn is still in progress. The turnActive guard prevents data races on
+// TurnCount, ToolCalls, messages, and other per-turn mutable state.
+// Must pass under -race -count=20.
+func TestAgent_concurrentSendMessageRejected(t *testing.T) {
+	cfg := config.DefaultConfig()
+	cfg.Bare = true
+	cfg.WorkDir = t.TempDir()
+	cfg.SessionDir = t.TempDir()
+
+	// slowStreamer blocks until unblocked, simulating a long-running turn.
+	unblock := make(chan struct{})
+	slowStreamer := &fakeStreamer{
+		responses: []func(chan<- llm.StreamEvent){
+			func(events chan<- llm.StreamEvent) {
+				events <- llm.StreamEvent{Type: "text", Text: "slow reply"}
+				<-unblock // block until test signals
+				events <- llm.StreamEvent{Type: "done"}
+			},
+		},
+	}
+
+	agent := NewAgentWithStreamer(&cfg, slowStreamer)
+
+	// Start the first turn — it will block on unblock.
+	ch1 := make(chan Event, 32)
+	go agent.SendMessage(context.Background(), "first", ch1)
+
+	// Give the first turn time to acquire the guard.
+	time.Sleep(50 * time.Millisecond)
+
+	// Start the second turn concurrently — should be rejected immediately.
+	ch2 := make(chan Event, 32)
+	go agent.SendMessage(context.Background(), "second", ch2)
+
+	// Collect events from the second turn. It should emit exactly one
+	// "error" event containing "agent busy" and then close.
+	var gotBusyError bool
+	for ev := range ch2 {
+		if ev.Type == "error" && strings.Contains(ev.Error.Error(), "agent busy") {
+			gotBusyError = true
+		}
+	}
+	if !gotBusyError {
+		t.Fatal("expected second SendMessage to be rejected with 'agent busy' error")
+	}
+
+	// Unblock the first turn and drain its events.
+	close(unblock)
+	for range ch1 {
+	}
+
+	// After the first turn completes, a new turn should succeed.
+	ch3 := make(chan Event, 32)
+	go agent.SendMessage(context.Background(), "third", ch3)
+	var gotDone bool
+	for ev := range ch3 {
+		if ev.Type == "done" {
+			gotDone = true
+		}
+		if ev.Type == "error" {
+			t.Fatalf("third turn should succeed, got error: %v", ev.Error)
+		}
+	}
+	if !gotDone {
+		t.Fatal("expected third SendMessage to complete with done event")
+	}
+}

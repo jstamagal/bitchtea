@@ -10,6 +10,7 @@ import (
 	"runtime"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"charm.land/fantasy"
@@ -60,6 +61,12 @@ type Agent struct {
 	// under the lock, release, then do the long work".
 	mu       sync.Mutex
 	messages []fantasy.Message
+
+	// turnActive guards against concurrent sendMessage calls. Only one
+	// agent turn may run at a time; a second concurrent call is rejected
+	// immediately with an error event. Set at sendMessage entry, cleared
+	// on every exit path (defer).
+	turnActive atomic.Bool
 
 	// Per-context message histories. Each context gets its own conversation
 	// slice so /join and /query isolate conversations. The bootstrap prefix
@@ -340,6 +347,14 @@ func (a *Agent) drainPromptQueueSnapshot() []string {
 // rebuilt transcript (ev.Messages) into a.messages.
 func (a *Agent) sendMessage(ctx context.Context, userMsg string, kind followUpKind, events chan<- Event) {
 	defer close(events)
+
+	// Reject concurrent turns: only one sendMessage may run at a time.
+	if !a.turnActive.CompareAndSwap(false, true) {
+		events <- Event{Type: "error", Error: fmt.Errorf("agent busy: turn already in progress")}
+		return
+	}
+	defer a.turnActive.Store(false)
+
 	a.activeFollowUpKind = kind
 
 	// Pattern 2 (read-before-edit guard): clear the per-turn files-read set at

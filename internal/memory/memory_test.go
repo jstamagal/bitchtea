@@ -395,6 +395,63 @@ func mustAppendHot(t *testing.T, sessionDir, workDir string, scope Scope, when t
 	}
 }
 
+// TestAppendHot_concurrentTUIAndDaemon verifies that concurrent AppendHot
+// calls from multiple goroutines (simulating TUI + daemon writers) are
+// serialized via flock and produce no lost entries or interleaved writes.
+// Must pass under -race -count=20.
+func TestAppendHot_concurrentTUIAndDaemon(t *testing.T) {
+	sessionDir, workDir := testDirs(t)
+	scope := RootScope()
+	when := time.Date(2026, 5, 9, 10, 0, 0, 0, time.UTC)
+
+	const nWriters = 10
+	const entriesPerWriter = 5
+
+	var wg sync.WaitGroup
+	wg.Add(nWriters)
+	for w := 0; w < nWriters; w++ {
+		go func(writerID int) {
+			defer wg.Done()
+			for i := 0; i < entriesPerWriter; i++ {
+				title := fmt.Sprintf("writer-%d-entry-%d", writerID, i)
+				content := fmt.Sprintf("body from writer %d, entry %d", writerID, i)
+				if err := AppendHot(sessionDir, workDir, scope, when, title, content); err != nil {
+					t.Errorf("AppendHot(writer=%d, entry=%d): %v", writerID, i, err)
+				}
+			}
+		}(w)
+	}
+	wg.Wait()
+
+	// Read back the file and verify structure.
+	path := HotPath(sessionDir, workDir, scope)
+	data := readFile(t, path)
+	lines := strings.Split(strings.TrimRight(data, "\n"), "\n")
+
+	// Each entry is 3 lines: "## heading", content, blank line.
+	// So total lines should be nWriters * entriesPerWriter * 3 (minus trailing blank).
+	totalEntries := nWriters * entriesPerWriter
+	headings := 0
+	for _, line := range lines {
+		if strings.HasPrefix(line, "## ") {
+			headings++
+		}
+	}
+	if headings != totalEntries {
+		t.Fatalf("expected %d headings, got %d (total lines: %d)", totalEntries, headings, len(lines))
+	}
+
+	// Verify every writer's entries are present.
+	for w := 0; w < nWriters; w++ {
+		for i := 0; i < entriesPerWriter; i++ {
+			needle := fmt.Sprintf("writer-%d-entry-%d", w, i)
+			if !strings.Contains(data, needle) {
+				t.Fatalf("missing entry %q in hot memory", needle)
+			}
+		}
+	}
+}
+
 func TestSearchInScopeWhitespaceOnlyQuery(t *testing.T) {
 	sessionDir, workDir := testDirs(t)
 
