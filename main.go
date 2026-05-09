@@ -440,6 +440,7 @@ Flags:
   --prompt <text>        Prompt to send in headless mode
   --auto-next-steps      Auto-inject next-step prompts
   --auto-next-idea       Auto-generate improvement ideas
+  --bare                 Skip splash banner / startup chrome
   -h, --help             Show this help
 
 Environment:
@@ -454,42 +455,9 @@ Environment:
   BITCHTEA_CATWALK_AUTOUPDATE
                          Enable background catalog refresh (default: false)
 
-Commands (inside the TUI):
-  Core:
-    /set <key> [value]     Show/change settings
-    /profile [cmd] <name>  save/load/show/delete profiles
-    /models                Open a fuzzy model picker
-    /compact               Compact conversation context
-    /clear                 Clear chat display
-    /restart               Reset agent, start fresh
-    /copy [n]              Copy last or nth assistant response
-    /tokens                Token usage and cost estimate
-    /sessions              List saved sessions
-    /resume <number>       Resume a session by number
-    /tree                  Show session tree
-    /fork                  Fork session
-    /theme                 Show current theme
-    /help                  Show help
-    /quit                  Exit
-
-  IRC:
-    /join <#channel>       Switch focus to a channel
-    /part [#channel]       Leave a context
-    /query <nick>          Route Enter persistently to nick
-    /msg <nick> <text>     One-shot message to nick
-    /channels              List open contexts and members
-    /invite <nick>         Invite a persona
-    /kick <nick>           Kick a persona
-
-  Diagnostic:
-    /debug on|off          Toggle verbose API logging
-    /activity [clear]      Show or clear background activity
-
-  Memory:
-    /memory                Show MEMORY.md contents
-
-  Media:
-    /mp3 [cmd]             Toggle MP3 panel and player
+In-TUI commands (slash commands):
+  Run bitchtea, then type /help inside the TUI for the full reference of
+  /set, /profile, /models, /join, /msg, /memory, /mp3, /quit, and friends.
 
 Don't be a wimp. Just run it.`)
 }
