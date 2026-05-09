@@ -212,102 +212,51 @@ func (f *fakeCallStreamer) StreamChat(_ context.Context, _ []llm.Message, _ *too
 	events <- llm.StreamEvent{Type: "done"}
 }
 
-// TestQueuedMessageStaleness_60sDiscard verifies that queued messages older
-// than queueStaleThreshold (2 minutes) are discarded when the agent turn
-// finishes, and that fresh queued messages are not discarded.
-func TestQueuedMessageStaleness_60sDiscard(t *testing.T) {
+// TestQueuedMessagesAlwaysSend verifies that queued messages are sent when
+// the agent turn finishes regardless of how long they've been waiting.
+// Previously a 2-minute staleness threshold discarded old queued messages;
+// LO found that infuriating and the threshold was removed.
+func TestQueuedMessagesAlwaysSend(t *testing.T) {
 	cfg := config.DefaultConfig()
 	cfg.WorkDir = t.TempDir()
 	cfg.SessionDir = t.TempDir()
 	cfg.APIKey = "test-key"
 	cfg.Model = "test-model"
 
-	model := NewModel(&cfg)
-	model.agent = agent.NewAgentWithStreamer(&cfg, stubStreamer{})
-
-	// Ensure no stale check interferes by using a fake eventCh.
-	model.eventCh = make(chan agent.Event)
-	model.streaming = true
-
-	// Queue a message that's older than the stale threshold.
-	model.queued = []queuedMsg{
-		{text: "stale message 1", queuedAt: time.Now().Add(-3 * time.Minute)},
-		{text: "stale message 2", queuedAt: time.Now().Add(-4 * time.Minute)},
+	cases := []struct {
+		name string
+		age  time.Duration
+	}{
+		{"fresh", 0},
+		{"two minutes old", 2 * time.Minute},
+		{"ten minutes old", 10 * time.Minute},
+		{"one hour old", time.Hour},
 	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			model := NewModel(&cfg)
+			model.agent = agent.NewAgentWithStreamer(&cfg, singleReplyStreamer{text: "ack"})
+			model.eventCh = make(chan agent.Event)
+			model.streaming = true
+			model.queued = []queuedMsg{
+				{text: "queued message", queuedAt: time.Now().Add(-tc.age)},
+			}
 
-	updated, cmd := model.Update(agentDoneMsg{})
-	got := updated.(Model)
+			updated, cmd := model.Update(agentDoneMsg{})
+			got := updated.(Model)
 
-	// Should not produce a follow-up command (stale queue discarded).
-	if cmd != nil {
-		t.Fatal("expected no command when stale queue is discarded")
-	}
-
-	// Queue should be cleared.
-	if len(got.queued) != 0 {
-		t.Fatalf("expected queue to be emptied, got %d items", len(got.queued))
-	}
-
-	// Should have a discard system message.
-	if len(got.messages) == 0 {
-		t.Fatal("expected discard warning message")
-	}
-	last := got.messages[len(got.messages)-1]
-	if last.Type != MsgSystem || !strings.Contains(last.Content, "Discarded") {
-		t.Fatalf("expected discard system message, got type=%d content=%q", last.Type, last.Content)
-	}
-
-	// Verify the specific discard count in the message.
-	if !strings.Contains(last.Content, "Discarded 2") {
-		t.Fatalf("expected 'Discarded 2' in message, got %q", last.Content)
-	}
-
-	// Now test: fresh messages should not be discarded.
-	model2 := NewModel(&cfg)
-	model2.agent = agent.NewAgentWithStreamer(&cfg, singleReplyStreamer{text: "reply"})
-	model2.eventCh = make(chan agent.Event)
-	model2.streaming = true
-	model2.queued = []queuedMsg{
-		{text: "fresh message", queuedAt: time.Now()},
-	}
-
-	updated2, cmd2 := model2.Update(agentDoneMsg{})
-	got2 := updated2.(Model)
-
-	// Should produce a command to send the fresh message.
-	if cmd2 == nil {
-		t.Fatal("expected command for fresh queued message")
-	}
-
-	// Queue should be drained.
-	if len(got2.queued) != 0 {
-		t.Fatalf("expected queue to be drained, got %d", len(got2.queued))
-	}
-
-	// Should NOT have a discard message.
-	for _, msg := range got2.messages {
-		if strings.Contains(msg.Content, "Discarded") {
-			t.Fatalf("expected no discard message for fresh queue, got %q", msg.Content)
-		}
-	}
-
-	// --- Edge case: exactly at threshold boundary ---
-	model3 := NewModel(&cfg)
-	model3.agent = agent.NewAgentWithStreamer(&cfg, stubStreamer{})
-	model3.eventCh = make(chan agent.Event)
-	model3.streaming = true
-	model3.queued = []queuedMsg{
-		{text: "at boundary", queuedAt: time.Now().Add(-queueStaleThreshold - time.Second)},
-	}
-
-	updated3, cmd3 := model3.Update(agentDoneMsg{})
-	got3 := updated3.(Model)
-
-	if cmd3 != nil {
-		t.Fatal("expected no command for boundary-stale queue")
-	}
-	if len(got3.queued) != 0 {
-		t.Fatalf("expected boundary-stale queue to be cleared, got %d", len(got3.queued))
+			if cmd == nil {
+				t.Fatalf("expected send command for %s queue", tc.name)
+			}
+			if len(got.queued) != 0 {
+				t.Fatalf("expected queue to be drained, got %d", len(got.queued))
+			}
+			for _, msg := range got.messages {
+				if strings.Contains(msg.Content, "Discarded") {
+					t.Fatalf("unexpected discard message: %q", msg.Content)
+				}
+			}
+		})
 	}
 }
 
@@ -358,89 +307,6 @@ func TestSendToAgent_defaultContextGetsMainLabel(t *testing.T) {
 	if !hasMain {
 		t.Fatal("expected entries with '#main' context label for default turn")
 	}
-}
-
-// TestQueuedMessageStaleness_edgeCases tests additional queue staleness
-// scenarios: empty queue, mixed stale/fresh boundary, under threshold.
-func TestQueuedMessageStaleness_edgeCases(t *testing.T) {
-	cfg := config.DefaultConfig()
-	cfg.WorkDir = t.TempDir()
-	cfg.SessionDir = t.TempDir()
-	cfg.APIKey = "test-key"
-	cfg.Model = "test-model"
-
-	t.Run("empty queue after done is no-op", func(t *testing.T) {
-		model := NewModel(&cfg)
-		model.agent = agent.NewAgentWithStreamer(&cfg, stubStreamer{})
-		model.eventCh = make(chan agent.Event)
-		model.streaming = true
-		model.queued = nil
-
-		updated, cmd := model.Update(agentDoneMsg{})
-		got := updated.(Model)
-		if cmd != nil {
-			t.Fatal("expected no command for empty queue")
-		}
-		if len(got.queued) != 0 {
-			t.Fatal("expected queue to remain empty")
-		}
-	})
-
-	t.Run("single fresh message gets sent", func(t *testing.T) {
-		model := NewModel(&cfg)
-		model.agent = agent.NewAgentWithStreamer(&cfg, singleReplyStreamer{text: "ack"})
-		model.eventCh = make(chan agent.Event)
-		model.streaming = true
-		model.queued = []queuedMsg{{text: "only one", queuedAt: time.Now()}}
-
-		updated, cmd := model.Update(agentDoneMsg{})
-		got := updated.(Model)
-		if cmd == nil {
-			t.Fatal("expected send command for single fresh message")
-		}
-		if len(got.queued) != 0 {
-			t.Fatal("expected queue to be drained")
-		}
-	})
-
-	t.Run("queue oldest message determines staleness", func(t *testing.T) {
-		model := NewModel(&cfg)
-		model.agent = agent.NewAgentWithStreamer(&cfg, stubStreamer{})
-		model.eventCh = make(chan agent.Event)
-		model.streaming = true
-		model.queued = []queuedMsg{
-			{text: "oldest", queuedAt: time.Now().Add(-3 * time.Minute)},
-			{text: "fresher but still discarded", queuedAt: time.Now()},
-		}
-
-		updated, cmd := model.Update(agentDoneMsg{})
-		got := updated.(Model)
-		if cmd != nil {
-			t.Fatal("expected entire queue to be discarded when oldest is stale")
-		}
-		if len(got.queued) != 0 {
-			t.Fatal("expected queue to be cleared")
-		}
-	})
-
-	t.Run("just-under-threshold is not discarded", func(t *testing.T) {
-		model := NewModel(&cfg)
-		model.agent = agent.NewAgentWithStreamer(&cfg, singleReplyStreamer{text: "ok"})
-		model.eventCh = make(chan agent.Event)
-		model.streaming = true
-		model.queued = []queuedMsg{
-			{text: "close to threshold", queuedAt: time.Now().Add(-queueStaleThreshold + time.Second)},
-		}
-
-		updated, cmd := model.Update(agentDoneMsg{})
-		got := updated.(Model)
-		if cmd == nil {
-			t.Fatal("expected send command for just-under-threshold message")
-		}
-		if len(got.queued) != 0 {
-			t.Fatal("expected queue to be drained")
-		}
-	})
 }
 
 // TestContextSwitch_preservesSavedIndex verifies that per-context saved

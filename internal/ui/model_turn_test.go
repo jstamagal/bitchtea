@@ -557,13 +557,18 @@ func TestHandleAgentEventUpdatesThinkingPlaceholder(t *testing.T) {
 	}
 }
 
-func TestAgentDoneDiscardsStaleQueuedMessages(t *testing.T) {
+// TestAgentDoneSendsOldQueuedMessages confirms that queued messages always
+// get sent on turn completion, no matter how long they've been waiting.
+// (Previously a 2-minute staleness threshold discarded them.)
+func TestAgentDoneSendsOldQueuedMessages(t *testing.T) {
 	cfg := config.DefaultConfig()
 	cfg.WorkDir = t.TempDir()
 	cfg.SessionDir = t.TempDir()
+	cfg.APIKey = "test-key"
+	cfg.Model = "test-model"
 
 	model := NewModel(&cfg)
-	model.agent = agent.NewAgentWithStreamer(&cfg, stubStreamer{})
+	model.agent = agent.NewAgentWithStreamer(&cfg, singleReplyStreamer{text: "ack"})
 	model.eventCh = make(chan agent.Event)
 	model.streaming = true
 	model.queued = []queuedMsg{
@@ -574,18 +579,16 @@ func TestAgentDoneDiscardsStaleQueuedMessages(t *testing.T) {
 	updated, cmd := model.Update(agentDoneMsg{})
 	got := updated.(Model)
 
-	if cmd != nil {
-		t.Fatal("expected stale queue discard to produce no command")
+	if cmd == nil {
+		t.Fatal("expected send command for queued messages, got nil")
 	}
 	if len(got.queued) != 0 {
-		t.Fatalf("expected stale queue to be cleared, got %#v", got.queued)
+		t.Fatalf("expected queue to be drained, got %#v", got.queued)
 	}
-	if len(got.messages) == 0 {
-		t.Fatal("expected discard warning message")
-	}
-	last := got.messages[len(got.messages)-1]
-	if last.Type != MsgSystem || !strings.Contains(last.Content, "Discarded") {
-		t.Fatalf("expected discard warning, got %#v", last)
+	for _, msg := range got.messages {
+		if strings.Contains(msg.Content, "Discarded") {
+			t.Fatalf("unexpected discard message: %q", msg.Content)
+		}
 	}
 }
 

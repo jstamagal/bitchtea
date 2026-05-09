@@ -38,11 +38,6 @@ type agentDoneMsg struct {
 const (
 	escGraduationWindow   = 1500 * time.Millisecond
 	ctrlCGraduationWindow = 3 * time.Second
-
-	// queueStaleThreshold is how long queued messages can sit before they're
-	// considered stale. When the agent finishes a turn, any queue older than
-	// this is discarded rather than sent as out-of-date context.
-	queueStaleThreshold = 2 * time.Minute
 )
 
 // queuedMsg holds a message typed while the agent was busy, along with the
@@ -755,18 +750,6 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// than the threshold, the conversation has moved on and the messages are
 		// no longer useful context.
 		if len(m.queued) > 0 {
-			if time.Since(m.queued[0].queuedAt) > queueStaleThreshold {
-				cleared := len(m.queued)
-				m.queued = nil
-				m.queueClearArmed = false
-				m.addMessage(ChatMessage{
-					Time:    time.Now(),
-					Type:    MsgSystem,
-					Content: fmt.Sprintf("Discarded %d queued message(s) older than %v — context changed. Re-send if still relevant.", cleared, queueStaleThreshold),
-				})
-				m.refreshViewport()
-				return m, daemonCmd
-			}
 			var combined strings.Builder
 			for i, msg := range m.queued {
 				if i > 0 {
