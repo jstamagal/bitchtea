@@ -132,7 +132,7 @@ func handleSetCommand(m Model, input string, parts []string) (Model, tea.Cmd) {
 		sb.WriteString("Settings:\n")
 		for _, key := range config.SetKeys() {
 			value, _ := config.GetSetting(m.config, key)
-			sb.WriteString(fmt.Sprintf("  %s = %s\n", setKeyDisplay(key), value))
+			sb.WriteString(fmt.Sprintf("  Value of %s is %s\n", setKeyDisplay(key), value))
 		}
 		m.sysMsg(strings.TrimRight(sb.String(), "\n"))
 		return m, nil
@@ -151,12 +151,12 @@ func handleSetCommand(m Model, input string, parts []string) (Model, tea.Cmd) {
 		case "debug":
 			return handleDebugCommand(m, "/debug", []string{"/debug"})
 		case "provider":
-			m.sysMsg(fmt.Sprintf("%s = %s\n  available: openai, anthropic\n  set: /set provider <name>", setKeyDisplay("provider"), m.config.Provider))
+			m.sysMsg(fmt.Sprintf("Value of %s is %s\n  available: openai, anthropic\n  set: /set provider <name>", setKeyDisplay("provider"), m.config.Provider))
 			return m, nil
 		case "service":
 			names := config.ListServices()
 			cur := serviceDisplay(m.config.Service)
-			m.sysMsg(fmt.Sprintf("%s = %s\n  available: %s\n  set: /set service <name>", setKeyDisplay("service"), cur, strings.Join(names, ", ")))
+			m.sysMsg(fmt.Sprintf("Value of %s is %s\n  available: %s\n  set: /set service <name>", setKeyDisplay("service"), cur, strings.Join(names, ", ")))
 			return m, nil
 		}
 		value, ok := config.GetSetting(m.config, key)
@@ -164,7 +164,7 @@ func handleSetCommand(m Model, input string, parts []string) (Model, tea.Cmd) {
 			m.errMsg(fmt.Sprintf("Unknown setting %q. Valid keys: %s", key, strings.Join(config.SetKeys(), ", ")))
 			return m, nil
 		}
-		m.sysMsg(fmt.Sprintf("%s = %s", setKeyDisplay(key), value))
+		m.sysMsg(fmt.Sprintf("Value of %s is %s", setKeyDisplay(key), value))
 		return m, nil
 	}
 

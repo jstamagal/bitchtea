@@ -25,8 +25,8 @@ func TestSetCommandShowsSingleSetting(t *testing.T) {
 	m, _ := testModel(t)
 	result, _ := m.handleCommand("/set provider")
 	msg := lastMsg(result)
-	if !strings.Contains(msg.Content, "PROVIDER = openai") {
-		t.Errorf("expected 'PROVIDER = openai', got %q", msg.Content)
+	if !strings.Contains(msg.Content, "Value of PROVIDER is openai") {
+		t.Errorf("expected 'Value of PROVIDER is openai', got %q", msg.Content)
 	}
 }
 
@@ -142,8 +142,8 @@ func TestSetCommandMasksAPIKey(t *testing.T) {
 	if !strings.Contains(msg.Content, "sk-t...2345") {
 		t.Errorf("expected masked key, got %q", msg.Content)
 	}
-	if !strings.Contains(msg.Content, "APIKEY = ") {
-		t.Errorf("expected uppercase key label APIKEY, got %q", msg.Content)
+	if !strings.Contains(msg.Content, "Value of APIKEY is ") {
+		t.Errorf("expected 'Value of APIKEY is ' prefix, got %q", msg.Content)
 	}
 }
 
@@ -186,7 +186,7 @@ func TestSetCommandListingHasNoDuplicateService(t *testing.T) {
 
 	result, _ := m.handleCommand("/set")
 	listing := lastMsg(result).Content
-	if n := strings.Count(listing, "SERVICE = "); n != 1 {
+	if n := strings.Count(listing, "Value of SERVICE is "); n != 1 {
 		t.Errorf("bare /set listing has %d SERVICE entries, want 1: %q", n, listing)
 	}
 
@@ -204,8 +204,8 @@ func TestSetCommandShowsServiceLine(t *testing.T) {
 	m.config.Service = "openai"
 	result, _ := m.handleCommand("/set")
 	msg := lastMsg(result)
-	if !strings.Contains(msg.Content, "SERVICE = openai") {
-		t.Errorf("expected 'SERVICE = openai' in /set output, got %q", msg.Content)
+	if !strings.Contains(msg.Content, "Value of SERVICE is openai") {
+		t.Errorf("expected 'Value of SERVICE is openai' in /set output, got %q", msg.Content)
 	}
 }
 
@@ -219,8 +219,8 @@ func TestSetCommandShowsSingleService(t *testing.T) {
 	if msg.Type == MsgError {
 		t.Fatalf("unexpected error for /set service: %q", msg.Content)
 	}
-	if !strings.Contains(msg.Content, "SERVICE = ollama") {
-		t.Errorf("expected 'SERVICE = ollama', got %q", msg.Content)
+	if !strings.Contains(msg.Content, "Value of SERVICE is ollama") {
+		t.Errorf("expected 'Value of SERVICE is ollama', got %q", msg.Content)
 	}
 }
 
@@ -310,13 +310,13 @@ func TestSetCommandBitchXOutputFormat(t *testing.T) {
 	// Bare /set listing renders all keys UPPERCASE.
 	result, _ = model.handleCommand("/set")
 	msg := lastMsg(result)
-	for _, want := range []string{"PROVIDER = ", "MODEL = ", "NICK = ", "AUTO_NEXT = ", "PERSONA_FILE = ", "SERVICE = "} {
+	for _, want := range []string{"Value of PROVIDER is ", "Value of MODEL is ", "Value of NICK is ", "Value of AUTO_NEXT is ", "Value of PERSONA_FILE is ", "Value of SERVICE is "} {
 		if !strings.Contains(msg.Content, want) {
 			t.Errorf("expected %q in /set output, got %q", want, msg.Content)
 		}
 	}
 	// And NO lowercase key labels leaking through.
-	for _, leak := range []string{"provider = ", "auto-next = ", "persona_file = "} {
+	for _, leak := range []string{"Value of provider is", "Value of auto-next is", "Value of persona_file is"} {
 		if strings.Contains(msg.Content, leak) {
 			t.Errorf("unexpected lowercase key label %q in /set output: %q", leak, msg.Content)
 		}

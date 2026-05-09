@@ -42,7 +42,7 @@ func TestProviderAcceptsAnyValueVerbatim(t *testing.T) {
 		{"anthropic", "/set provider anthropic", "*** Value of PROVIDER set to anthropic.", "anthropic"},
 		{"arbitrary value", "/set provider foo", "*** Value of PROVIDER set to foo.", "foo"},
 		{"single char", "/set provider x", "*** Value of PROVIDER set to x.", "x"},
-		{"no arg shows current", "/set provider", "PROVIDER = openai", "openai"},
+		{"no arg shows current", "/set provider", "Value of PROVIDER is openai", "openai"},
 	}
 
 	for _, tt := range tests {
@@ -82,7 +82,7 @@ func TestBaseURLAcceptsAnyValueVerbatim(t *testing.T) {
 		{"no scheme", "/set baseurl api.example.com", "*** Value of BASEURL set to", "api.example.com"},
 		{"random text", "/set baseurl notaurl", "*** Value of BASEURL set to", "notaurl"},
 		{"ftp", "/set baseurl ftp://example.com", "*** Value of BASEURL set to", "ftp://example.com"},
-		{"no arg shows current", "/set baseurl", "BASEURL = https://api.openai.com/v1", "https://api.openai.com/v1"},
+		{"no arg shows current", "/set baseurl", "Value of BASEURL is https://api.openai.com/v1", "https://api.openai.com/v1"},
 	}
 
 	for _, tt := range tests {
@@ -121,7 +121,7 @@ func TestAPIKeyAcceptsAnyValueVerbatim(t *testing.T) {
 		{"single char x", "/set apikey x", "*** Value of APIKEY set to", "x"},
 		{"nine chars", "/set apikey 123456789", "*** Value of APIKEY set to", "123456789"},
 		{"ten chars", "/set apikey 1234567890", "*** Value of APIKEY set to", "1234567890"},
-		{"no arg shows current", "/set apikey", "APIKEY = sk-t...2345", "sk-test-key-12345"},
+		{"no arg shows current", "/set apikey", "Value of APIKEY is sk-t...2345", "sk-test-key-12345"},
 	}
 
 	for _, tt := range tests {
