@@ -189,6 +189,12 @@ func handleSetCommand(m Model, input string, parts []string) (Model, tea.Cmd) {
 		return m, nil
 	}
 
+	// Post-set side effects for keys that need to push the new config into
+	// the running agent. Keys not listed here had ApplySet do all the work
+	// (config-only settings: nick, sound, auto-next, auto-idea, top_k,
+	// top_p, temperature, repetition_penalty, tool_verbosity, banner,
+	// effort, tool_timeout, persona_file). They fall through to the
+	// confirmation message at the bottom.
 	switch key {
 	case "profile":
 		if m.config.Profile == "" {
@@ -199,13 +205,6 @@ func handleSetCommand(m Model, input string, parts []string) (Model, tea.Cmd) {
 		m.agent.SetModel(m.config.Model)
 		m.agent.SetBaseURL(m.config.BaseURL)
 		m.agent.SetAPIKey(m.config.APIKey)
-	case "nick":
-		// Config-only setting; no agent sync required.
-	case "sound", "auto-next", "auto-idea":
-		// Config-only settings; no agent sync required.
-	default:
-		m.errMsg(fmt.Sprintf("Unknown setting %q. Valid keys: %s", key, strings.Join(config.SetKeys(), ", ")))
-		return m, nil
 	}
 
 	display, _ := config.GetSetting(m.config, key)
