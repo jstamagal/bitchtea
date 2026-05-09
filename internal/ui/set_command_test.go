@@ -102,6 +102,43 @@ func TestSetCommandSetsBaseURL(t *testing.T) {
 	}
 }
 
+// TestSetBaseURLClobbersServiceToCustom is a regression for bt-op4:
+// after /set baseurl, both cfg.Service and the agent client's Service
+// must flip to "custom" so buildProvider routes by host, not by the
+// previous Service identity. Without this, the openrouter/vercel cases
+// in routeByService ignored the new baseurl and silently kept talking
+// to the old upstream.
+func TestSetBaseURLClobbersServiceToCustom(t *testing.T) {
+	m, _ := testModel(t)
+	m.config.Service = "openrouter"
+	m.agent.SetService("openrouter")
+
+	result, _ := m.handleCommand("/set baseurl http://127.0.0.1:8317/v1")
+	model := result.(Model)
+
+	if model.config.Service != "custom" {
+		t.Errorf("cfg.Service = %q, want \"custom\"", model.config.Service)
+	}
+}
+
+// TestSetProviderClobbersServiceToCustom is the analogous regression
+// for /set provider. Same reasoning: changing the wire format must
+// invalidate the previous Service identity so the cached provider
+// rebuilds against the new (provider, baseurl) pair instead of the
+// old service-shaped one.
+func TestSetProviderClobbersServiceToCustom(t *testing.T) {
+	m, _ := testModel(t)
+	m.config.Service = "openrouter"
+	m.agent.SetService("openrouter")
+
+	result, _ := m.handleCommand("/set provider anthropic")
+	model := result.(Model)
+
+	if model.config.Service != "custom" {
+		t.Errorf("cfg.Service = %q, want \"custom\"", model.config.Service)
+	}
+}
+
 func TestSetCommandSetsNick(t *testing.T) {
 	m, _ := testModel(t)
 	result, _ := m.handleCommand("/set nick coolguy")

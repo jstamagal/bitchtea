@@ -736,6 +736,13 @@ func handleBaseURLCommand(m Model, _ string, parts []string) (Model, tea.Cmd) {
 	url := parts[1]
 	m.agent.SetBaseURL(url)
 	m.config.BaseURL = url
+	// User pointed baseurl elsewhere; the cached Service identity is now
+	// stale. Flip both the config and the client's Service to "custom" so
+	// buildProvider routes by baseurl host, not by the previous service.
+	// Without this the openrouter/vercel cases in routeByService ignore
+	// the new baseurl and silently keep talking to the old upstream.
+	m.config.Service = "custom"
+	m.agent.SetService("custom")
 	clearLoadedProfile(&m)
 	m.sysMsg(fmt.Sprintf("%s\n  requests -> %s", setValueChangedMsg("baseurl", url), transportEndpointPreview(m.config.Provider, url)))
 	if note := providerTransportHint(m.config.Provider, url); note != "" {
@@ -771,6 +778,12 @@ func handleProviderCommand(m Model, _ string, parts []string) (Model, tea.Cmd) {
 	prov := parts[1]
 	m.config.Provider = prov
 	m.agent.SetProvider(prov)
+	// Same reasoning as handleBaseURLCommand: changing the wire format
+	// invalidates the cached Service identity. Without flipping Service to
+	// "custom", buildProvider keeps routing by the old service identity
+	// (e.g. openrouter) and the new provider value is silently dropped.
+	m.config.Service = "custom"
+	m.agent.SetService("custom")
 	clearLoadedProfile(&m)
 	m.sysMsg(fmt.Sprintf("%s\n  requests -> %s", setValueChangedMsg("provider", prov), transportEndpointPreview(prov, m.config.BaseURL)))
 	if note := providerTransportHint(prov, m.config.BaseURL); note != "" {
