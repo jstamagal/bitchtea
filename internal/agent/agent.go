@@ -430,6 +430,13 @@ func (a *Agent) sendMessage(ctx context.Context, userMsg string, kind followUpKi
 				} else {
 					a.lastTurnState = turnStateErrored
 				}
+				// bt-p6i: a turn that errored or cancelled mid-tool-call may
+				// have left assistant tool_use parts with no matching
+				// tool_result on the next message. The next API call will
+				// then 400 with "tool_use ids were found without tool_result
+				// blocks immediately after". Synthesize cancellation results
+				// for any orphans so the conversation stays valid.
+				a.sanitizeOrphanedToolUses()
 				events <- Event{Type: "state", State: StateIdle}
 				events <- Event{Type: "error", Error: ev.Error}
 				events <- Event{Type: "done"}
@@ -465,6 +472,11 @@ func (a *Agent) sendMessage(ctx context.Context, userMsg string, kind followUpKi
 				if len(appended) > 0 {
 					a.appendMessagesLocked(appended...)
 				}
+				// bt-p6i: a clean "done" can still leave orphans when a
+				// final step ends with an unanswered tool_use (e.g. step
+				// budget reached). Sanitize defensively so the next turn
+				// never inherits a wedged transcript.
+				a.sanitizeOrphanedToolUses()
 			}
 
 		case <-ctx.Done():
@@ -476,6 +488,10 @@ func (a *Agent) sendMessage(ctx context.Context, userMsg string, kind followUpKi
 				}
 			}()
 			a.lastTurnState = turnStateCanceled
+			// bt-p6i: same orphan-pruning rationale as the "error" branch
+			// above — ctrl+c during a tool call can leave dangling tool_use
+			// parts that wedge the next request.
+			a.sanitizeOrphanedToolUses()
 			events <- Event{Type: "state", State: StateIdle}
 			events <- Event{Type: "error", Error: ctx.Err()}
 			events <- Event{Type: "done"}
@@ -824,6 +840,153 @@ func (a *Agent) appendMessagesLocked(msgs ...fantasy.Message) {
 	if a.contextMsgs != nil && a.currentContext != "" {
 		a.contextMsgs[a.currentContext] = a.messages
 	}
+}
+
+// sanitizeOrphanedToolUses scrubs a.messages of any assistant tool_use
+// part whose ToolCallID has no matching tool_result in the immediately
+// following message. For each orphan it splices in a synthetic tool message
+// carrying "<error>turn cancelled</error>" so Anthropic's API constraint
+// ("tool_use ids were found without tool_result blocks immediately after")
+// is satisfied on the next request. bt-p6i.
+//
+// Why "immediately after": Anthropic's wire format pairs an assistant turn
+// with a single tool turn; tool_results may not float arbitrarily later in
+// the transcript. So we only look one message forward from each assistant
+// that carries tool_use parts. If the next message exists and is role=tool
+// (or role=user with tool_result parts on OpenAI-style transcripts), we
+// extend it; otherwise we insert a fresh tool message in between.
+//
+// Idempotent: calling on a clean transcript is a no-op. Returns the count
+// of synthetic tool_result parts inserted, useful for tests and debug logs.
+func (a *Agent) sanitizeOrphanedToolUses() int {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	inserted := sanitizeOrphanedToolUsesIn(&a.messages)
+	if inserted > 0 && a.contextMsgs != nil && a.currentContext != "" {
+		a.contextMsgs[a.currentContext] = a.messages
+	}
+	return inserted
+}
+
+// sanitizeOrphanedToolUsesIn is the pure half of sanitizeOrphanedToolUses,
+// split out for testability — it owns no locks and operates on the slice
+// pointer the caller hands it. Walks the slice once, identifies assistant
+// messages whose tool_use parts lack matching tool_result parts in the next
+// message, and either extends the next tool message or inserts a fresh one.
+func sanitizeOrphanedToolUsesIn(msgs *[]fantasy.Message) int {
+	if msgs == nil || len(*msgs) == 0 {
+		return 0
+	}
+	const cancelledMarker = "<error>turn cancelled</error>"
+	insertedTotal := 0
+
+	// Walk by index because we may insert messages mid-stream and need to
+	// skip over the synthetic tool message we just spliced in.
+	for i := 0; i < len(*msgs); i++ {
+		m := (*msgs)[i]
+		if m.Role != fantasy.MessageRoleAssistant {
+			continue
+		}
+		toolUseIDs := collectToolCallIDs(m)
+		if len(toolUseIDs) == 0 {
+			continue
+		}
+
+		// Determine which IDs already have results in the next message.
+		nextIdx := i + 1
+		var existingResults map[string]bool
+		var nextIsToolBucket bool
+		if nextIdx < len(*msgs) {
+			next := (*msgs)[nextIdx]
+			if next.Role == fantasy.MessageRoleTool || next.Role == fantasy.MessageRoleUser {
+				existingResults = collectToolResultIDs(next)
+				if len(existingResults) > 0 {
+					nextIsToolBucket = true
+				}
+			}
+		}
+
+		// Find IDs that are unmatched.
+		var orphans []string
+		for _, id := range toolUseIDs {
+			if !existingResults[id] {
+				orphans = append(orphans, id)
+			}
+		}
+		if len(orphans) == 0 {
+			continue
+		}
+
+		syntheticParts := make([]fantasy.MessagePart, 0, len(orphans))
+		for _, id := range orphans {
+			syntheticParts = append(syntheticParts, fantasy.ToolResultPart{
+				ToolCallID: id,
+				Output:     fantasy.ToolResultOutputContentText{Text: cancelledMarker},
+			})
+		}
+		insertedTotal += len(orphans)
+
+		if nextIsToolBucket {
+			// Extend the existing tool/user bucket with the missing results.
+			next := (*msgs)[nextIdx]
+			next.Content = append(next.Content, syntheticParts...)
+			(*msgs)[nextIdx] = next
+			continue
+		}
+
+		// Splice a fresh tool message right after the assistant. Use
+		// MessageRoleTool — the LLM-side adapter (FantasySliceToLLM) will
+		// project this to the wire format the active provider expects.
+		synthetic := fantasy.Message{
+			Role:    fantasy.MessageRoleTool,
+			Content: syntheticParts,
+		}
+		// Insert at nextIdx; everything from nextIdx onward shifts right.
+		*msgs = append((*msgs)[:nextIdx], append([]fantasy.Message{synthetic}, (*msgs)[nextIdx:]...)...)
+		// Skip the synthetic on the next iteration so we don't reprocess it.
+		i = nextIdx
+	}
+	return insertedTotal
+}
+
+// collectToolCallIDs returns the ToolCallID of every ToolCallPart in the
+// message's content. Order is preserved so the synthetic tool_result list
+// follows the same order as the assistant emitted the tool_use blocks.
+func collectToolCallIDs(m fantasy.Message) []string {
+	var ids []string
+	for _, part := range m.Content {
+		switch p := part.(type) {
+		case fantasy.ToolCallPart:
+			if p.ToolCallID != "" {
+				ids = append(ids, p.ToolCallID)
+			}
+		case *fantasy.ToolCallPart:
+			if p != nil && p.ToolCallID != "" {
+				ids = append(ids, p.ToolCallID)
+			}
+		}
+	}
+	return ids
+}
+
+// collectToolResultIDs returns the set of ToolCallIDs covered by
+// ToolResultParts in the message's content. Used to detect which assistant
+// tool_use IDs already have a matching result in the next message.
+func collectToolResultIDs(m fantasy.Message) map[string]bool {
+	out := make(map[string]bool)
+	for _, part := range m.Content {
+		switch p := part.(type) {
+		case fantasy.ToolResultPart:
+			if p.ToolCallID != "" {
+				out[p.ToolCallID] = true
+			}
+		case *fantasy.ToolResultPart:
+			if p != nil && p.ToolCallID != "" {
+				out[p.ToolCallID] = true
+			}
+		}
+	}
+	return out
 }
 
 // EstimateTokens returns a rough token count (chars / 4). Counts the text

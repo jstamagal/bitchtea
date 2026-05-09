@@ -245,13 +245,19 @@ func TestPhase3FollowUpSanitizationStripsDoneTokenInFantasyParts(t *testing.T) {
 	}
 
 	msgs := a.Messages()
-	if got := len(msgs); got != startLen+2 {
-		t.Fatalf("expected %d messages (user+assistant), got %d", startLen+2, got)
+	// bt-p6i: the assistant message ends with an unanswered tool_use, so
+	// the sanitizer splices a synthetic tool message right after to keep
+	// the next API call valid. Expect user + assistant + synthetic tool.
+	if got := len(msgs); got != startLen+3 {
+		t.Fatalf("expected %d messages (user+assistant+synthetic-tool), got %d", startLen+3, got)
 	}
 
-	asst := msgs[len(msgs)-1]
+	asst := msgs[len(msgs)-2]
 	if asst.Role != fantasy.MessageRoleAssistant {
-		t.Fatalf("expected last message to be assistant, got %q", asst.Role)
+		t.Fatalf("expected penultimate message to be assistant, got %q", asst.Role)
+	}
+	if synth := msgs[len(msgs)-1]; synth.Role != fantasy.MessageRoleTool {
+		t.Fatalf("expected last message to be synthetic tool result, got role=%q", synth.Role)
 	}
 	text := msgText(asst)
 	if strings.Contains(text, autoNextDoneToken) {
