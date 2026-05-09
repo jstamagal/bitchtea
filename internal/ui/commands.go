@@ -982,10 +982,16 @@ func applyProfileToModel(m *Model, name string, p *config.Profile, verbose bool)
 	config.ApplyProfile(m.config, p)
 	m.config.Profile = name
 
+	// Order matters: Service controls provider routing inside buildProvider
+	// (openai+service="cliproxyapi" → openaicompat instead of openai-direct),
+	// so push it FIRST so subsequent invalidations all rebuild against the
+	// right routing. SetAPIKey runs last so the freshly-built transport is
+	// guaranteed to carry the new key. bt-vwm.
+	m.agent.SetService(p.Service)
+	m.agent.SetProvider(p.Provider)
 	m.agent.SetModel(p.Model)
 	m.agent.SetBaseURL(p.BaseURL)
 	m.agent.SetAPIKey(p.APIKey)
-	m.agent.SetProvider(p.Provider)
 
 	masked := maskSecret(p.APIKey)
 	if verbose {

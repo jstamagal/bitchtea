@@ -766,11 +766,12 @@ func (a *Agent) SetProvider(provider string) {
 	a.client.SetProvider(provider)
 }
 
-// SetService changes the upstream service identity (cfg.Service). This is
-// what gates per-service behavior like Anthropic prompt-cache markers; the
-// wire format / dialect stays governed by Provider. Does not invalidate the
-// cached provider because Service is consumed inside PrepareStep, not during
-// provider construction.
+// SetService changes the upstream service identity (cfg.Service). Gates
+// per-service behavior (Anthropic prompt-cache markers) AND influences
+// provider routing inside buildProvider — when Provider == "openai" with
+// Service != "", the routing flips from host-based to service-based. So
+// the underlying Client.SetService MUST invalidate the cached provider so
+// the next request rebuilds against the new routing. bt-vwm.
 func (a *Agent) SetService(service string) {
 	a.config.Service = service
 	a.client.SetService(service)

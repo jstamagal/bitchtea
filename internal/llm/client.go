@@ -126,14 +126,22 @@ func (c *Client) SetProvider(provider string) {
 	c.invalidateLocked()
 }
 
-// SetService updates the upstream service identity used for per-service
-// behavior gates (e.g. Anthropic prompt-cache markers). Does not invalidate
-// the cached provider because Service is consumed inside PrepareStep, not
-// during provider construction.
+// SetService updates the upstream service identity. Service is consumed in
+// two places: (a) inside PrepareStep for per-service behavior gates (e.g.
+// Anthropic prompt-cache markers), and (b) inside buildProvider's routing
+// switch — when Provider == "openai" and Service != "", routing flips from
+// host-based (routeOpenAICompatible) to service-based (routeByService). That
+// second consumption means the cached provider was built against the old
+// service identity and will keep using the old fantasy provider package
+// until invalidated. So we MUST invalidate on SetService too — otherwise a
+// cold-start "/profile load cliproxyapi" leaves the cached openai-direct
+// provider in place and the next request bypasses the openaicompat path
+// (and its API-key handling) entirely. bt-vwm.
 func (c *Client) SetService(service string) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.Service = service
+	c.invalidateLocked()
 }
 
 // SetBootstrapMsgCount mirrors the agent's bootstrap-message count into the
