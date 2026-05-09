@@ -524,17 +524,17 @@ func (r *Registry) Execute(ctx context.Context, name string, argsJSON string) (s
 	case "terminal_start":
 		result, err = r.terminals.Start(toolCtx, argsJSON)
 	case "terminal_send":
-		result, err = r.terminals.Send(argsJSON)
+		result, err = r.terminals.Send(toolCtx, argsJSON)
 	case "terminal_keys":
-		result, err = r.terminals.Keys(argsJSON)
+		result, err = r.terminals.Keys(toolCtx, argsJSON)
 	case "terminal_snapshot":
-		result, err = r.terminals.Snapshot(argsJSON)
+		result, err = r.terminals.Snapshot(toolCtx, argsJSON)
 	case "terminal_wait":
-		result, err = r.terminals.Wait(argsJSON)
+		result, err = r.terminals.Wait(toolCtx, argsJSON)
 	case "terminal_resize":
-		result, err = r.terminals.Resize(argsJSON)
+		result, err = r.terminals.Resize(toolCtx, argsJSON)
 	case "terminal_close":
-		result, err = r.terminals.Close(argsJSON)
+		result, err = r.terminals.Close(toolCtx, argsJSON)
 	case "preview_image":
 		result, err = r.execPreviewImage(argsJSON)
 	default:

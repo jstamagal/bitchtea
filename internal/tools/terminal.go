@@ -9,6 +9,7 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
+	"syscall"
 	"time"
 
 	"github.com/charmbracelet/x/vt"
@@ -17,9 +18,19 @@ import (
 
 type terminalManager struct {
 	workDir string
-	mu      sync.Mutex
-	next    int
-	terms   map[string]*terminalSession
+	// MaxSessions caps the number of concurrent PTY sessions to prevent FD
+	// exhaustion from runaway terminal_start calls. Zero or negative means
+	// unbounded. Configurable via SET MAX_PTY_SESSIONS.
+	MaxSessions int
+	// CloseGraceTimeout is the SIGTERM-then-Kill grace window. Programs
+	// that handle SIGTERM gracefully (vim, postgres, etc.) get the chance
+	// to flush state before hard kill. Default is small (200ms) so
+	// well-behaved programs close fast and pathological ones don't hang
+	// the agent.
+	CloseGraceTimeout time.Duration
+	mu                sync.Mutex
+	next              int
+	terms             map[string]*terminalSession
 }
 
 type terminalSession struct {
@@ -51,19 +62,34 @@ type terminalSession struct {
 	closing atomic.Bool
 }
 
+// DefaultMaxPTYSessions caps concurrent PTY sessions by default. 16 is enough
+// to drive a substantial dogfooding session (vim + ssh + a couple REPLs +
+// long-running test runs) without exhausting file descriptors. Override via
+// terminalManager.MaxSessions or SET MAX_PTY_SESSIONS.
+const DefaultMaxPTYSessions = 16
+
+// DefaultCloseGraceTimeout is how long terminal_close waits between SIGTERM
+// and SIGKILL. Short enough that pathological programs don't hang the agent,
+// long enough that well-behaved programs (vim writes its swap file, postgres
+// flushes WAL) get to flush state.
+const DefaultCloseGraceTimeout = 200 * time.Millisecond
+
 func newTerminalManager(workDir string) *terminalManager {
 	return &terminalManager{
-		workDir: workDir,
-		terms:   make(map[string]*terminalSession),
+		workDir:           workDir,
+		MaxSessions:       DefaultMaxPTYSessions,
+		CloseGraceTimeout: DefaultCloseGraceTimeout,
+		terms:             make(map[string]*terminalSession),
 	}
 }
 
 func (m *terminalManager) Start(ctx context.Context, argsJSON string) (string, error) {
 	var args struct {
-		Command string `json:"command"`
-		Width   int    `json:"width"`
-		Height  int    `json:"height"`
-		DelayMS int    `json:"delay_ms"`
+		Command        string `json:"command"`
+		Width          int    `json:"width"`
+		Height         int    `json:"height"`
+		DelayMS        int    `json:"delay_ms"`
+		SourceDotfiles bool   `json:"source_dotfiles"`
 	}
 	if err := json.Unmarshal([]byte(argsJSON), &args); err != nil {
 		return "", fmt.Errorf("parse args: %w", err)
@@ -85,17 +111,39 @@ func (m *terminalManager) Start(ctx context.Context, argsJSON string) (string, e
 		return "", err
 	}
 
+	// MaxSessions cap (audit MED #4 / bt-ct6): refuse new sessions past the
+	// configured limit so a runaway terminal_start loop can't exhaust file
+	// descriptors. Zero or negative MaxSessions means unbounded.
+	if m.MaxSessions > 0 {
+		m.mu.Lock()
+		current := len(m.terms)
+		m.mu.Unlock()
+		if current >= m.MaxSessions {
+			return "", fmt.Errorf("max PTY sessions reached (%d/%d) — close existing sessions with terminal_close before starting more", current, m.MaxSessions)
+		}
+	}
+
 	pty, err := xpty.NewPty(args.Width, args.Height)
 	if err != nil {
 		return "", fmt.Errorf("create pty: %w", err)
 	}
 
 	sessionCtx, cancel := context.WithCancel(context.Background())
-	// Use bash -c (not -lc) so the shell does NOT source the user's
-	// login dotfiles (~/.bash_profile, ~/.bashrc). Sourcing them makes
-	// tool behavior depend on the host environment — aliases, exported
-	// vars, PROMPT_COMMAND, etc. — and breaks reproducibility.
-	cmd := exec.CommandContext(sessionCtx, "bash", "-c", args.Command)
+	// Shell-flag selection (audit #7 / bt-tam):
+	//   bash -c   (default): NO dotfiles sourced. Tool behavior is
+	//             reproducible regardless of the host's PATH/aliases/
+	//             PROMPT_COMMAND. Use this when the model needs predictable
+	//             behavior across machines.
+	//   bash -lc  (source_dotfiles=true): SOURCES the user's login dotfiles
+	//             (~/.bash_profile, ~/.bashrc). Required when commands depend
+	//             on user-specific PATH additions, aliases, or env vars
+	//             (e.g. `nvm use` aliases, virtualenv activations, conda
+	//             init, custom prompts). Opt in per-session when needed.
+	shellFlag := "-c"
+	if args.SourceDotfiles {
+		shellFlag = "-lc"
+	}
+	cmd := exec.CommandContext(sessionCtx, "bash", shellFlag, args.Command)
 	cmd.Dir = m.workDir
 
 	if err := pty.Start(cmd); err != nil {
@@ -165,7 +213,12 @@ func (m *terminalManager) Start(ctx context.Context, argsJSON string) (string, e
 	return session.snapshot(false), nil
 }
 
-func (m *terminalManager) Send(argsJSON string) (string, error) {
+// All Send/Keys/Snapshot/Wait/Resize/Close take ctx (audit #1, #2 / bt-al8,
+// bt-c06): the bare time.Sleep + non-cancellable polling loops were a
+// cancellation hole — Esc/Ctrl+C couldn't interrupt mid-sleep or mid-Wait.
+// Now they sleepContext on cancel and Wait selects on ctx.Done().
+
+func (m *terminalManager) Send(ctx context.Context, argsJSON string) (string, error) {
 	var args struct {
 		ID      string `json:"id"`
 		Text    string `json:"text"`
@@ -186,11 +239,11 @@ func (m *terminalManager) Send(argsJSON string) (string, error) {
 	}
 
 	session.emu.SendText(args.Text)
-	time.Sleep(time.Duration(args.DelayMS) * time.Millisecond)
+	sleepContext(ctx, time.Duration(args.DelayMS)*time.Millisecond)
 	return session.snapshot(false), nil
 }
 
-func (m *terminalManager) Keys(argsJSON string) (string, error) {
+func (m *terminalManager) Keys(ctx context.Context, argsJSON string) (string, error) {
 	var args struct {
 		ID      string   `json:"id"`
 		Keys    []string `json:"keys"`
@@ -213,22 +266,35 @@ func (m *terminalManager) Keys(argsJSON string) (string, error) {
 		return session.snapshot(false), nil
 	}
 
+	// Audit #8 / bt-9oe: validate ALL keys upfront before sending any. The
+	// previous behavior silently sent unknown key names as raw text — so
+	// `keys: ["nonexistent_key"]` against vim in insert mode would type
+	// "nonexistent_key" into the buffer. That's actively worse than a
+	// hard error because it pollutes whatever interactive program is
+	// running. Now: error out before sending anything.
 	var input strings.Builder
 	for _, key := range args.Keys {
-		input.WriteString(terminalKeyInput(key))
+		seq, ok := terminalKeyInput(key)
+		if !ok {
+			return "", fmt.Errorf("unknown key %q (valid: esc, enter, tab, backspace, delete, up/down/left/right, home, end, pageup, pagedown, space, ctrl-a..ctrl-z)", key)
+		}
+		input.WriteString(seq)
 	}
 	session.emu.SendText(input.String())
-	time.Sleep(time.Duration(args.DelayMS) * time.Millisecond)
+	sleepContext(ctx, time.Duration(args.DelayMS)*time.Millisecond)
 	return session.snapshot(false), nil
 }
 
-func (m *terminalManager) Snapshot(argsJSON string) (string, error) {
+func (m *terminalManager) Snapshot(ctx context.Context, argsJSON string) (string, error) {
 	var args struct {
 		ID   string `json:"id"`
 		ANSI bool   `json:"ansi"`
 	}
 	if err := json.Unmarshal([]byte(argsJSON), &args); err != nil {
 		return "", fmt.Errorf("parse args: %w", err)
+	}
+	if err := ctx.Err(); err != nil {
+		return "", err
 	}
 	session, err := m.get(args.ID)
 	if err != nil {
@@ -237,7 +303,7 @@ func (m *terminalManager) Snapshot(argsJSON string) (string, error) {
 	return session.snapshot(args.ANSI), nil
 }
 
-func (m *terminalManager) Wait(argsJSON string) (string, error) {
+func (m *terminalManager) Wait(ctx context.Context, argsJSON string) (string, error) {
 	var args struct {
 		ID            string `json:"id"`
 		Text          string `json:"text"`
@@ -264,7 +330,16 @@ func (m *terminalManager) Wait(argsJSON string) (string, error) {
 	}
 
 	deadline := time.Now().Add(time.Duration(args.TimeoutMS) * time.Millisecond)
+	interval := time.Duration(args.IntervalMS) * time.Millisecond
 	for {
+		// Cancellation check FIRST so Esc/Ctrl+C interrupts even if
+		// match-or-deadline would have terminated the next iteration anyway.
+		// Audit #1 / bt-al8: pre-fix Wait spun the full TimeoutMS regardless
+		// of cancellation.
+		if err := ctx.Err(); err != nil {
+			snapshot := session.snapshot(false)
+			return "wait cancelled\n" + snapshot, nil
+		}
 		snapshot := session.snapshot(false)
 		if containsTerminalText(snapshot, args.Text, args.CaseSensitive) {
 			return "matched terminal text " + fmt.Sprintf("%q", args.Text) + "\n" + snapshot, nil
@@ -275,11 +350,17 @@ func (m *terminalManager) Wait(argsJSON string) (string, error) {
 		if time.Now().After(deadline) {
 			return "timeout waiting for terminal text " + fmt.Sprintf("%q", args.Text) + "\n" + snapshot, nil
 		}
-		time.Sleep(time.Duration(args.IntervalMS) * time.Millisecond)
+		// Cancellable interval sleep — wakes immediately on ctx cancel.
+		select {
+		case <-ctx.Done():
+			snapshot := session.snapshot(false)
+			return "wait cancelled\n" + snapshot, nil
+		case <-time.After(interval):
+		}
 	}
 }
 
-func (m *terminalManager) Resize(argsJSON string) (string, error) {
+func (m *terminalManager) Resize(ctx context.Context, argsJSON string) (string, error) {
 	var args struct {
 		ID      string `json:"id"`
 		Width   int    `json:"width"`
@@ -307,11 +388,11 @@ func (m *terminalManager) Resize(argsJSON string) (string, error) {
 		return "", fmt.Errorf("resize pty: %w", err)
 	}
 	session.emu.Resize(args.Width, args.Height)
-	time.Sleep(time.Duration(args.DelayMS) * time.Millisecond)
+	sleepContext(ctx, time.Duration(args.DelayMS)*time.Millisecond)
 	return session.snapshot(false), nil
 }
 
-func (m *terminalManager) Close(argsJSON string) (string, error) {
+func (m *terminalManager) Close(ctx context.Context, argsJSON string) (string, error) {
 	var args struct {
 		ID string `json:"id"`
 	}
@@ -329,8 +410,29 @@ func (m *terminalManager) Close(argsJSON string) (string, error) {
 		return "", fmt.Errorf("unknown terminal session: %s", args.ID)
 	}
 
-	session.close()
+	session.close(m.CloseGraceTimeout)
 	return fmt.Sprintf("closed terminal session %s", args.ID), nil
+}
+
+// CloseAll terminates all live PTY sessions and removes them from the
+// registry. Called from the bitchtea shutdown path so child processes and
+// PTYs don't orphan when the agent exits. Audit #3 / bt-p20.
+func (m *terminalManager) CloseAll() {
+	m.mu.Lock()
+	sessions := make([]*terminalSession, 0, len(m.terms))
+	for id, s := range m.terms {
+		sessions = append(sessions, s)
+		delete(m.terms, id)
+	}
+	m.mu.Unlock()
+
+	// Close each session. The grace timeout still applies — programs that
+	// handle SIGTERM cleanly get the chance to flush. Closing in parallel
+	// would shave latency at the cost of more concurrent SIGTERMs hitting
+	// the kernel; sequential is fine for the typical session count.
+	for _, s := range sessions {
+		s.close(m.CloseGraceTimeout)
+	}
 }
 
 func (m *terminalManager) get(id string) (*terminalSession, error) {
@@ -356,7 +458,7 @@ func (s *terminalSession) wait() {
 	close(s.done)
 }
 
-func (s *terminalSession) close() {
+func (s *terminalSession) close(graceTimeout time.Duration) {
 	s.mu.Lock()
 	if s.closed {
 		s.mu.Unlock()
@@ -370,6 +472,24 @@ func (s *terminalSession) close() {
 	// in Start() and the closing field comment for why this ordering
 	// matters.
 	s.closing.Store(true)
+
+	// SIGTERM-then-SIGKILL grace (audit #6 / bt-0pq). Programs that handle
+	// SIGTERM cleanly (vim's swap file, postgres WAL flush, REPL history
+	// save) get the grace window to flush. Programs that ignore SIGTERM
+	// fall back to Kill after the timeout. Pre-fix went straight to Kill
+	// and lost any in-flight state. The cancel() that follows propagates
+	// to the exec.CommandContext, which itself sends SIGKILL on context
+	// cancellation — so the Kill fallback is automatic.
+	if s.cmd.Process != nil && s.running() && graceTimeout > 0 {
+		_ = s.cmd.Process.Signal(syscall.SIGTERM)
+		select {
+		case <-s.done:
+			// Process exited cleanly during grace window. cancel() below
+			// is now a no-op against the already-finished process.
+		case <-time.After(graceTimeout):
+			// Grace expired. Fall through to cancel() + Kill below.
+		}
+	}
 
 	s.cancel()
 	if s.cmd.Process != nil && s.running() {
@@ -436,49 +556,56 @@ func (s *terminalSession) snapshot(ansi bool) string {
 	return strings.TrimRight(sb.String(), "\n")
 }
 
-func terminalKeyInput(key string) string {
+// terminalKeyInput returns the escape sequence for a named key. Returns
+// (sequence, true) on a known key and ("", false) on an unknown one.
+//
+// Audit #8 / bt-9oe: pre-fix the unknown-key branch returned the literal
+// `key` string, which silently typed "nonexistent_key" into whatever
+// interactive program was running (vim insert mode would happily accept it).
+// Now Keys() validates upfront and errors before sending anything.
+func terminalKeyInput(key string) (string, bool) {
 	normalized := strings.ToLower(strings.TrimSpace(key))
 	switch normalized {
 	case "esc", "escape":
-		return "\x1b"
+		return "\x1b", true
 	case "enter", "return":
-		return "\r"
+		return "\r", true
 	case "newline", "linefeed", "lf":
-		return "\n"
+		return "\n", true
 	case "tab":
-		return "\t"
+		return "\t", true
 	case "backspace", "bs":
-		return "\x7f"
+		return "\x7f", true
 	case "delete", "del":
-		return "\x1b[3~"
+		return "\x1b[3~", true
 	case "up":
-		return "\x1b[A"
+		return "\x1b[A", true
 	case "down":
-		return "\x1b[B"
+		return "\x1b[B", true
 	case "right":
-		return "\x1b[C"
+		return "\x1b[C", true
 	case "left":
-		return "\x1b[D"
+		return "\x1b[D", true
 	case "home":
-		return "\x1b[H"
+		return "\x1b[H", true
 	case "end":
-		return "\x1b[F"
+		return "\x1b[F", true
 	case "pageup", "pgup":
-		return "\x1b[5~"
+		return "\x1b[5~", true
 	case "pagedown", "pgdown":
-		return "\x1b[6~"
+		return "\x1b[6~", true
 	case "space":
-		return " "
+		return " ", true
 	}
 
 	if strings.HasPrefix(normalized, "ctrl-") && len(normalized) == len("ctrl-a") {
 		ch := normalized[len("ctrl-")]
 		if ch >= 'a' && ch <= 'z' {
-			return string([]byte{ch - 'a' + 1})
+			return string([]byte{ch - 'a' + 1}), true
 		}
 	}
 
-	return key
+	return "", false
 }
 
 func containsTerminalText(snapshot string, text string, caseSensitive bool) bool {
