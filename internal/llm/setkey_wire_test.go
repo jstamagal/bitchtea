@@ -42,6 +42,52 @@ func TestSetAPIKeyAfterColdStartReachesWire(t *testing.T) {
 	}
 }
 
+// TestColdStartManualSetBaseURLAndAPIKey covers the manual /set path from a
+// fresh process: the client may already have a cached provider/model built
+// from empty base URL + API key, then /set baseurl and /set apikey must force
+// the next request to rebuild and carry the new Authorization header.
+func TestColdStartManualSetBaseURLAndAPIKey(t *testing.T) {
+	var lastAuth atomic.Value
+	lastAuth.Store("")
+	var hits atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hits.Add(1)
+		auth := r.Header.Get("Authorization")
+		lastAuth.Store(auth)
+		if auth != "Bearer foo" {
+			http.Error(w, "unauthorized: Missing Authentication header", http.StatusUnauthorized)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, `{"id":"x","object":"chat.completion","choices":[{"message":{"role":"assistant","content":"ok"},"finish_reason":"stop","index":0}]}`)
+	}))
+	defer srv.Close()
+
+	c := NewClient("", "", "gpt-4", "openai")
+	c.SetService("cliproxyapi")
+	if _, err := c.ensureModel(context.Background()); err != nil {
+		t.Fatalf("prime empty-key model: %v", err)
+	}
+
+	c.SetBaseURL(srv.URL)
+	c.SetAPIKey("foo")
+
+	reg := tools.NewRegistry(".", t.TempDir())
+	events := make(chan StreamEvent, 100)
+	go c.StreamChat(context.Background(), []Message{{Role: "user", Content: "hi"}}, reg, events)
+	for ev := range events {
+		if ev.Type == "error" {
+			t.Fatalf("stream error after manual SetBaseURL/SetAPIKey: %v", ev.Error)
+		}
+	}
+	if hits.Load() != 1 {
+		t.Fatalf("expected exactly one request to manual base URL, got %d", hits.Load())
+	}
+	if got := lastAuth.Load().(string); got != "Bearer foo" {
+		t.Fatalf("expected Bearer foo, got %q", got)
+	}
+}
+
 // TestSetAPIKeyMidSessionRekeysWire is the mid-session swap case. After a
 // successful first request with key A, SetAPIKey("B") must cause the next
 // request to send key B — the cached provider/transport must be discarded.
