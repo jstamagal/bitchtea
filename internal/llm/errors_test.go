@@ -2,98 +2,95 @@ package llm
 
 import (
 	"context"
+	"crypto/x509"
 	"errors"
-	"fmt"
-	"net"
-	"strings"
 	"testing"
 
 	"charm.land/fantasy"
 )
 
-func TestErrorHintNil(t *testing.T) {
-	if got := ErrorHint(nil); got != "" {
-		t.Fatalf("nil error should return empty hint, got %q", got)
+func TestFormatErrorProviderErrorStringEnvelope(t *testing.T) {
+	err := &fantasy.ProviderError{
+		StatusCode:   401,
+		URL:          "http://127.0.0.1:8317/v1/messages",
+		ResponseBody: []byte(`{"error":"Missing Authentication header"}`),
+	}
+
+	got := FormatError(err)
+	want := "401 Missing Authentication header — 127.0.0.1:8317"
+	if got != want {
+		t.Fatalf("FormatError() = %q, want %q", got, want)
 	}
 }
 
-func TestErrorHintCanceledIsSilent(t *testing.T) {
-	if got := ErrorHint(context.Canceled); got != "" {
-		t.Fatalf("context.Canceled should be silent, got %q", got)
+func TestFormatErrorProviderErrorNestedEnvelope(t *testing.T) {
+	err := &fantasy.ProviderError{
+		StatusCode:   400,
+		URL:          "http://127.0.0.1:8317/v1/messages",
+		ResponseBody: []byte(`{"error":{"message":"claude-opus-4-7 is not a valid model ID","type":"invalid_request_error"}}`),
+	}
+
+	got := FormatError(err)
+	want := "400 claude-opus-4-7 is not a valid model ID — 127.0.0.1:8317"
+	if got != want {
+		t.Fatalf("FormatError() = %q, want %q", got, want)
 	}
 }
 
-func TestErrorHintProviderStatusCodes(t *testing.T) {
+func TestFormatErrorTransportNumerics(t *testing.T) {
 	cases := []struct {
-		status   int
-		contains string
+		name string
+		err  error
+		want string
 	}{
-		{401, "auth"},
-		{403, "access"},
-		{404, "model not found"},
-		{408, "timeout"},
-		{429, "rate"},
-		{500, "provider error"},
-		{503, "provider error"},
+		{
+			name: "connection refused",
+			err:  errors.New("dial tcp 127.0.0.1:8317: connect: connection refused"),
+			want: "601 dial tcp 127.0.0.1:8317: connect: connection refused",
+		},
+		{
+			name: "dns",
+			err:  errors.New("dial tcp: lookup api.example.invalid: no such host"),
+			want: "602 dial tcp: lookup api.example.invalid: no such host",
+		},
+		{
+			name: "tls",
+			err:  &x509.UnknownAuthorityError{},
+			want: "603 x509: certificate signed by unknown authority",
+		},
+		{
+			name: "timeout",
+			err:  context.DeadlineExceeded,
+			want: "604 context deadline exceeded",
+		},
 	}
-	for _, c := range cases {
-		err := &fantasy.ProviderError{StatusCode: c.status, Message: "boom"}
-		got := ErrorHint(err)
-		if !strings.Contains(strings.ToLower(got), c.contains) {
-			t.Errorf("status %d: expected hint containing %q, got %q", c.status, c.contains, got)
-		}
+
+	for _, tt := range cases {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := FormatError(tt.err); got != tt.want {
+				t.Fatalf("FormatError() = %q, want %q", got, tt.want)
+			}
+		})
 	}
 }
 
-func TestErrorHintContextTooLargeBeatsStatus(t *testing.T) {
+func TestFormatErrorContextTooLarge(t *testing.T) {
 	err := &fantasy.ProviderError{
 		StatusCode:         400,
+		ContextUsedTokens:  210000,
+		ContextMaxTokens:   200000,
 		ContextTooLargeErr: true,
 	}
-	got := ErrorHint(err)
-	if !strings.Contains(got, "/compact") {
-		t.Fatalf("expected context-too-large hint mentioning /compact, got %q", got)
+
+	got := FormatError(err)
+	want := "605 context too large (210000/200000 tokens) — try /compact"
+	if got != want {
+		t.Fatalf("FormatError() = %q, want %q", got, want)
 	}
 }
 
-func TestErrorHintProviderErrorWrapped(t *testing.T) {
-	pe := &fantasy.ProviderError{StatusCode: 429, Message: "limited"}
-	wrapped := fmt.Errorf("during stream: %w", pe)
-	got := ErrorHint(wrapped)
-	if !strings.Contains(got, "rate") {
-		t.Fatalf("wrapped ProviderError should still match by errors.As, got %q", got)
-	}
-}
-
-func TestErrorHintDialError(t *testing.T) {
-	err := &net.OpError{Op: "dial", Err: errors.New("connection refused")}
-	got := ErrorHint(err)
-	if !strings.Contains(got, "running") {
-		t.Fatalf("dial error should hint about server running, got %q", got)
-	}
-}
-
-func TestErrorHintMessageFallbacks(t *testing.T) {
-	cases := []struct {
-		err      error
-		contains string
-	}{
-		{errors.New("dial tcp: lookup api.example.com: no such host"), "DNS"},
-		{errors.New("connection refused"), "refused"},
-		{errors.New("x509: certificate signed by unknown authority"), "TLS"},
-		{errors.New("context deadline exceeded"), "timed out"},
-		{errors.New("operation timed out"), "timed out"},
-	}
-	for _, c := range cases {
-		got := ErrorHint(c.err)
-		if !strings.Contains(got, c.contains) {
-			t.Errorf("err %q: expected hint containing %q, got %q", c.err, c.contains, got)
-		}
-	}
-}
-
-func TestErrorHintUnknownIsEmpty(t *testing.T) {
-	if got := ErrorHint(errors.New("entirely opaque failure mode")); got != "" {
-		t.Fatalf("unknown error should produce no hint, got %q", got)
+func TestFormatErrorCanceledIsSilent(t *testing.T) {
+	if got := FormatError(context.Canceled); got != "" {
+		t.Fatalf("FormatError(context.Canceled) = %q, want empty string", got)
 	}
 }
