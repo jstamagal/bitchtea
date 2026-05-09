@@ -947,9 +947,15 @@ func (m *Model) handleAgentEvent(ev agent.Event) (tea.Model, tea.Cmd) {
 	case "error":
 		m.activeToolName = ""
 		m.activeToolCallID = ""
-		errText := fmt.Sprintf("Error: %v", ev.Error)
-		if hint := llm.ErrorHint(ev.Error); hint != "" {
-			errText += "\n  hint: " + hint
+		errText := llm.FormatError(ev.Error)
+		if errText == "" {
+			// Silent error (cancelled). Skip rendering entirely.
+			return m, nil
+		}
+		if m.debugMode {
+			if detail := llm.ErrorDetail(ev.Error); detail != "" {
+				errText += "\n" + detail
+			}
 		}
 		m.addMessage(ChatMessage{
 			Time:    time.Now(),

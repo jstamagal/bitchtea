@@ -152,6 +152,8 @@ func handleSetCommand(m Model, input string, parts []string) (Model, tea.Cmd) {
 			return handleModelsCommand(m, "/models", []string{"/models"})
 		case "profile":
 			return handleProfileCommand(m, "/profile", []string{"/profile"})
+		case "debug":
+			return handleDebugCommand(m, "/debug", []string{"/debug"})
 		case "provider":
 			m.sysMsg(fmt.Sprintf("provider = %s\n  available: openai, anthropic\n  set: /set provider <name>", m.config.Provider))
 			return m, nil
@@ -182,6 +184,8 @@ func handleSetCommand(m Model, input string, parts []string) (Model, tea.Cmd) {
 		return handleAPIKeyCommand(m, "/apikey "+value, []string{"/apikey", value})
 	case "service":
 		return handleServiceSet(m, value)
+	case "debug":
+		return handleDebugCommand(m, "/debug "+value, []string{"/debug", value})
 	}
 
 	if !config.ApplySet(m.config, key, value) {

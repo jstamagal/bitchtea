@@ -418,6 +418,9 @@ func TestDebugCommand(t *testing.T) {
 		{"debug off", "/debug off", false, "Debug mode: OFF"},
 		{"debug no arg shows status", "/debug", false, "Debug mode: OFF"},
 		{"debug invalid arg", "/debug maybe", true, "/debug on|off"},
+		{"set debug on", "/set debug on", false, "Debug mode: ON"},
+		{"set debug off", "/set debug off", false, "Debug mode: OFF"},
+		{"set debug no arg shows status", "/set debug", false, "Debug mode: OFF"},
 	}
 
 	for _, tt := range tests {
@@ -446,18 +449,18 @@ func TestDebugModeToggle(t *testing.T) {
 		t.Error("debug mode should be off by default")
 	}
 
-	// Turn on
-	result, _ := m.handleCommand("/debug on")
+	// Turn on through the SET-key surface.
+	result, _ := m.handleCommand("/set debug on")
 	model := result.(Model)
 	if !model.debugMode {
-		t.Error("debug mode should be on after /debug on")
+		t.Error("debug mode should be on after /set debug on")
 	}
 
-	// Turn off
-	result, _ = model.handleCommand("/debug off")
+	// Turn off through the SET-key surface.
+	result, _ = model.handleCommand("/set debug off")
 	model = result.(Model)
 	if model.debugMode {
-		t.Error("debug mode should be off after /debug off")
+		t.Error("debug mode should be off after /set debug off")
 	}
 }
 
