@@ -14,7 +14,7 @@ import (
 	"time"
 )
 
-// Integration coverage for bt-p7-verify. The end-to-end subprocess smoke
+// Integration coverage for the daemon. The end-to-end subprocess smoke
 // lives in e2e_test.go; this file holds the in-process failure-mode tests:
 //
 //   - stale lock recovery (kernel-released lock + stale pid file)

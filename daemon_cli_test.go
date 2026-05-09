@@ -6,9 +6,9 @@ import (
 	"testing"
 )
 
-// TestDaemonStatusReportsNotRunning is the smoke test required by bt-p7-cli's
-// acceptance criteria: with a fresh HOME (no daemon ever started), `bitchtea
-// daemon status` must print "not running" and exit 0.
+// TestDaemonStatusReportsNotRunning is the smoke test for the daemon CLI:
+// with a fresh HOME (no daemon ever started), `bitchtea daemon status` must
+// print "not running" and exit 0.
 func TestDaemonStatusReportsNotRunning(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 

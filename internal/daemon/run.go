@@ -38,8 +38,8 @@ type RunOptions struct {
 // arrives or ctx is canceled. It returns ErrLocked if another daemon is
 // already running.
 //
-// This is a scaffold: the run loop fails any job it discovers because no
-// handler is registered. Real handlers land in bt-p7-session-jobs.
+// When Dispatch is nil (legacy callers, or scaffold tests), every job is
+// failed with "no handler registered". Real callers pass jobs.Handle.
 func Run(ctx context.Context, opts RunOptions) error {
 	if opts.BaseDir == "" {
 		return fmt.Errorf("daemon: RunOptions.BaseDir is required")
@@ -109,8 +109,8 @@ func Run(ctx context.Context, opts RunOptions) error {
 
 	// Process anything sitting in mail/ at startup (post-recovery), then enter
 	// the poll loop. The combined fsnotify+5s-poll setup from the design is
-	// future work — bt-p7-cli ships the simpler poll-only variant. Real-time
-	// notification is a wakeup-cost optimization, not a correctness one.
+	// future work — the current variant uses poll-only. Real-time notification
+	// is a wakeup-cost optimization, not a correctness one.
 	processOnce(loopCtx, mailbox, logger, opts.Dispatch)
 
 	for {
@@ -133,8 +133,8 @@ func Run(ctx context.Context, opts RunOptions) error {
 // the diagnostic in Result.Error.
 //
 // When opts.Dispatch is nil (legacy callers, or the scaffold tests),
-// every job is failed with "no handler registered" — preserving the
-// pre-bt-p7-session-jobs behavior. When Dispatch is non-nil but returns
+// every job is failed with "no handler registered" — preserved so older
+// callers keep their semantics. When Dispatch is non-nil but returns
 // an error Result with a "no handler" message, the job is also moved to
 // failed/ so the on-disk distinction between "ran and failed" and "never
 // had a handler" survives.
@@ -152,7 +152,7 @@ func processOnce(ctx context.Context, mailbox *Mailbox, logger *log.Logger, disp
 	}
 	for _, j := range jobs {
 		if dispatch == nil {
-			reason := fmt.Sprintf("no handler registered for kind=%q (bt-p7-session-jobs)", j.Kind)
+			reason := fmt.Sprintf("no handler registered for kind=%q", j.Kind)
 			logger.Printf("rejecting job %s: %s", j.ID, reason)
 			if err := mailbox.Fail(j.ID, reason); err != nil {
 				logger.Printf("move job %s to failed/: %v", j.ID, err)
@@ -186,10 +186,11 @@ func processOnce(ctx context.Context, mailbox *Mailbox, logger *log.Logger, disp
 	}
 }
 
-// drainShutdown is a placeholder: with no handlers running, there is nothing
-// to drain. When bt-p7-session-jobs lands in-flight handler tracking, this
-// is where it waits up to DrainBudget for them to finish, then moves any
-// stragglers to failed/ with reason "shutdown deadline".
+// drainShutdown waits for in-flight handlers to finish within the DrainBudget.
+// With no long-running handlers currently registered, drain is a no-op. When
+// in-flight handler tracking is added, this is where it waits up to DrainBudget
+// for them to finish, then moves any stragglers to failed/ with reason
+// "shutdown deadline".
 func drainShutdown(_ context.Context, _ *Mailbox, logger *log.Logger) {
 	logger.Printf("drain complete (no in-flight handlers in scaffold build)")
 }

@@ -14,8 +14,8 @@ import (
 
 // TestRunRejectsJobsWithoutHandler verifies the scaffold behavior: any job
 // that lands in mail/ during a Run should be moved to failed/ with the
-// "no handler" reason. When bt-p7-session-jobs lands real handlers, this
-// test will need to grow a registry assertion.
+// "no handler" reason. If real handlers are registered via Dispatch,
+// this test will need to grow a registry assertion.
 func TestRunRejectsJobsWithoutHandler(t *testing.T) {
 	base := t.TempDir()
 	mb := New(base)

@@ -14,8 +14,8 @@ import (
 
 // Scope mirrors the agent's MemoryScope without importing it. The daemon
 // process is forbidden from depending on internal/agent (see CLAUDE.md acyclic
-// dep graph), so we re-declare the wire shape here. Job handlers (landing in
-// bt-p7-session-jobs) are responsible for translating this into an in-process
+// dep graph), so we re-declare the wire shape here. Job handlers (in
+// internal/daemon/jobs) are responsible for translating this into an in-process
 // scope value when they need one.
 type Scope struct {
 	Kind string `json:"kind"`           // "root" | "channel" | "query"

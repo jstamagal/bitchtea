@@ -8,7 +8,7 @@
 // internal/agent, internal/llm, or internal/ui. Handlers re-derive whatever
 // in-process state they need from the on-disk envelope alone.
 //
-// Acceptance contract for any handler added here (bt-p7-session-jobs):
+// Acceptance contract for any handler registered here:
 //   - Idempotent: running the same envelope twice produces the same final
 //     on-disk state.
 //   - Bounded: the handler installs its own context.WithTimeout so a single
