@@ -198,7 +198,7 @@ func TestModelsCommandPickerSelectionInvokesSetModel(t *testing.T) {
 	if finalModel.config.Profile != "" {
 		t.Errorf("expected loaded profile tag cleared, got %q", finalModel.config.Profile)
 	}
-	if !strings.Contains(allMsgText(finalModel), "Model switched to: "+want) {
+	if !strings.Contains(allMsgText(finalModel), "*** Value of MODEL set to "+want+".") {
 		t.Errorf("expected confirmation message, got %q", allMsgText(finalModel))
 	}
 }

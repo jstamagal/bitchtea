@@ -38,11 +38,11 @@ func TestProviderAcceptsAnyValueVerbatim(t *testing.T) {
 		wantContain string
 		wantStored  string
 	}{
-		{"openai", "/set provider openai", "Provider set to: openai", "openai"},
-		{"anthropic", "/set provider anthropic", "Provider set to: anthropic", "anthropic"},
-		{"arbitrary value", "/set provider foo", "Provider set to: foo", "foo"},
-		{"single char", "/set provider x", "Provider set to: x", "x"},
-		{"no arg shows current", "/set provider", "provider = openai", "openai"},
+		{"openai", "/set provider openai", "*** Value of PROVIDER set to openai.", "openai"},
+		{"anthropic", "/set provider anthropic", "*** Value of PROVIDER set to anthropic.", "anthropic"},
+		{"arbitrary value", "/set provider foo", "*** Value of PROVIDER set to foo.", "foo"},
+		{"single char", "/set provider x", "*** Value of PROVIDER set to x.", "x"},
+		{"no arg shows current", "/set provider", "PROVIDER = openai", "openai"},
 	}
 
 	for _, tt := range tests {
@@ -77,12 +77,12 @@ func TestBaseURLAcceptsAnyValueVerbatim(t *testing.T) {
 		wantContain string
 		wantStored  string
 	}{
-		{"https", "/set baseurl https://api.example.com/v1", "Base URL set to", "https://api.example.com/v1"},
-		{"http", "/set baseurl http://localhost:8080", "Base URL set to", "http://localhost:8080"},
-		{"no scheme", "/set baseurl api.example.com", "Base URL set to", "api.example.com"},
-		{"random text", "/set baseurl notaurl", "Base URL set to", "notaurl"},
-		{"ftp", "/set baseurl ftp://example.com", "Base URL set to", "ftp://example.com"},
-		{"no arg shows current", "/set baseurl", "baseurl = https://api.openai.com/v1", "https://api.openai.com/v1"},
+		{"https", "/set baseurl https://api.example.com/v1", "*** Value of BASEURL set to", "https://api.example.com/v1"},
+		{"http", "/set baseurl http://localhost:8080", "*** Value of BASEURL set to", "http://localhost:8080"},
+		{"no scheme", "/set baseurl api.example.com", "*** Value of BASEURL set to", "api.example.com"},
+		{"random text", "/set baseurl notaurl", "*** Value of BASEURL set to", "notaurl"},
+		{"ftp", "/set baseurl ftp://example.com", "*** Value of BASEURL set to", "ftp://example.com"},
+		{"no arg shows current", "/set baseurl", "BASEURL = https://api.openai.com/v1", "https://api.openai.com/v1"},
 	}
 
 	for _, tt := range tests {
@@ -117,11 +117,11 @@ func TestAPIKeyAcceptsAnyValueVerbatim(t *testing.T) {
 		wantContain string
 		wantStored  string
 	}{
-		{"long key", "/set apikey sk-1234567890abcdef", "API key set", "sk-1234567890abcdef"},
-		{"single char x", "/set apikey x", "API key set", "x"},
-		{"nine chars", "/set apikey 123456789", "API key set", "123456789"},
-		{"ten chars", "/set apikey 1234567890", "API key set", "1234567890"},
-		{"no arg shows current", "/set apikey", "apikey = sk-t...2345", "sk-test-key-12345"},
+		{"long key", "/set apikey sk-1234567890abcdef", "*** Value of APIKEY set to", "sk-1234567890abcdef"},
+		{"single char x", "/set apikey x", "*** Value of APIKEY set to", "x"},
+		{"nine chars", "/set apikey 123456789", "*** Value of APIKEY set to", "123456789"},
+		{"ten chars", "/set apikey 1234567890", "*** Value of APIKEY set to", "1234567890"},
+		{"no arg shows current", "/set apikey", "APIKEY = sk-t...2345", "sk-test-key-12345"},
 	}
 
 	for _, tt := range tests {
@@ -150,10 +150,10 @@ func TestModelAcceptsAnyValueVerbatim(t *testing.T) {
 		wantContain string
 		wantStored  string
 	}{
-		{"gpt-4o", "/set model gpt-4o", "Model switched to", "gpt-4o"},
-		{"claude-3.5-sonnet", "/set model claude-3.5-sonnet", "Model switched to", "claude-3.5-sonnet"},
-		{"single char x", "/set model x", "Model switched to", "x"},
-		{"no dot or dash", "/set model foobar", "Model switched to", "foobar"},
+		{"gpt-4o", "/set model gpt-4o", "*** Value of MODEL set to gpt-4o.", "gpt-4o"},
+		{"claude-3.5-sonnet", "/set model claude-3.5-sonnet", "*** Value of MODEL set to claude-3.5-sonnet.", "claude-3.5-sonnet"},
+		{"single char x", "/set model x", "*** Value of MODEL set to x.", "x"},
+		{"no dot or dash", "/set model foobar", "*** Value of MODEL set to foobar.", "foobar"},
 	}
 
 	for _, tt := range tests {

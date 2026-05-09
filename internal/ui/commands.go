@@ -132,12 +132,12 @@ func handleSetCommand(m Model, input string, parts []string) (Model, tea.Cmd) {
 		sb.WriteString("Settings:\n")
 		for _, key := range config.SetKeys() {
 			value, _ := config.GetSetting(m.config, key)
-			sb.WriteString(fmt.Sprintf("  %s = %s\n", key, value))
+			sb.WriteString(fmt.Sprintf("  %s = %s\n", setKeyDisplay(key), value))
 		}
 		// Service is the upstream identity (openai, ollama, openrouter, ...)
 		// distinct from Provider (wire format). Surfaced here so users can see
 		// what per-service gates will fire. See docs/phase-9-service-identity.md.
-		sb.WriteString(fmt.Sprintf("  service = %s\n", serviceDisplay(m.config.Service)))
+		sb.WriteString(fmt.Sprintf("  %s = %s\n", setKeyDisplay("service"), serviceDisplay(m.config.Service)))
 		m.sysMsg(strings.TrimRight(sb.String(), "\n"))
 		return m, nil
 	}
@@ -155,12 +155,12 @@ func handleSetCommand(m Model, input string, parts []string) (Model, tea.Cmd) {
 		case "debug":
 			return handleDebugCommand(m, "/debug", []string{"/debug"})
 		case "provider":
-			m.sysMsg(fmt.Sprintf("provider = %s\n  available: openai, anthropic\n  set: /set provider <name>", m.config.Provider))
+			m.sysMsg(fmt.Sprintf("%s = %s\n  available: openai, anthropic\n  set: /set provider <name>", setKeyDisplay("provider"), m.config.Provider))
 			return m, nil
 		case "service":
 			names := config.ListServices()
 			cur := serviceDisplay(m.config.Service)
-			m.sysMsg(fmt.Sprintf("service = %s\n  available: %s\n  set: /set service <name>", cur, strings.Join(names, ", ")))
+			m.sysMsg(fmt.Sprintf("%s = %s\n  available: %s\n  set: /set service <name>", setKeyDisplay("service"), cur, strings.Join(names, ", ")))
 			return m, nil
 		}
 		value, ok := config.GetSetting(m.config, key)
@@ -168,7 +168,7 @@ func handleSetCommand(m Model, input string, parts []string) (Model, tea.Cmd) {
 			m.errMsg(fmt.Sprintf("Unknown setting %q. Valid keys: %s", key, strings.Join(setKeysWithService(), ", ")))
 			return m, nil
 		}
-		m.sysMsg(fmt.Sprintf("%s = %s", key, value))
+		m.sysMsg(fmt.Sprintf("%s = %s", setKeyDisplay(key), value))
 		return m, nil
 	}
 
@@ -213,19 +213,23 @@ func handleSetCommand(m Model, input string, parts []string) (Model, tea.Cmd) {
 	}
 
 	display, _ := config.GetSetting(m.config, key)
-	m.sysMsg(fmt.Sprintf("%s set to: %s", settingLabel(key), display))
+	m.sysMsg(setValueChangedMsg(key, display))
 	return m, nil
 }
 
-func settingLabel(key string) string {
-	parts := strings.Split(key, "-")
-	for i, part := range parts {
-		if part == "" {
-			continue
-		}
-		parts[i] = strings.ToUpper(part[:1]) + part[1:]
-	}
-	return strings.Join(parts, " ")
+// setKeyDisplay renders a /set key in BitchX-style UPPERCASE with hyphens
+// folded to underscores (auto-next -> AUTO_NEXT). Used for the bare-`/set`
+// listing, single-key show, and `*** Value of KEY set to VALUE.` confirms.
+func setKeyDisplay(key string) string {
+	key = strings.TrimSpace(key)
+	key = strings.ReplaceAll(key, "-", "_")
+	return strings.ToUpper(key)
+}
+
+// setValueChangedMsg formats a BitchX-style confirmation when a /set key has
+// been mutated. Mirrors the canonical format `*** Value of FOO set to bar.`.
+func setValueChangedMsg(key, value string) string {
+	return fmt.Sprintf("*** Value of %s set to %s.", setKeyDisplay(key), value)
 }
 
 func handleModelCommand(m Model, _ string, parts []string) (Model, tea.Cmd) {
@@ -245,7 +249,7 @@ func handleModelCommand(m Model, _ string, parts []string) (Model, tea.Cmd) {
 	m.addMessage(ChatMessage{
 		Time:    time.Now(),
 		Type:    MsgSystem,
-		Content: fmt.Sprintf("*** Model switched to: %s", newModel),
+		Content: setValueChangedMsg("model", newModel),
 	})
 	m.refreshViewport()
 	return m, nil
@@ -737,7 +741,7 @@ func handleBaseURLCommand(m Model, _ string, parts []string) (Model, tea.Cmd) {
 	m.agent.SetBaseURL(url)
 	m.config.BaseURL = url
 	clearLoadedProfile(&m)
-	m.sysMsg(fmt.Sprintf("*** Base URL set to: %s\n  requests -> %s", url, transportEndpointPreview(m.config.Provider, url)))
+	m.sysMsg(fmt.Sprintf("%s\n  requests -> %s", setValueChangedMsg("baseurl", url), transportEndpointPreview(m.config.Provider, url)))
 	if note := providerTransportHint(m.config.Provider, url); note != "" {
 		m.sysMsg(note)
 	}
@@ -759,7 +763,7 @@ func handleAPIKeyCommand(m Model, _ string, parts []string) (Model, tea.Cmd) {
 	m.config.APIKey = key
 	clearLoadedProfile(&m)
 	masked := maskSecret(key)
-	m.sysMsg(fmt.Sprintf("*** API key set: %s", masked))
+	m.sysMsg(setValueChangedMsg("apikey", masked))
 	return m, nil
 }
 
@@ -772,7 +776,7 @@ func handleProviderCommand(m Model, _ string, parts []string) (Model, tea.Cmd) {
 	m.config.Provider = prov
 	m.agent.SetProvider(prov)
 	clearLoadedProfile(&m)
-	m.sysMsg(fmt.Sprintf("*** Provider set to: %s\n  requests -> %s", prov, transportEndpointPreview(prov, m.config.BaseURL)))
+	m.sysMsg(fmt.Sprintf("%s\n  requests -> %s", setValueChangedMsg("provider", prov), transportEndpointPreview(prov, m.config.BaseURL)))
 	if note := providerTransportHint(prov, m.config.BaseURL); note != "" {
 		m.sysMsg(note)
 	}
@@ -1031,7 +1035,7 @@ func handleServiceSet(m Model, value string) (Model, tea.Cmd) {
 	m.config.Service = value
 	// Don't clear cfg.Profile here — relabeling Service is a metadata edit, not
 	// a transport switch. Provider/baseurl/apikey already drop the profile tag.
-	m.sysMsg(fmt.Sprintf("Service set to: %s", value))
+	m.sysMsg(setValueChangedMsg("service", value))
 	return m, nil
 }
 
@@ -1165,5 +1169,5 @@ func handleModelsCommand(m Model, _ string, _ []string) (Model, tea.Cmd) {
 func applyModelSelection(m *Model, choice string) {
 	m.agent.SetModel(choice)
 	clearLoadedProfile(m)
-	m.sysMsg(fmt.Sprintf("*** Model switched to: %s", choice))
+	m.sysMsg(setValueChangedMsg("model", choice))
 }

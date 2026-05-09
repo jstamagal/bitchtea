@@ -14,7 +14,7 @@ func TestSetCommandShowsAllSettings(t *testing.T) {
 	if msg.Type != MsgSystem {
 		t.Fatalf("expected system message, got %v", msg.Type)
 	}
-	for _, want := range []string{"provider", "model", "baseurl", "apikey", "nick"} {
+	for _, want := range []string{"PROVIDER", "MODEL", "BASEURL", "APIKEY", "NICK"} {
 		if !strings.Contains(msg.Content, want) {
 			t.Errorf("expected %q in /set output, got %q", want, msg.Content)
 		}
@@ -25,8 +25,8 @@ func TestSetCommandShowsSingleSetting(t *testing.T) {
 	m, _ := testModel(t)
 	result, _ := m.handleCommand("/set provider")
 	msg := lastMsg(result)
-	if !strings.Contains(msg.Content, "provider = openai") {
-		t.Errorf("expected 'provider = openai', got %q", msg.Content)
+	if !strings.Contains(msg.Content, "PROVIDER = openai") {
+		t.Errorf("expected 'PROVIDER = openai', got %q", msg.Content)
 	}
 }
 
@@ -38,7 +38,7 @@ func TestSetCommandSetsProvider(t *testing.T) {
 		t.Errorf("provider = %q, want anthropic", model.config.Provider)
 	}
 	text := allMsgText(result)
-	if !strings.Contains(text, "Provider set to: anthropic") {
+	if !strings.Contains(text, "*** Value of PROVIDER set to anthropic.") {
 		t.Errorf("expected provider set message, got %q", text)
 	}
 }
@@ -142,6 +142,9 @@ func TestSetCommandMasksAPIKey(t *testing.T) {
 	if !strings.Contains(msg.Content, "sk-t...2345") {
 		t.Errorf("expected masked key, got %q", msg.Content)
 	}
+	if !strings.Contains(msg.Content, "APIKEY = ") {
+		t.Errorf("expected uppercase key label APIKEY, got %q", msg.Content)
+	}
 }
 
 // TestSetCommandSetsServiceVerbatim confirms /set service writes any string to
@@ -165,7 +168,7 @@ func TestSetCommandSetsServiceVerbatim(t *testing.T) {
 					t.Errorf("unexpected error: %q", msg.Content)
 				}
 			}
-			if !strings.Contains(allMsgText(result), "Service set to: "+value) {
+			if !strings.Contains(allMsgText(result), "*** Value of SERVICE set to "+value+".") {
 				t.Errorf("expected confirmation, got %q", allMsgText(result))
 			}
 		})
@@ -179,8 +182,8 @@ func TestSetCommandShowsServiceLine(t *testing.T) {
 	m.config.Service = "openai"
 	result, _ := m.handleCommand("/set")
 	msg := lastMsg(result)
-	if !strings.Contains(msg.Content, "service = openai") {
-		t.Errorf("expected 'service = openai' in /set output, got %q", msg.Content)
+	if !strings.Contains(msg.Content, "SERVICE = openai") {
+		t.Errorf("expected 'SERVICE = openai' in /set output, got %q", msg.Content)
 	}
 }
 
@@ -194,8 +197,8 @@ func TestSetCommandShowsSingleService(t *testing.T) {
 	if msg.Type == MsgError {
 		t.Fatalf("unexpected error for /set service: %q", msg.Content)
 	}
-	if !strings.Contains(msg.Content, "service = ollama") {
-		t.Errorf("expected 'service = ollama', got %q", msg.Content)
+	if !strings.Contains(msg.Content, "SERVICE = ollama") {
+		t.Errorf("expected 'SERVICE = ollama', got %q", msg.Content)
 	}
 }
 
@@ -252,6 +255,49 @@ func TestProfileLoadVerboseShowsServiceLine(t *testing.T) {
 	msg := lastMsg(result)
 	if !strings.Contains(msg.Content, "service=openrouter") {
 		t.Errorf("expected 'service=openrouter' in verbose load output, got %q", msg.Content)
+	}
+}
+
+// TestSetCommandBitchXOutputFormat confirms the BitchX-style surface for /set:
+//   - bare /set lists keys UPPERCASE
+//   - /set <key> <value> emits `*** Value of KEY set to VALUE.`
+//   - lowercase input is still accepted (rc-file compatibility)
+func TestSetCommandBitchXOutputFormat(t *testing.T) {
+	m, _ := testModel(t)
+
+	// Lowercase input must still mutate cfg and emit BitchX-shaped output.
+	result, _ := m.handleCommand("/set nick coolguy")
+	model := result.(Model)
+	if model.config.UserNick != "coolguy" {
+		t.Fatalf("lowercase /set nick did not stick: %q", model.config.UserNick)
+	}
+	if !strings.Contains(allMsgText(result), "*** Value of NICK set to coolguy.") {
+		t.Errorf("expected BitchX-style confirm, got %q", allMsgText(result))
+	}
+
+	// Hyphenated keys render with underscores in display: auto-next -> AUTO_NEXT.
+	result, _ = model.handleCommand("/set auto-next on")
+	model = result.(Model)
+	if !model.config.AutoNextSteps {
+		t.Fatalf("auto-next did not flip on")
+	}
+	if !strings.Contains(allMsgText(result), "*** Value of AUTO_NEXT set to on.") {
+		t.Errorf("expected hyphen folded to underscore in display, got %q", allMsgText(result))
+	}
+
+	// Bare /set listing renders all keys UPPERCASE.
+	result, _ = model.handleCommand("/set")
+	msg := lastMsg(result)
+	for _, want := range []string{"PROVIDER = ", "MODEL = ", "NICK = ", "AUTO_NEXT = ", "PERSONA_FILE = ", "SERVICE = "} {
+		if !strings.Contains(msg.Content, want) {
+			t.Errorf("expected %q in /set output, got %q", want, msg.Content)
+		}
+	}
+	// And NO lowercase key labels leaking through.
+	for _, leak := range []string{"provider = ", "auto-next = ", "persona_file = "} {
+		if strings.Contains(msg.Content, leak) {
+			t.Errorf("unexpected lowercase key label %q in /set output: %q", leak, msg.Content)
+		}
 	}
 }
 
