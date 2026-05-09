@@ -5,6 +5,19 @@ import (
 	"testing"
 )
 
+// TestLookupSlashCommandIsCaseInsensitive pins the contract that bitchtearc
+// lines (which become `/SET FOO bar` after ExecuteStartupCommand prepends a
+// slash) reach their handler regardless of case. Previously the registry
+// lookup was a direct map index, so /SET silently routed to the
+// "Unknown command" path and every uppercase rc line was dropped twice.
+func TestLookupSlashCommandIsCaseInsensitive(t *testing.T) {
+	for _, name := range []string{"/SET", "/Set", "/set", "/HELP", "/Quit"} {
+		if _, ok := lookupSlashCommand(name); !ok {
+			t.Errorf("lookupSlashCommand(%q) = not found; should be case-insensitive", name)
+		}
+	}
+}
+
 func TestLookupSlashCommandSupportsAliases(t *testing.T) {
 	helpHandler, ok := lookupSlashCommand("/help")
 	if !ok {

@@ -341,6 +341,101 @@ func TestApplyRCSetCommandsInvalidProviderIgnored(t *testing.T) {
 	}
 }
 
+// TestApplyRCSetCommandsCaseInsensitive pins the contract that bitchtearc
+// lines work regardless of the case of the SET keyword and the key. This is
+// the regression test for the silent-drop bug where uppercase SET lines
+// (as written by --init-config) were tossed onto the "remaining" pile and
+// never applied — leaving every config field at its hard-coded default
+// while pretending to be wired up.
+//
+// Mirrors the shape of a freshly-generated --init-config bitchtearc.
+func TestApplyRCSetCommandsCaseInsensitive(t *testing.T) {
+	cfg := DefaultConfig()
+	lines := []string{
+		"SET PROVIDER anthropic",
+		"SET MODEL claude-opus-4-7",
+		"SET APIKEY sk-test-12345678",
+		"SET BASEURL http://127.0.0.1:8317/v1",
+		"SET NICK uppercase_user",
+		"SET SOUND ON",
+		"SET AUTO-NEXT OFF",
+		"SET AUTO-IDEA OFF",
+		"set persona_file ~/.bitchtea/persona.md", // mixed case in same file
+		"SET TOOL_VERBOSITY terse",
+		"SET BANNER OFF",
+		"SET EFFORT max",
+		"SET TOOL_TIMEOUT 600",
+	}
+
+	remaining := ApplyRCSetCommands(&cfg, lines)
+	if len(remaining) != 0 {
+		t.Fatalf("uppercase SET lines should all apply; got %d rejected: %v", len(remaining), remaining)
+	}
+
+	checks := []struct {
+		field, got, want string
+	}{
+		{"Provider", cfg.Provider, "anthropic"},
+		{"Model", cfg.Model, "claude-opus-4-7"},
+		{"APIKey", cfg.APIKey, "sk-test-12345678"},
+		{"BaseURL", cfg.BaseURL, "http://127.0.0.1:8317/v1"},
+		{"UserNick", cfg.UserNick, "uppercase_user"},
+		{"PersonaFile", cfg.PersonaFile, "~/.bitchtea/persona.md"},
+		{"ToolVerbosity", cfg.ToolVerbosity, "terse"},
+		{"Effort", cfg.Effort, "max"},
+	}
+	for _, c := range checks {
+		if c.got != c.want {
+			t.Errorf("%s = %q, want %q", c.field, c.got, c.want)
+		}
+	}
+	if !cfg.NotificationSound {
+		t.Error("NotificationSound should be on")
+	}
+	if cfg.AutoNextSteps {
+		t.Error("AutoNextSteps should be off")
+	}
+	if cfg.AutoNextIdea {
+		t.Error("AutoNextIdea should be off")
+	}
+	if cfg.Banner {
+		t.Error("Banner should be off (rc said OFF, default is true)")
+	}
+	if cfg.ToolTimeout != 600 {
+		t.Errorf("ToolTimeout = %d, want 600", cfg.ToolTimeout)
+	}
+}
+
+// TestApplySetMixedCaseProviderValue covers the enum value path: the rc parser
+// must accept SET PROVIDER ANTHROPIC (or Anthropic) just like /set provider
+// anthropic. Free-form values (model, apikey, baseurl, paths) stay verbatim.
+func TestApplySetMixedCaseProviderValue(t *testing.T) {
+	cfg := DefaultConfig()
+	if !ApplySet(&cfg, "PROVIDER", "Anthropic") {
+		t.Fatal("ApplySet should accept uppercase key + mixed-case provider value")
+	}
+	if cfg.Provider != "anthropic" {
+		t.Errorf("Provider = %q, want anthropic (lowercased)", cfg.Provider)
+	}
+
+	// Verbose/normal/terse for tool_verbosity should also be case-tolerant.
+	if !ApplySet(&cfg, "TOOL_VERBOSITY", "VERBOSE") {
+		t.Fatal("ApplySet should accept uppercase tool_verbosity value")
+	}
+	if cfg.ToolVerbosity != "verbose" {
+		t.Errorf("ToolVerbosity = %q, want verbose", cfg.ToolVerbosity)
+	}
+
+	// Free-form values must NOT be lowercased — model names, API keys, URLs
+	// are case-sensitive.
+	if !ApplySet(&cfg, "model", "Claude-Opus-4-7") {
+		t.Fatal("ApplySet model failed")
+	}
+	if cfg.Model != "Claude-Opus-4-7" {
+		t.Errorf("Model = %q; case-sensitive value must be preserved", cfg.Model)
+	}
+}
+
 func TestParseBoolSetting(t *testing.T) {
 	for _, v := range []string{"on", "true", "1", "yes", "ON", "True"} {
 		if !parseBoolSetting(v) {

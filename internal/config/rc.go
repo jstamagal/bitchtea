@@ -42,11 +42,16 @@ func parseRCFile(path string) []string {
 
 // ApplyRCSetCommands processes "set" lines from the rc file and applies them
 // to cfg. Non-set lines are returned for later execution by the TUI.
+//
+// The keyword and key are matched case-insensitively so users can write
+// either `set provider openai` or `SET PROVIDER openai` in their bitchtearc.
+// Values are passed through verbatim — model names, API keys, base URLs, and
+// file paths are case-sensitive and must not be folded.
 func ApplyRCSetCommands(cfg *Config, lines []string) []string {
 	var remaining []string
 	for _, line := range lines {
 		parts := strings.Fields(line)
-		if len(parts) < 2 || parts[0] != "set" {
+		if len(parts) < 2 || !strings.EqualFold(parts[0], "set") {
 			remaining = append(remaining, line)
 			continue
 		}
@@ -64,6 +69,7 @@ func ApplyRCSetCommands(cfg *Config, lines []string) []string {
 
 // ApplySet applies a single set key/value pair to cfg. Returns true if the
 // key was recognised. Exported so the TUI /set command can reuse the logic.
+// Keys are matched case-insensitively; values are passed verbatim.
 func ApplySet(cfg *Config, key, value string) bool {
 	return applySetToConfig(cfg, key, value)
 }
@@ -185,10 +191,12 @@ func boolSettingStr(v bool) string {
 }
 
 func applySetToConfig(cfg *Config, key, value string) bool {
+	key = strings.ToLower(strings.TrimSpace(key))
 	switch key {
 	case "provider":
-		if value == "openai" || value == "anthropic" {
-			cfg.Provider = value
+		v := strings.ToLower(strings.TrimSpace(value))
+		if v == "openai" || v == "anthropic" {
+			cfg.Provider = v
 			// User opted into a custom transport; per-service gates can no
 			// longer trust the previous Service identity. See bt-p9 design.
 			cfg.Service = "custom"
@@ -265,9 +273,13 @@ func applySetToConfig(cfg *Config, key, value string) bool {
 			cfg.RepetitionPenalty = &f
 		}
 	case "tool_verbosity":
-		switch value {
-		case "terse", "normal", "verbose":
-			cfg.ToolVerbosity = value
+		switch strings.ToLower(strings.TrimSpace(value)) {
+		case "terse":
+			cfg.ToolVerbosity = "terse"
+		case "normal":
+			cfg.ToolVerbosity = "normal"
+		case "verbose":
+			cfg.ToolVerbosity = "verbose"
 		}
 	case "banner":
 		cfg.Banner = parseBoolSetting(value)

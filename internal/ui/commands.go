@@ -73,7 +73,7 @@ func registerSlashCommands(specs ...slashCommandSpec) map[string]slashCommandHan
 }
 
 func lookupSlashCommand(name string) (slashCommandHandler, bool) {
-	handler, ok := slashCommandRegistry[name]
+	handler, ok := slashCommandRegistry[strings.ToLower(name)]
 	return handler, ok
 }
 
