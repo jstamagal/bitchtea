@@ -87,9 +87,9 @@ SIGTERM and SIGINT trigger the same sequence:
 1. Context is cancelled (`run.go:99`).
 2. The poll loop sees `<-loopCtx.Done()` (`run.go:118`).
 3. `drainShutdown` is called (`run.go:121`) with `DrainBudget` timeout
-   (default 30s). In the current scaffolding build with no long-running
-   handlers, drain is a no-op. When bt-p7-session-jobs lands, in-flight
-   handlers must finish within the budget or be moved to `failed/` with
+   (default 30s). With no long-running handlers currently registered,
+   drain is a no-op. When in-flight handler tracking is added, handlers
+   must finish within the budget or be moved to `failed/` with
    `"shutdown deadline"`.
 4. The pid file is removed (deferred at `run.go:74`).
 5. The lock is released (deferred at `run.go:64`). The kernel also releases

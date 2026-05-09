@@ -16,8 +16,7 @@ import (
 	"github.com/jstamagal/bitchtea/internal/daemon"
 )
 
-// TestDaemonE2E is the documented end-to-end smoke test required by
-// bt-p7-verify. To run it locally:
+// TestDaemonE2E is the documented end-to-end smoke test. To run it locally:
 //
 //	go test -run TestDaemonE2E ./internal/daemon/
 //
