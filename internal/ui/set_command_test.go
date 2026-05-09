@@ -175,6 +175,28 @@ func TestSetCommandSetsServiceVerbatim(t *testing.T) {
 	}
 }
 
+// TestSetCommandListingHasNoDuplicateService is a regression for bt-brc:
+// the bare /set listing and the "Unknown setting" error surface used to
+// duplicate the 'service' entry because both config.SetKeys() and a
+// UI-side setKeysWithService() helper appended it. Lock in the single
+// occurrence on both surfaces.
+func TestSetCommandListingHasNoDuplicateService(t *testing.T) {
+	m, _ := testModel(t)
+	m.config.Service = "openrouter"
+
+	result, _ := m.handleCommand("/set")
+	listing := lastMsg(result).Content
+	if n := strings.Count(listing, "SERVICE = "); n != 1 {
+		t.Errorf("bare /set listing has %d SERVICE entries, want 1: %q", n, listing)
+	}
+
+	result, _ = m.handleCommand("/set bogus value")
+	errText := lastMsg(result).Content
+	if n := strings.Count(errText, "service"); n != 1 {
+		t.Errorf("unknown-key error has %d 'service' mentions, want 1: %q", n, errText)
+	}
+}
+
 // TestSetCommandShowsServiceLine confirms the bare /set listing surfaces the
 // service identity alongside the other recognised keys.
 func TestSetCommandShowsServiceLine(t *testing.T) {

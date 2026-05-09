@@ -134,10 +134,6 @@ func handleSetCommand(m Model, input string, parts []string) (Model, tea.Cmd) {
 			value, _ := config.GetSetting(m.config, key)
 			sb.WriteString(fmt.Sprintf("  %s = %s\n", setKeyDisplay(key), value))
 		}
-		// Service is the upstream identity (openai, ollama, openrouter, ...)
-		// distinct from Provider (wire format). Surfaced here so users can see
-		// what per-service gates will fire. See docs/phase-9-service-identity.md.
-		sb.WriteString(fmt.Sprintf("  %s = %s\n", setKeyDisplay("service"), serviceDisplay(m.config.Service)))
 		m.sysMsg(strings.TrimRight(sb.String(), "\n"))
 		return m, nil
 	}
@@ -165,7 +161,7 @@ func handleSetCommand(m Model, input string, parts []string) (Model, tea.Cmd) {
 		}
 		value, ok := config.GetSetting(m.config, key)
 		if !ok {
-			m.errMsg(fmt.Sprintf("Unknown setting %q. Valid keys: %s", key, strings.Join(setKeysWithService(), ", ")))
+			m.errMsg(fmt.Sprintf("Unknown setting %q. Valid keys: %s", key, strings.Join(config.SetKeys(), ", ")))
 			return m, nil
 		}
 		m.sysMsg(fmt.Sprintf("%s = %s", setKeyDisplay(key), value))
@@ -189,7 +185,7 @@ func handleSetCommand(m Model, input string, parts []string) (Model, tea.Cmd) {
 	}
 
 	if !config.ApplySet(m.config, key, value) {
-		m.errMsg(fmt.Sprintf("Unknown setting %q. Valid keys: %s", key, strings.Join(setKeysWithService(), ", ")))
+		m.errMsg(fmt.Sprintf("Unknown setting %q. Valid keys: %s", key, strings.Join(config.SetKeys(), ", ")))
 		return m, nil
 	}
 
@@ -208,7 +204,7 @@ func handleSetCommand(m Model, input string, parts []string) (Model, tea.Cmd) {
 	case "sound", "auto-next", "auto-idea":
 		// Config-only settings; no agent sync required.
 	default:
-		m.errMsg(fmt.Sprintf("Unknown setting %q. Valid keys: %s", key, strings.Join(setKeysWithService(), ", ")))
+		m.errMsg(fmt.Sprintf("Unknown setting %q. Valid keys: %s", key, strings.Join(config.SetKeys(), ", ")))
 		return m, nil
 	}
 
@@ -1037,14 +1033,6 @@ func handleServiceSet(m Model, value string) (Model, tea.Cmd) {
 	// a transport switch. Provider/baseurl/apikey already drop the profile tag.
 	m.sysMsg(setValueChangedMsg("service", value))
 	return m, nil
-}
-
-// setKeysWithService returns the canonical /set key list with "service"
-// appended. Kept here (rather than in config.SetKeys) because /set service
-// is handled UI-side via verbatim routing, like /set provider.
-func setKeysWithService() []string {
-	keys := config.SetKeys()
-	return append(keys, "service")
 }
 
 // serviceDisplay renders cfg.Service for /set output. Built-ins fill the
