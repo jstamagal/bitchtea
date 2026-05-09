@@ -9,39 +9,25 @@ import (
 	memorypkg "github.com/jstamagal/bitchtea/internal/memory"
 )
 
-// DiscoverContextFiles walks up from workDir looking for context md files.
-// Within each directory the first match in [BITCHTEA.md, AGENT.md, AGENTS.md,
-// .agent.md, .agents.md] wins — BITCHTEA.md is the bitchtea-native convention,
-// AGENT.md is the single-agent standard, AGENTS.md covers multi-agent format.
-// CLAUDE.md and .claude.md are intentionally excluded: bitchtea doesn't load
-// Claude-specific project files. The walk-up composes context from parent dirs.
+// DiscoverContextFiles looks in workDir only (no walk-up) for a context md file.
+// The first match in [BITCHTEA.md, AGENT.md, AGENTS.md, .agent.md, .agents.md]
+// wins — BITCHTEA.md is the bitchtea-native convention, AGENT.md is the
+// single-agent standard, AGENTS.md covers multi-agent format. CLAUDE.md and
+// .claude.md are intentionally excluded: bitchtea doesn't load Claude-specific
+// project files. Parent directories are deliberately not consulted — running
+// bitchtea in a subdirectory must not pick up unrelated ancestor context.
 func DiscoverContextFiles(workDir string) string {
 	preference := []string{"BITCHTEA.md", "AGENT.md", "AGENTS.md", ".agent.md", ".agents.md"}
-	var found []string
 
-	dir := workDir
-	for {
-		for _, name := range preference {
-			path := filepath.Join(dir, name)
-			data, err := os.ReadFile(path)
-			if err == nil {
-				found = append(found, "# Context from "+path+"\n\n"+string(data))
-				break // one context file per directory — preference order picks the canonical one
-			}
+	for _, name := range preference {
+		path := filepath.Join(workDir, name)
+		data, err := os.ReadFile(path)
+		if err == nil {
+			return "# Context from " + path + "\n\n" + string(data)
 		}
-
-		parent := filepath.Dir(dir)
-		if parent == dir {
-			break // reached root
-		}
-		dir = parent
 	}
 
-	if len(found) == 0 {
-		return ""
-	}
-
-	return strings.Join(found, "\n\n---\n\n")
+	return ""
 }
 
 // LoadMemory reads MEMORY.md from workDir if it exists

@@ -11,9 +11,9 @@ import (
 )
 
 func TestDiscoverContextFiles(t *testing.T) {
-	// Create a directory tree with context files using the new preference order:
-	// BITCHTEA.md > AGENT.md > AGENTS.md > .agent.md > .agents.md
-	// CLAUDE.md is no longer in the preference list.
+	// CWD-only discovery: a context file in workDir is loaded, but ancestor
+	// directories must NOT be consulted. Running bitchtea inside a subdirectory
+	// should never absorb unrelated parent AGENTS.md files.
 	root := t.TempDir()
 	child := filepath.Join(root, "sub", "project")
 	os.MkdirAll(child, 0755)
@@ -26,8 +26,23 @@ func TestDiscoverContextFiles(t *testing.T) {
 	if !strings.Contains(result, "project bitchtea rules") {
 		t.Error("missing child BITCHTEA.md content")
 	}
-	if !strings.Contains(result, "root agent rules") {
-		t.Error("missing root AGENTS.md content")
+	if strings.Contains(result, "root agent rules") {
+		t.Error("ancestor AGENTS.md must NOT be loaded — discovery is CWD-only")
+	}
+}
+
+func TestDiscoverContextFilesNoWalkUp(t *testing.T) {
+	// Explicit guard: if workDir has no context file but an ancestor does,
+	// the result must be empty. This is the bt-yuh regression fix.
+	root := t.TempDir()
+	child := filepath.Join(root, "nested")
+	os.MkdirAll(child, 0755)
+
+	os.WriteFile(filepath.Join(root, "AGENTS.md"), []byte("ancestor context that must not leak"), 0644)
+
+	result := DiscoverContextFiles(child)
+	if result != "" {
+		t.Errorf("expected empty result (no walk-up), got: %q", result)
 	}
 }
 
