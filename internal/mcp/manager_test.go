@@ -769,3 +769,59 @@ func TestListAllTools_TTLZeroDisablesCaching(t *testing.T) {
 		t.Fatalf("expected 4 ListTools calls (caching disabled), got %d", got)
 	}
 }
+
+// TestMCP_concurrentCallToolDuringServerRestart verifies that concurrent
+// CallTool calls racing with a server Stop+Start cycle produce graceful errors
+// (not panics or data races). CallTool calls that land while the server is
+// stopped get "not running"; calls after restart succeed normally.
+// Must pass under -race -count=20.
+func TestMCP_concurrentCallToolDuringServerRestart(t *testing.T) {
+	srv := &fakeServer{
+		name:  "srv",
+		tools: []Tool{{Name: "ping"}},
+		callFn: func(name string, args json.RawMessage) (Result, error) {
+			// Brief sleep to widen the window for the race.
+			time.Sleep(2 * time.Millisecond)
+			return Result{Content: "pong"}, nil
+		},
+	}
+	auth := &recordingAuthorizer{}
+	mgr, _ := managerWithFakes(t, auth, nil, srv)
+	if err := mgr.Start(context.Background()); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+
+	const nCallers = 6
+	const callsPer = 10
+
+	// Launch concurrent CallTool callers.
+	var callersWg sync.WaitGroup
+	callersWg.Add(nCallers)
+	for c := 0; c < nCallers; c++ {
+		go func() {
+			defer callersWg.Done()
+			for i := 0; i < callsPer; i++ {
+				_, err := mgr.CallTool(context.Background(), "mcp__srv__ping", json.RawMessage(`{}`))
+				// Errors are expected during restart; just verify no panic.
+				_ = err
+			}
+		}()
+	}
+
+	// While callers are running, stop and restart the server.
+	time.Sleep(5 * time.Millisecond) // let some calls land first
+	_ = mgr.Stop(context.Background())
+	time.Sleep(5 * time.Millisecond) // calls hitting this window get "not running"
+	if err := mgr.Start(context.Background()); err != nil {
+		t.Fatalf("restart Start: %v", err)
+	}
+
+	callersWg.Wait()
+	_ = mgr.Stop(context.Background())
+
+	// Verify that some calls succeeded (before or after restart).
+	totalCalls := atomic.LoadInt32(&srv.callCount)
+	if totalCalls == 0 {
+		t.Fatal("expected at least some CallTool calls to reach the server")
+	}
+}

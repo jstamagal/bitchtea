@@ -1028,6 +1028,50 @@ func TestTerminalResizeUpdatesSnapshotDimensions(t *testing.T) {
 	}
 }
 
+// TestTerminal_concurrentSendSameSession verifies that concurrent
+// terminal_send calls to the same PTY session do not panic or corrupt state.
+// cat echoes input, so all sends are valid. The test asserts no errors from
+// Execute and that the session survives the barrage.
+// Must pass under -race -count=20.
+func TestTerminal_concurrentSendSameSession(t *testing.T) {
+	reg := NewRegistry(t.TempDir(), t.TempDir())
+
+	result, err := reg.Execute(context.Background(), "terminal_start", `{"command":"cat","width":80,"height":24,"delay_ms":50}`)
+	if err != nil {
+		t.Fatalf("terminal_start: %v", err)
+	}
+	id := terminalIDFromResult(t, result)
+	defer reg.Execute(context.Background(), "terminal_close", `{"id":"`+id+`"}`) //nolint:errcheck
+
+	const nSenders = 8
+	const sendsPer = 5
+
+	var wg sync.WaitGroup
+	wg.Add(nSenders)
+	for g := 0; g < nSenders; g++ {
+		go func(gid int) {
+			defer wg.Done()
+			for i := 0; i < sendsPer; i++ {
+				text := fmt.Sprintf("hello-from-%d-%d\n", gid, i)
+				args := fmt.Sprintf(`{"id":"%s","text":%q,"delay_ms":20}`, id, text)
+				if _, err := reg.Execute(context.Background(), "terminal_send", args); err != nil {
+					t.Errorf("terminal_send(g=%d, i=%d): %v", gid, i, err)
+				}
+			}
+		}(g)
+	}
+	wg.Wait()
+
+	// Session should still be alive and responsive.
+	snapResult, err := reg.Execute(context.Background(), "terminal_snapshot", `{"id":"`+id+`"}`)
+	if err != nil {
+		t.Fatalf("post-barrage snapshot: %v", err)
+	}
+	if !strings.Contains(snapResult, "running") {
+		t.Fatalf("expected running session after barrage, got %q", snapResult)
+	}
+}
+
 func TestTerminalCloseCleanup(t *testing.T) {
 	reg := NewRegistry(t.TempDir(), t.TempDir())
 
