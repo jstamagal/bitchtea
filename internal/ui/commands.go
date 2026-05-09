@@ -745,6 +745,9 @@ func handleBaseURLCommand(m Model, _ string, parts []string) (Model, tea.Cmd) {
 	if note := providerTransportHint(m.config.Provider, url); note != "" {
 		m.sysMsg(note)
 	}
+	if note := serviceMisconfigHint(m.config.Service, m.config.Provider, url); note != "" {
+		m.sysMsg(note)
+	}
 	return m, nil
 }
 
@@ -778,6 +781,9 @@ func handleProviderCommand(m Model, _ string, parts []string) (Model, tea.Cmd) {
 	clearLoadedProfile(&m)
 	m.sysMsg(fmt.Sprintf("%s\n  requests -> %s", setValueChangedMsg("provider", prov), transportEndpointPreview(prov, m.config.BaseURL)))
 	if note := providerTransportHint(prov, m.config.BaseURL); note != "" {
+		m.sysMsg(note)
+	}
+	if note := serviceMisconfigHint(m.config.Service, prov, m.config.BaseURL); note != "" {
 		m.sysMsg(note)
 	}
 	return m, nil
@@ -1036,6 +1042,9 @@ func handleServiceSet(m Model, value string) (Model, tea.Cmd) {
 	// Don't clear cfg.Profile here — relabeling Service is a metadata edit, not
 	// a transport switch. Provider/baseurl/apikey already drop the profile tag.
 	m.sysMsg(setValueChangedMsg("service", value))
+	if note := serviceMisconfigHint(value, m.config.Provider, m.config.BaseURL); note != "" {
+		m.sysMsg(note)
+	}
 	return m, nil
 }
 
@@ -1104,9 +1113,15 @@ func providerTransportHint(provider, baseURL string) string {
 	looksGenericV1 := strings.Contains(lowerURL, "/v1")
 	looksOpenAIStyle := strings.Contains(lowerURL, "api.openai.com") || strings.Contains(lowerURL, "openrouter.ai") || strings.Contains(lowerURL, "/openai/")
 
+	if typo := cliproxyapiPortTypoHint(lowerURL); typo != "" {
+		warnings = append(warnings, typo)
+	}
+
 	switch strings.TrimSpace(strings.ToLower(provider)) {
 	case "anthropic":
-		if looksOpenAIStyle {
+		if looksCLIProxyAPILocal(lowerURL) {
+			warnings = append(warnings, "warning -> anthropic transport against a CLIProxyAPI-shaped local URL is wrong. cliproxyapi is OpenAI-compatible: switch with /set provider openai (or /profile load cliproxyapi).")
+		} else if looksOpenAIStyle {
 			warnings = append(warnings, "warning -> Anthropic transport with an OpenAI-style base URL looks suspicious. Requests will go to /messages. If this endpoint is OpenAI-compatible, switch with /set provider openai.")
 		} else if !looksAnthropic && (looksLocal || looksGenericV1) {
 			warnings = append(warnings, "warning -> anthropic transport sends requests to /messages. If this server is OpenAI-compatible, switch with /set provider openai.")
@@ -1117,6 +1132,69 @@ func providerTransportHint(provider, baseURL string) string {
 		}
 	}
 
+	return strings.Join(warnings, "\n")
+}
+
+// looksCLIProxyAPILocal reports whether lowerURL looks like a CLIProxyAPI
+// daemon endpoint — local host on the canonical 8317 port. Used to flag
+// provider=anthropic combos that will silently route to /messages against an
+// OpenAI-compatible upstream.
+func looksCLIProxyAPILocal(lowerURL string) bool {
+	local := strings.Contains(lowerURL, "localhost") || strings.Contains(lowerURL, "127.0.0.1")
+	return local && strings.Contains(lowerURL, ":8317")
+}
+
+// cliproxyapiPortTypoHint surfaces a hint when the base URL looks like a
+// transposed-digit typo of the canonical CLIProxyAPI port (8317). Common
+// transpositions LO has hit: 8713, 8137, 8371, 8731. Also flags 8713
+// specifically because the ticket calls it out as the recurring miss.
+func cliproxyapiPortTypoHint(lowerURL string) string {
+	if !strings.Contains(lowerURL, "localhost") && !strings.Contains(lowerURL, "127.0.0.1") {
+		return ""
+	}
+	for _, typo := range []string{":8713", ":8137", ":8371", ":8731"} {
+		if strings.Contains(lowerURL, typo) {
+			return fmt.Sprintf("warning -> port %s looks like a typo for :8317 (CLIProxyAPI canonical). If you meant cliproxyapi, /profile load cliproxyapi resets it.", strings.TrimPrefix(typo, ":"))
+		}
+	}
+	return ""
+}
+
+// serviceMisconfigHint flags combinations of (service, provider, baseURL)
+// that route requests in ways the user almost certainly did not intend.
+// Returned string is empty when nothing looks wrong. Surfaced from /set
+// service, /set baseurl, /set provider, and /profile load so the warning
+// fires regardless of which key the user touched last.
+func serviceMisconfigHint(service, provider, baseURL string) string {
+	service = strings.TrimSpace(strings.ToLower(service))
+	provider = strings.TrimSpace(strings.ToLower(provider))
+	lowerURL := strings.TrimRight(strings.TrimSpace(strings.ToLower(baseURL)), "/")
+	if service == "" {
+		return ""
+	}
+
+	var warnings []string
+	switch service {
+	case "cliproxyapi":
+		if provider == "anthropic" {
+			warnings = append(warnings, "warning -> service=cliproxyapi expects provider=openai (CLIProxyAPI is OpenAI-compatible). Switch with /set provider openai.")
+		}
+		if lowerURL != "" && !strings.Contains(lowerURL, "127.0.0.1") && !strings.Contains(lowerURL, "localhost") {
+			warnings = append(warnings, "warning -> service=cliproxyapi normally points at a local daemon (http://127.0.0.1:8317/v1). Current baseurl is remote — confirm the proxy is reachable.")
+		}
+	case "ollama":
+		if provider == "anthropic" {
+			warnings = append(warnings, "warning -> service=ollama expects provider=openai (Ollama exposes an OpenAI-compatible API). Switch with /set provider openai.")
+		}
+	case "openrouter":
+		if provider == "anthropic" {
+			warnings = append(warnings, "warning -> service=openrouter expects provider=openai (OpenRouter speaks OpenAI). Switch with /set provider openai.")
+		}
+	case "zai-anthropic":
+		if provider == "openai" {
+			warnings = append(warnings, "warning -> service=zai-anthropic expects provider=anthropic. Switch with /set provider anthropic.")
+		}
+	}
 	return strings.Join(warnings, "\n")
 }
 
