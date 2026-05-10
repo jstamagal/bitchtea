@@ -612,7 +612,7 @@ func (r *Registry) execRead(argsJSON string) (string, error) {
 	// Pattern 3: head+tail truncation with overflow temp file pointer.
 	const maxSize = 50 * 1024
 	if len(content) > maxSize {
-		truncated, overflowPath, oErr := truncateWithOverflow(content, maxSize)
+		truncated, overflowPath, oErr := r.truncateWithOverflow(content, maxSize)
 		if oErr != nil {
 			// Fall back to simple truncation on temp-file error.
 			content = truncateUTF8(content, maxSize) + "\n... (truncated)"
@@ -809,7 +809,7 @@ func (r *Registry) execBash(ctx context.Context, argsJSON string) (string, error
 	// Pattern 3: head+tail truncation with overflow temp file pointer.
 	const maxSize = 50 * 1024
 	if len(output) > maxSize {
-		truncated, overflowPath, oErr := truncateWithOverflow(output, maxSize)
+		truncated, overflowPath, oErr := r.truncateWithOverflow(output, maxSize)
 		if oErr != nil {
 			output = truncateUTF8(output, maxSize) + "\n... (truncated)"
 		} else if overflowPath != "" {
@@ -862,12 +862,12 @@ func truncateUTF8(s string, maxBytes int) string {
 // unchanged. When it overflows:
 //   - keeps first maxBytes/2 bytes (UTF-8 safe) as head
 //   - keeps last maxBytes/2 bytes (UTF-8 safe) as tail
-//   - writes the FULL original to a temp file
+//   - writes the FULL original to a temp file under SessionDir/cache
 //   - returns head + separator + tail, the temp path, and nil error
 //
-// Temp files are NOT auto-cleaned (model may read them later in the session).
-// TODO: add session-end cleanup sweep for bitchtea_*_overflow.txt files.
-func truncateWithOverflow(content string, maxBytes int) (truncated string, overflowPath string, err error) {
+// Overflow files live under SessionDir/cache and are cleaned up
+// when the session is torn down.
+func (r *Registry) truncateWithOverflow(content string, maxBytes int) (truncated string, overflowPath string, err error) {
 	if len(content) <= maxBytes {
 		return content, "", nil
 	}
@@ -891,8 +891,14 @@ func truncateWithOverflow(content string, maxBytes int) (truncated string, overf
 	}
 	tail := content[tailStart:]
 
-	// Write the full original to a temp file.
-	f, ferr := os.CreateTemp("", "bitchtea_*_overflow.txt")
+	// Write the full original to a temp file in ~/.bitchtea/cache.
+	// os.CreateTemp with dir="" uses os.TempDir(); we own the path instead so
+	// overflow files are scoped to the session and cleaned on session end.
+	cacheDir := filepath.Join(r.SessionDir, "cache")
+	if mkerr := os.MkdirAll(cacheDir, 0755); mkerr != nil {
+		return "", "", mkerr
+	}
+	f, ferr := os.CreateTemp(cacheDir, "overflow-*.txt")
 	if ferr != nil {
 		return "", "", ferr
 	}
