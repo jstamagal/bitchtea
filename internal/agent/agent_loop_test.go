@@ -421,10 +421,12 @@ func TestBuildSystemPromptMentionsMemoryWorkflow(t *testing.T) {
 // TestSystemPromptIncludesLiveToolDefinitions. The inline tool list is
 // gone by design — the provider attaches tool schemas through the
 // function-calling API, so emitting them as text just doubled tokens and
-// risked drift. This test now asserts the new contract: XML structural
-// markers, tool-use RULES (not the schema list), persona-first ordering
-// for cache anchoring, and that the persona text appears exactly once
-// in the system prompt (the synthetic anchor exchange is tested separately).
+// risked drift. This test asserts the current contract: XML structural
+// markers, tool-use RULES (not the schema list), the section ordering
+// (identity → tool_rules → output_efficiency → memory → environment →
+// persona — operational steering before character), and that the persona
+// text appears exactly once in the system prompt (the synthetic anchor
+// exchange is tested separately).
 func TestSystemPromptHasToolRulesAndStructure(t *testing.T) {
 	cfg := config.DefaultConfig()
 	cfg.WorkDir = t.TempDir()
@@ -433,13 +435,17 @@ func TestSystemPromptHasToolRulesAndStructure(t *testing.T) {
 	prompt := buildSystemPrompt(&cfg)
 
 	for _, want := range []string{
-		"<persona>",
-		"</persona>",
-		"<memory_workflow>",
+		"<identity>",
+		"</identity>",
 		"<tool_rules>",
 		"</tool_rules>",
+		"<output_efficiency>",
+		"</output_efficiency>",
+		"<memory_workflow>",
 		"<environment>",
 		"</environment>",
+		"<persona>",
+		"</persona>",
 	} {
 		if !strings.Contains(prompt, want) {
 			t.Fatalf("system prompt missing structural marker %q", want)
@@ -451,9 +457,21 @@ func TestSystemPromptHasToolRulesAndStructure(t *testing.T) {
 		"terminal_start",
 		"Parallelize independent operations",
 		"Do NOT call a tool when you already know",
+		"≤25 words",
+		"≤100 words",
+		"Tool results can be cleared from context by compaction",
 	} {
 		if !strings.Contains(prompt, want) {
 			t.Fatalf("system prompt missing tool rule fragment %q", want)
+		}
+	}
+
+	for _, want := range []string{
+		"Lead with the action",
+		"Skip filler phrases",
+	} {
+		if !strings.Contains(prompt, want) {
+			t.Fatalf("system prompt missing output_efficiency fragment %q", want)
 		}
 	}
 
@@ -461,12 +479,15 @@ func TestSystemPromptHasToolRulesAndStructure(t *testing.T) {
 		t.Fatalf("expected exactly one default persona marker in system prompt (anchor exchange tested elsewhere), got %d", got)
 	}
 
-	personaIdx := strings.Index(prompt, "<persona>")
-	memoryIdx := strings.Index(prompt, "<memory_workflow>")
+	identityIdx := strings.Index(prompt, "<identity>")
 	toolIdx := strings.Index(prompt, "<tool_rules>")
+	outputIdx := strings.Index(prompt, "<output_efficiency>")
+	memoryIdx := strings.Index(prompt, "<memory_workflow>")
 	envIdx := strings.Index(prompt, "<environment>")
-	if !(personaIdx >= 0 && personaIdx < memoryIdx && memoryIdx < toolIdx && toolIdx < envIdx) {
-		t.Fatalf("expected order persona < memory < tool < environment, got persona=%d memory=%d tool=%d env=%d", personaIdx, memoryIdx, toolIdx, envIdx)
+	personaIdx := strings.Index(prompt, "<persona>")
+	if !(identityIdx >= 0 && identityIdx < toolIdx && toolIdx < outputIdx && outputIdx < memoryIdx && memoryIdx < envIdx && envIdx < personaIdx) {
+		t.Fatalf("expected order identity < tool < output_efficiency < memory < environment < persona, got identity=%d tool=%d output=%d memory=%d env=%d persona=%d",
+			identityIdx, toolIdx, outputIdx, memoryIdx, envIdx, personaIdx)
 	}
 
 	// Timestamp churned the cache — assert it's gone. If anyone re-introduces

@@ -527,12 +527,17 @@ func (a *Agent) sendMessage(ctx context.Context, userMsg string, kind followUpKi
 
 // buildSystemPrompt assembles the stable-per-session system prompt.
 //
-// Section order is deliberate: persona first (largest stable chunk, anchors
-// the cache prefix), then the rule sections, then the environment block. The
-// timestamp that used to live at the top is gone — it churned every call to
-// buildSystemPrompt and invalidated the entire prompt cache for what amounts
-// to clock data the agent doesn't need in-prompt anyway. Wall time still
-// reaches the model via tool results when relevant.
+// Section order follows Claude Code's layout: identity grounds the model
+// first, then operational policy (tool rules, output efficiency), then
+// dynamic context (memory workflow, environment), then persona last. Persona
+// is character, not policy — putting it first lets style dominate scarce
+// attention over behavior. The order here is deliberate; do not shuffle
+// without weighing what attention budget each section should claim.
+//
+// The timestamp that used to live at the top is gone — it churned every call
+// to buildSystemPrompt and invalidated the entire prompt cache for what
+// amounts to clock data the agent doesn't need in-prompt anyway. Wall time
+// still reaches the model via tool results when relevant.
 //
 // Each section is wrapped in XML tags so Opus 4.7 can parse them as
 // semantic structure rather than visual decoration.
@@ -546,6 +551,12 @@ func (a *Agent) sendMessage(ctx context.Context, userMsg string, kind followUpKi
 // default is used silently — no crash, a warning to stderr.
 func buildSystemPrompt(cfg *config.Config) string {
 	var sb strings.Builder
+
+	writeIdentity(&sb)
+	writeToolRules(&sb)
+	writeOutputEfficiency(&sb)
+	writeMemoryPrompt(&sb)
+	writeEnvironment(&sb, cfg)
 
 	// --bare: skip persona block; persona_file is also skipped.
 	if !cfg.Bare {
@@ -569,11 +580,17 @@ func buildSystemPrompt(cfg *config.Config) string {
 		sb.WriteString("\n</persona>\n\n")
 	}
 
-	writeMemoryPrompt(&sb)
-	writeToolRules(&sb)
-	writeEnvironment(&sb, cfg)
-
 	return sb.String()
+}
+
+// writeIdentity emits a brief grounding statement about who the agent is.
+// Identity statements anchor behavior more reliably than imperative rules —
+// CC opens every session with "You are Claude Code, Anthropic's official CLI
+// for Claude." This is the bitchtea equivalent.
+func writeIdentity(sb *strings.Builder) {
+	sb.WriteString("<identity>\n")
+	sb.WriteString("You are bitchtea — a terminal-native Go CLI coding agent built on the Charm stack (Bubble Tea, Lipgloss, Glamour). You run inside a TUI that follows IRC conventions: channels and direct queries each maintain their own conversation history and memory scope.\n")
+	sb.WriteString("</identity>\n\n")
 }
 
 func writeMemoryPrompt(sb *strings.Builder) {
@@ -599,9 +616,24 @@ func writeToolRules(sb *strings.Builder) {
 	sb.WriteString("- Parallelize independent operations in a single response: multi-file reads in one batch, build + lint together, fan out independent tool calls. Do not serialize what does not need to be serial.\n")
 	sb.WriteString("- Do NOT call a tool when you already know the answer or can reason it through. Trivial questions get answered directly; tools cost tokens, latency, and LO's patience.\n")
 	sb.WriteString("- Reuse prior tool results within the same turn; do not re-query without a reason.\n")
-	sb.WriteString("- Summarize tool results in 1–2 useful lines unless LO asks for raw output.\n")
+	sb.WriteString("- Brevity between tool calls: ≤25 words of prose between tool invocations. Final response after a turn's tools complete: ≤100 words unless the task genuinely needs detail (multi-file walkthrough, design tradeoff, debugging a non-obvious bug). Numeric, not vibes.\n")
+	sb.WriteString("- Tool results can be cleared from context by compaction or microcompact; if you need a fact from a tool result later in the turn, extract it into your own prose now. Do not assume the raw result will still be visible to you when you write the final response.\n")
 	sb.WriteString("- Confirm once before destructive or hard-to-reverse operations (delete, force-push, schema drop, send/publish). Read-only and reversible work proceeds without ceremony.\n")
 	sb.WriteString("</tool_rules>\n\n")
+}
+
+// writeOutputEfficiency emits the user-facing output style rules: lead with
+// action, skip filler, focus on decisions/status/blockers. This mirrors CC's
+// external-user prose section. Kept separate from <tool_rules> because
+// tool_rules is about HOW to use tools and this is about HOW to talk to LO.
+func writeOutputEfficiency(sb *strings.Builder) {
+	sb.WriteString("<output_efficiency>\n")
+	sb.WriteString("- Lead with the action, the finding, or the decision. Not with preamble (\"I'll now…\", \"Let me…\", \"Looking at this…\"). The action IS the preamble.\n")
+	sb.WriteString("- Skip filler phrases: \"Certainly!\", \"Of course!\", \"Absolutely!\", \"Great question!\", \"I'd be happy to…\". They eat tokens and signal nothing.\n")
+	sb.WriteString("- Focus on decisions, status, and blockers — not on narrating what you're about to do. If LO needs progress visibility, one short line at a real inflection point beats five lines of running commentary.\n")
+	sb.WriteString("- One sentence, not three, when one suffices. Match response length to the task: a yes/no question gets yes or no with the reason, not a tour.\n")
+	sb.WriteString("- No closing pleasantries (\"Let me know if you have questions!\"). End on the result.\n")
+	sb.WriteString("</output_efficiency>\n\n")
 }
 
 // writeEnvironment emits a small environment block describing the host the
