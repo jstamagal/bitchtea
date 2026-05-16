@@ -638,9 +638,14 @@ func TestReadBeforeEditGuard(t *testing.T) {
 //   - the overflow file contains the full original content
 //   - the result string contains the overflow path pointer
 func TestTruncateWithOverflow(t *testing.T) {
+	// truncateWithOverflow is a *Registry method because the overflow file
+	// is written under r.SessionDir/cache; the Registry owns the session
+	// scoping. Tests get a throwaway SessionDir via t.TempDir().
+	reg := NewRegistry(t.TempDir(), t.TempDir())
+
 	// Under limit: no overflow.
 	short := "hello world"
-	out, path, err := truncateWithOverflow(short, 1024)
+	out, path, err := reg.truncateWithOverflow(short, 1024)
 	if err != nil {
 		t.Fatalf("short content: %v", err)
 	}
@@ -654,7 +659,7 @@ func TestTruncateWithOverflow(t *testing.T) {
 	// Over limit: head+tail+overflow file.
 	big := strings.Repeat("abcde", 20000) // 100 KB
 	const cap = 50 * 1024
-	out2, path2, err := truncateWithOverflow(big, cap)
+	out2, path2, err := reg.truncateWithOverflow(big, cap)
 	if err != nil {
 		t.Fatalf("big content: %v", err)
 	}
