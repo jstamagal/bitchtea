@@ -823,6 +823,20 @@ func (a *Agent) SetDebugHook(hook func(llm.DebugInfo)) {
 // Wiring is forwarded to the underlying *llm.Client so the assembly happens
 // inside streamOnce, where the per-turn tool list is built. The manager is
 // NOT auto-started here; that is the bootstrap's responsibility (bt-p6-verify).
+// RebuildSystemPrompt reconstructs the system prompt from the current config
+// (including PersonaFile) and swaps the system message at messages[0]. This is
+// the live-update path for /set persona_file — without it, changing the config
+// value has no effect until /restart because the agent keeps the old system
+// prompt baked into messages[0].
+func (a *Agent) RebuildSystemPrompt() {
+	systemPrompt := buildSystemPrompt(a.config)
+	if len(a.messages) > 0 && a.messages[0].Role == fantasy.MessageRoleSystem {
+		a.messages[0] = newSystemMessage(systemPrompt)
+	} else {
+		a.messages = append([]fantasy.Message{newSystemMessage(systemPrompt)}, a.messages...)
+	}
+}
+
 func (a *Agent) SetMCPManager(m *mcp.Manager) {
 	if a.client == nil {
 		return

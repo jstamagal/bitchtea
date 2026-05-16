@@ -193,8 +193,9 @@ func handleSetCommand(m Model, input string, parts []string) (Model, tea.Cmd) {
 	// the running agent. Keys not listed here had ApplySet do all the work
 	// (config-only settings: nick, sound, auto-next, auto-idea, top_k,
 	// top_p, temperature, repetition_penalty, tool_verbosity, banner,
-	// effort, tool_timeout, persona_file). They fall through to the
-	// confirmation message at the bottom.
+	// effort, tool_timeout).
+	// persona_file also needs a side effect — it must rebuild the system
+	// prompt in the running agent, not just update the config value.
 	switch key {
 	case "profile":
 		if m.config.Profile == "" {
@@ -205,6 +206,8 @@ func handleSetCommand(m Model, input string, parts []string) (Model, tea.Cmd) {
 		m.agent.SetModel(m.config.Model)
 		m.agent.SetBaseURL(m.config.BaseURL)
 		m.agent.SetAPIKey(m.config.APIKey)
+	case "persona_file":
+		m.agent.RebuildSystemPrompt()
 	}
 
 	display, _ := config.GetSetting(m.config, key)
